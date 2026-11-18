@@ -637,7 +637,7 @@ class Overlay:
                 self.note.configure(text="Hub state unavailable")
         self.root.after(POLL_MS, self._poll)
 
-    def run(self):
+    def run(self, *, on_ready=None):
         """Own the main-thread Tk loop until stop, interrupt, or startup failure."""
         if self.stopped.is_set():
             return
@@ -670,6 +670,8 @@ class Overlay:
             self._apply_alpha()
             if self.window is not None:
                 self.window.show()
+            if on_ready is not None:
+                on_ready()
             self.root.mainloop()
             if self._interrupted:
                 raise KeyboardInterrupt

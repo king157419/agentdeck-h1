@@ -1,0 +1,62 @@
+{
+  "AgentDeck.exe": {
+    "path": "D:\\desk\\hardware\\h1\\dist\\AgentDeck\\AgentDeck.exe",
+    "size": 5709739,
+    "subsystem": 2,
+    "sha256": "6b04a339d3da4cbb249e31b7cefc875c864c8e833e4577a3ddc1b2cda30ea1c2"
+  },
+  "AgentDeck-relay.exe": {
+    "path": "D:\\desk\\hardware\\h1\\dist\\AgentDeck\\AgentDeck-relay.exe",
+    "size": 1754575,
+    "subsystem": 3,
+    "sha256": "6a179b2575aef083d69785363b86ed3992ea9802a891f4a34e27db3e842771b7"
+  },
+  "bundled_assets": [
+    "hub_keys.json",
+    "hub_prompts.json",
+    "agentdeck.ico",
+    "python313.dll",
+    "_tkinter.pyd",
+    "_tcl_data/init.tcl",
+    "_tk_data/tk.tcl",
+    "libusb_package/libusb-1.0.dll"
+  ],
+  "main_bundled_modules": [
+    "agentdeck_icon",
+    "hub",
+    "hub_overlay",
+    "hub_install",
+    "hub_doctor",
+    "hub_hotkey",
+    "hub_desktop",
+    "hub_risk",
+    "usb.backend.libusb1",
+    "libusb_package",
+    "pystray",
+    "pystray._win32",
+    "tkinter",
+    "PIL.Image"
+  ],
+  "relay_offline": {
+    "exit_code": 0,
+    "stdout_bytes": 0,
+    "stderr_bytes": 0,
+    "temporary_home": true
+  },
+  "relay_http": {
+    "exit_code": 0,
+    "request_path": "/event?agent=cx",
+    "token_header_verified": true,
+    "event_payload_verified": true,
+    "original_decision_bytes_preserved": true,
+    "response_bytes": 102,
+    "temporary_loopback_fixture": true
+  },
+  "bundle_bytes": 52844542,
+  "validation_groups": {
+    "pe_subsystems": 2,
+    "bundled_assets": 8,
+    "archived_modules": 14,
+    "relay_scenarios": 2
+  }
+}

@@ -1070,7 +1070,7 @@ def parse_backends(value):
     return names
 
 
-def main(argv=None):
+def main(argv=None, *, ui_factory=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", nargs="?", choices=("doctor",))
     parser.add_argument("--port", type=int, default=PORT)
@@ -1152,7 +1152,7 @@ def main(argv=None):
         server = HubServer(hub, load_token(args.home), args.port)
         if args.overlay:
             from hub_overlay import Overlay
-            overlay = Overlay(hub)
+            overlay = (ui_factory or Overlay)(hub)
         maintenance = threading.Thread(target=maintain, name="AgentDeck LCD hold", daemon=True)
         maintenance.start()
         for index, (reader, name) in enumerate(readers):

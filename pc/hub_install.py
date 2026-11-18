@@ -12,6 +12,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import subprocess
@@ -40,16 +41,11 @@ def validate_options(port, approve_timeout):
 
 def command(agent, *, port=47800, approve_timeout=110, gate=False, python=None, project=False):
     validate_options(port, approve_timeout)
-    # Keep existing Windows global hooks stable across interpreter changes.
-    default_python = PYTHON if sys.platform == "win32" and not project else sys.executable
-    executable = default_python if python is None else os.fspath(python)
-    if not isinstance(executable, str) or not executable.strip() or "\0" in executable:
-        raise ValueError("python executable must be a nonempty path without NUL characters")
-    if project:
-        executable = Path(executable).resolve().as_posix()
-    elif sys.platform == "win32":
-        executable = Path(executable).as_posix()
-    args = [executable, SCRIPT, "--agent", agent]
+    if getattr(sys, "frozen", False):
+        # The bundled relay shares the application's onedir, not its _internal directory.
+        args = [str(Path(sys.executable).resolve().with_name("AgentDeck-relay.exe")), "--agent", agent]
+    else:
+        args = _source_command(agent, python=python, project=project)
     if port != 47800:
         args.extend(("--port", str(port)))
     if approve_timeout != 110:
@@ -59,6 +55,19 @@ def command(agent, *, port=47800, approve_timeout=110, gate=False, python=None, 
     return subprocess.list2cmdline(args) if sys.platform == "win32" else shlex.join(args)
 
 
+def _source_command(agent, *, python=None, project=False):
+    # Keep existing Windows global hooks stable across interpreter changes.
+    default_python = PYTHON if sys.platform == "win32" and not project else sys.executable
+    executable = default_python if python is None else os.fspath(python)
+    if not isinstance(executable, str) or not executable.strip() or "\0" in executable:
+        raise ValueError("python executable must be a nonempty path without NUL characters")
+    if project:
+        executable = Path(executable).resolve().as_posix()
+    elif sys.platform == "win32":
+        executable = Path(executable).as_posix()
+    return [executable, SCRIPT, "--agent", agent]
+
+
 def split_command(text):
     """Read the quoting used by hooks on the current platform."""
     if sys.platform == "win32":
@@ -66,20 +75,107 @@ def split_command(text):
     return shlex.split(text)
 
 
-def is_ours(entry):
-    """Recognize the executed relay script, never incidental text in other hooks."""
+def relay_info(entry):
+    """Identify an executed relay, including old locations after a folder move."""
     if not isinstance(entry, dict) or entry.get("type") != "command":
-        return False
+        return None
     try:
         parts = split_command(entry.get("command", ""))
     except (TypeError, ValueError):
-        return False
-    return (len(parts) >= 4 and parts[1].replace("\\", "/").casefold() == SCRIPT.casefold()
-            and parts[2] == "--agent" and parts[3] in EVENTS)
+        return None
+    basename = lambda path: path.replace("\\", "/").rsplit("/", 1)[-1].casefold()
+    if len(parts) >= 3 and basename(parts[0]) == "agentdeck-relay.exe" and parts[1] == "--agent":
+        return {"agent": parts[2], "paths": [parts[0]]} if parts[2] in EVENTS else None
+    if (len(parts) >= 4 and basename(parts[1]) == "hub_relay.py"
+            and parts[2] == "--agent" and parts[3] in EVENTS
+            and (parts[1].replace("\\", "/").casefold() == SCRIPT.casefold()
+                 or re.fullmatch(r"python(?:w|[23](?:\.\d+)?)?(?:\.exe)?", basename(parts[0])))):
+        return {"agent": parts[3], "paths": parts[:2]}
+    return None
+
+
+def is_ours(entry):
+    """Recognize the executed relay, never incidental text in other hooks."""
+    return relay_info(entry) is not None
 
 
 def is_gate(entry):
     return is_ours(entry) and "--gate" in split_command(entry["command"])
+
+
+def is_legacy(entry):
+    """Only the old Python LCD hook invocation, not mentions inside another hook."""
+    if not isinstance(entry, dict) or entry.get("type") != "command":
+        return False
+    if "args" in entry:
+        # The original Claude installer writes an executable and argv separately;
+        # its unquoted executable can legitimately contain spaces.
+        args = entry["args"]
+        command = entry.get("command")
+        if (not isinstance(command, str) or not isinstance(args, list)
+                or any(not isinstance(arg, str) for arg in args)):
+            return False
+        parts = [command, *args]
+    else:
+        try:
+            parts = split_command(entry.get("command", ""))
+        except (TypeError, ValueError):
+            return False
+    name = lambda value: value.replace("\\", "/").rsplit("/", 1)[-1].casefold()
+    return (len(parts) >= 4 and re.fullmatch(r"python(?:w|[23](?:\.\d+)?)?(?:\.exe)?", name(parts[0]))
+            is not None and name(parts[1]) == "agent_lcd.py" and parts[2] == "hook"
+            and parts[3] in ("cc", "cx", "ds"))
+
+
+def remove_legacy_hooks(*, home=None, confirmed=False):
+    """Explicit user action only: back up each changed global file before replacing it."""
+    if confirmed is not True:
+        raise ValueError("removing legacy hooks requires explicit confirmation")
+    root = Path.home() if home is None else Path(home)
+    plans = []
+    for folders in TARGETS.values():
+        path = root.joinpath(*folders)
+        if not path.exists():
+            continue
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+        after = copy.deepcopy(data)
+        if not isinstance(after, dict) or not isinstance(after.get("hooks", {}), dict):
+            raise ValueError("hook configuration must contain an object")
+        hooks = after.get("hooks", {})
+        for event, groups in list(hooks.items()):
+            if not isinstance(groups, list):
+                raise ValueError("event hooks must be lists")
+            kept = []
+            for group in groups:
+                if not isinstance(group, dict) or not isinstance(group.get("hooks"), list):
+                    raise ValueError("each matcher group must contain a hooks list")
+                entries = group["hooks"]
+                remaining = [entry for entry in entries if not is_legacy(entry)]
+                if remaining != entries:
+                    group["hooks"] = remaining
+                    if not remaining:
+                        continue
+                kept.append(group)
+            if kept != groups:
+                if kept:
+                    hooks[event] = kept
+                else:
+                    del hooks[event]
+        if after != data:
+            plans.append((path, json.dumps(after, ensure_ascii=False, indent=2) + "\n"))
+    # Prepare and validate every config before touching either one.
+    for path, _ in plans:
+        shutil.copy2(path, str(path) + ".bak-agentdeck-" + datetime.now().strftime("%Y%m%d-%H%M%S-%f"))
+    for path, content in plans:
+        descriptor, temporary = tempfile.mkstemp(prefix=path.name + ".agentdeck-", suffix=".tmp", dir=path.parent)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+                stream.write(content)
+            os.replace(temporary, path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+    return [path for path, _ in plans]
 
 
 def updated(data, action, agent, *, port=47800, approve_timeout=110, gate=False,
@@ -218,11 +314,14 @@ def apply(action, *, home=None, agents=("cc", "cx"), dry_run=False, output=None,
             if "cx" in agents:
                 output.write("Start codex in %s, trust the directory, then run /hooks to review "
                              "and approve the hooks; approve again after changing hook options.\n" % root)
-            rollback = [Path(sys.executable).resolve().as_posix(),
-                        Path(__file__).resolve().as_posix(), "uninstall", *agents,
-                        "--project", str(root)]
-            output.write("Rollback: " + (subprocess.list2cmdline(rollback)
-                         if sys.platform == "win32" else shlex.join(rollback)) + "\n")
+            if getattr(sys, "frozen", False):
+                output.write("卸载：在 AgentDeck 托盘选择“从项目卸载…”，再选择 %s。\n" % root)
+            else:
+                rollback = [Path(sys.executable).resolve().as_posix(),
+                            Path(__file__).resolve().as_posix(), "uninstall", *agents,
+                            "--project", str(root)]
+                output.write("Rollback: " + (subprocess.list2cmdline(rollback)
+                             if sys.platform == "win32" else shlex.join(rollback)) + "\n")
     return [path for path, _, _ in plans]
 
 

@@ -1,5 +1,18 @@
 # AgentDeck Hub v1.4
 
+## 用 exe
+
+1. 打开 `dist/AgentDeck/`，双击 `AgentDeck.exe`。Hub、USB 键盘后端、热键和浮窗在同一个进程中启动，托盘图标显示总状态；无需安装 Python 或打开终端。保留整个文件夹，包括 `AgentDeck-relay.exe` 和 `_internal/`，不要只复制主程序。
+2. 在托盘菜单点“安装到项目…”，选择工作项目的根目录。安装后，在该项目的 Codex 会话里输入 `/hooks` 并信任 AgentDeck 钩子，再开始任务。Claude Code 也使用同一项目安装；程序不会自动改全局 hooks。
+3. 托盘菜单可显示或隐藏浮窗、切换会话、跳到等待你的会话、查看当前键位和诊断，也可从项目卸载。首次运行的三步引导可勾选“不再提示”。再次双击程序会显示现有浮窗。
+4. 需要登录 Windows 后启动时，勾选“开机自启”；取消勾选会移除当前用户的 AgentDeck 启动项。退出请使用托盘的“退出”。
+
+首次运行会把默认 `hub_keys.json` 和 `hub_prompts.json` 复制到 `~/.agentdeck/`（Windows 通常是 `%USERPROFILE%\.agentdeck\`）。以后编辑这里的文件，重启程序后生效，升级不会覆盖你的修改。默认使用 `default` 键位；可在同目录 `app.json` 中设置 `"profile": "v2_emulation"` 后重启，键位窗口按当前 profile 显示。日志保存在 `~/.agentdeck/logs/app.log`，可从“打开日志文件夹”进入。USB 接口 0 需由用户事先设置为 WinUSB；程序不会修改驱动。1602 串口被占用时只记日志，Hub 继续工作。
+
+“诊断”会检查项目钩子、旧版全局 `agent_lcd.py` 钩子和 relay 路径。只有主动点击“移除旧版钩子”并确认后，程序才会先生成 `*.bak-agentdeck-<时间>` 备份，再移除对应旧钩子。若移动了 `AgentDeck` 文件夹，请在诊断里检查路径，并对使用过的项目重新执行“安装到项目…”，使钩子指向新的 `AgentDeck-relay.exe`；开机自启也需重新勾选。
+
+在开发机重新打包：运行项目根目录的 `build_exe.bat`，使用 `D:/conda/miniconda3` 中的 PyInstaller 6.11.1 和现有依赖，输出仍是 `dist/AgentDeck/`。
+
 Hub answers Claude Code and Codex `PermissionRequest` hooks directly. Approval
 does not send Enter or Esc to a terminal. Hub reuses the existing deck window
 focus logic and LCD protocol; firmware changes are unnecessary.
