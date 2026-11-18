@@ -224,3 +224,13 @@
   Codex 全部修完，hub 测试 451 项通过（我自己重跑过）。对外的说法统一为："已在 hub 和桌面端实现 nonce 绑定、过期拒收和切换防误触；物理键盘的 nonce 由 PC 代填，设备原生回传要等固件。"
 - **真实会话验证脚本（Carbon 做，Codex 审，Carbon 修）。** Codex 审出 5 个 P1，其中最要紧的是"会自动批准同目录下别的会话的请求"。Carbon 修了两轮，失败从 5 项降到 3 项；它的额度这时用完了，剩下的交给 Sonnet。
 - **问题：Carbon 的周额度用完了**（429，167 小时后才恢复）。一天里跑了大约 8 个高强度的编码和审查任务。另外：Carbon 在 accept-edits 模式下不能执行命令，写完没法自己跑测试，只能由 Claude 代跑，再把失败结果喂回去。
+
+## 2026-11-18 晚 ~ 11-19 凌晨（北京时间）：exe、槽位泄漏、灯效调研
+
+- **本地 git。** 项目纳入版本管理，文档改动在 VS Code"源代码管理"里看 diff；用户改用文件内 `批注：` 和 Claude 交流（`批注说明.md`）。
+- **AgentDeck.exe（Codex 做，Claude 审和实测）。** 托盘程序：一个进程里跑 hub、USB 键盘、浮窗；托盘图标颜色表示总状态；菜单有会话列表、键位图、中文诊断、装到项目、开机自启。钩子改用同目录的 `AgentDeck-relay.exe`，不再依赖 python。打包为 `dist/AgentDeck/`（约 53 MB）。离线测试 517 次执行全过。
+- **问题：测试时第 7 个会话的审批不经过 AgentDeck。** 原因：会话只在 SessionEnd 时释放槽位，会话崩溃或直接关窗不发 SessionEnd，6 个槽很快占满，hub 返回 409，relay 静默退回终端。解决：槽满时回收最久没动静、且没有待处理请求的会话；6 小时无动静自动撤下（Codex 修，新增 10 个测试，hub 测试 476 次执行全过）。
+- **exe 端到端实测（真进程，模拟 Claude 的 PermissionRequest）：** 低风险批准、拒绝、高危两次确认、连开 8 个会话后第 8 个仍被接住，4 项全过。脚本 `research/e2e_exe.py`。物理按键、浮窗观感没有人看着验证。
+- **问题：Codex 第一次调用失败。** 原因：shell 里 `SSL_CERT_FILE` 指向不存在的 `D:\conda\miniconda3\ssl\cacert.pem`（实际在 `Library\ssl\`）。解决：调用前 `unset SSL_CERT_FILE`。
+- **键盘灯效：暂时控制不了。** 只读调研（`research/deck-light.md`）：厂商教程说支持单键配色，但网页只是下载页，没有协议；VIA-C 的灯光命令属于另一个接口（0xFF60），本机是 0xFF00，硬发可能进 bootloader 或清键位。下一步要用户选：USB 抓包，或下载 CXT Hub 客户端只读解包。
+- **1602 屏不显示：** COM4 仍被 v0 的 `daemon.py` 占着（hub 日志 PermissionError 13）。
