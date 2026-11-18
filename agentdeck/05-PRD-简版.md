@@ -12,9 +12,14 @@
 
 现有硬件都只照顾一部分人：Codex Micro 只管 Codex（$230）[4]；罗技 MX Keypad $99.99，原生支持 Copilot、Claude Code、Codex，但没有麦克风，也不做跨会话的审批[12]；优篮子 Vibe Key（AU05）¥269–299（部分渠道至 ¥319），6 键 + 旋钮 + 麦克风，通过 Ulanzi Studio 通用映射支持多家 agent，但**没有屏幕**，看不到谁在等、等的是什么命令[10][13]。
 
+软件也在补这块（2026-11-18 新增）：Codex 桌面版 2026-05 上线了"宠物"浮层，会用气泡提示运行中、等你批准、可以验收，并发系统通知[16]；Claude 桌面版左侧会话栏也会标出哪个会话在等你。所以"告诉你谁在等"本身不够当卖点，设备要赢在三点：**同时看全所有家的 agent**、**不切窗口就能批**、**高危操作必须物理确认**。
+
+【待补】大厂产品迭代慢，更该看开源社区和个人玩家做的东西（Reddit、X、小红书上的 DIY 宏键盘、状态灯、Stream Deck 插件），调研后补进竞品表。
+
 ## 2. 目标用户（v2 修订）
 
-- **主力**：每天并行跑 3 个以上 agent 的专业开发者（独立开发者、创业团队工程师、大厂资深工程师），Windows / macOS / Linux 都有。
+- **主力**：每天并行跑 3 个以上 agent 的专业开发者（独立开发者、创业团队工程师、大厂资深工程师），Windows / macOS / Linux 都有。（2026-11-18 创始人确认）
+- **平台顺序**：先只做 Windows；macOS 等 Windows 版自用跑顺后，借一台真 Mac 集中调一轮再发布。
 - **次要**：在意 agent 高危操作和审计的技术负责人、安全负责人（Team 版买家）。
 - 约三分之一的 agent 使用者已在用多 agent 配置（Stack Overflow 2026-04 pulse，n=1,100）[5]。
 
@@ -25,6 +30,16 @@
 1. **谁在等我 → 一键过去**：长条状态屏按 6 等分显示每个会话的状态，下方对应的会话键亮 RGB 灯；有人等时变琥珀色，按一下就把对应终端/IDE 窗口切到前台。云端 agent（Cursor Cloud Agent、Codex 云任务、GitHub PR/CI 阻塞）也能占一个槽位，按下打开浏览器里的对应页面（P1）。
 2. **高危操作的物理二次确认**：日常低风险命令（L0/L1）默认交给 agent 自己的 auto mode / 白名单，设备不抢活；设备重点拦不可逆操作（`git push`、生产环境 ssh/kubectl、数据库写入、改密钥、合并 PR）。这些命令即使 auto mode 打算放行，也要在设备上按两次 ✓ 才继续（L2）；`curl … | sh` 这类直接禁止设备放行（L3）。✓ / ✗ 直接回答 agent 的钩子[6][7]，不往窗口里打字，不会批错窗口；设备离线自动退回终端原生提示。接管范围可以在设置里改（比如 L1 也交给设备）。
 3. **不打字就能指挥**：按住说话键，文字发进按下时选中的那个会话；Ctrl+会话键发送"继续 / 跑测试 / 提交"等模板；截图键把屏幕发给当前 agent。
+
+## 3.5 第一版：自用闭环（2026-11-18 新增）
+
+先做一条能每天拿来开发的完整链路，不追求功能多：
+
+1. 在 Claude Code 或 Codex 里正常干活，agent 要批准时，键盘对应的键亮琥珀灯（灯效能否由电脑控制正在查），浮窗显示命令；
+2. 按 ✓ 批准 / ✗ 拒绝，agent 继续跑；高危命令要按两次；
+3. 任务结束，灯变回常态。
+
+做到这一步就开始用它开发，边用边记问题。旧的 v0 状态屏钩子和 daemon 退役，避免抢串口。
 
 ## 4. MVP 功能清单（v2 修订）
 
@@ -64,6 +79,8 @@
 
 ## 7. 硬件与价格（v2 新增，D1、D2）
 
+> 【形态待定，2026-11-18】创始人的原始设想是 **4×4 键盘**，下面的"长条屏 + 6 会话键 + 3 大键"是 v2 审稿后改出来的。两种方案的对比见讨论记录，定稿前本节不当最终结论。
+
 - **结构**：上方一条 3.2–3.5 寸长条 IPS 状态屏，按 6 等分对齐下方 6 个矮轴机械会话键（每键 RGB 状态灯）；下方 ✓ / ✗ / 按住说话三个大号机械键；Ctrl、截图键；右侧金属滚轮；板载麦克风。主控 ESP32-S3；v1 USB-C 有线，BLE 以后再做。
 - **唯一一款**：国内 ¥499（众筹早鸟 ¥399），海外 $99（早鸟 $79）。不做 Lite，Pro 往后放。
 - 否决过的方案：6 块独立 0.85 寸小屏（BOM 高、USB 带宽吃紧、屏和机械轴对不齐）；整块屏 + 透明键帽（只能用硅胶按键，没法用机械轴）。
@@ -96,3 +113,4 @@
 [13] 优篮子 AU05 Vibe Key：https://www.ulanzi.com/products/au05-vibe-key-ai-voice-input-keypad-i018 ；https://docs.ulanzistudio.com/vibekey/au05
 [14] Anthropic, Claude Code auto mode：https://www.anthropic.com/research/claude-code-auto-mode
 [15] puritysb/AgentDeck：https://github.com/puritysb/AgentDeck
+[16] Codex 宠物（二手报道，未见官方文档）：https://dataconomy.com/2026/05/04/openai-adds-codex-pets-animated-overlay-to-coding-tool/ ；https://www.hongkiat.com/blog/codex-pets-custom-hatch-guide/ ；用户反馈"宠物不如任务看板"：https://community.openai.com/t/feature-request-replace-codex-pet-with-a-codex-task-board/1397992

@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="color-scheme" content="light dark" />
+<style>html{background:#f4f6fa}html[data-theme="dark"]{background:#080b12}</style>
+<script>
+(function(){
+  var t=null;
+  try{t=localStorage.getItem('cxtSiteTheme');}catch(e){}
+  if(!t){
+    try{t=(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';}catch(e){t='light';}
+  }
+  document.documentElement.setAttribute('data-theme', t||'light');
+})();
+</script>
+<title>产品中心 · CXT Hub</title>
+<meta name="description" content="CXT 键盘产品列表：查看各型号的基础信息、参数、固件与可下载资源。" />
+<link rel="icon" href="assets/favicon.ico" />
+<link rel="stylesheet" href="assets/style.css" />
+</head>
+<body data-page="products">
+
+<nav class="nav">
+  <div class="wrap nav-in">
+    <a class="logo" href="index.html"><span class="logo-badge">C</span>CXT Hub</a>
+    <div class="nav-right">
+      <div class="nav-links">
+        <a class="nav-link" data-nav="home" href="index.html">首页</a>
+        <a class="nav-link" data-nav="products" href="products.html">产品</a>
+        <a class="nav-link" data-nav="download" href="download.html">下载</a>
+        <a class="nav-link" data-nav="firmware" href="firmware.html">固件</a>
+        <a class="nav-link" data-nav="resources" href="resources.html">资源</a>
+        <a class="nav-link" data-nav="tutorial" href="tutorial.html">使用教程</a>
+        <a class="nav-link" data-nav="changelog" href="changelog.html">更新日志</a>
+      </div>
+      <div class="theme-switch" title="切换配色主题">
+        <button class="theme-btn" data-theme="dark">深色</button>
+        <button class="theme-btn" data-theme="light">浅色</button>
+      </div>
+    </div>
+  </div>
+</nav>
+
+<header class="page-head">
+  <div class="wrap">
+    <div class="eyebrow">Products</div>
+    <h1>产品中心</h1>
+    <p>这里汇总 CXT 的键盘型号。每款产品的参数、固件与可下载资源都在同一个页面内，方便核对与下载。</p>
+    <div class="version-bar">
+      <span>型号：<b>2 款</b></span>
+      <span>配置软件：<b>CXT Hub</b>（Windows / macOS）</span>
+      <span><a href="download.html">下载软件 →</a></span>
+    </div>
+  </div>
+</header>
+
+<section style="padding-top:26px">
+  <div class="wrap">
+
+    <div class="prod-grid">
+
+      <div class="prod-card">
+        <div class="prod-thumb">
+          <span class="prod-badge">CXT</span>
+          <img src="assets/product/22e4.svg" alt="CXT 22E4 键盘布局示意图" />
+        </div>
+        <div class="prod-body">
+          <h3>CXT 22E4</h3>
+          <p class="prod-sub">带旋钮的紧凑布局键盘，8 层键位与热插拔轴座，适合把常用操作集中到桌面。</p>
+          <div class="prod-tags">
+            <span>旋钮 · 三动作</span>
+            <span>8 层键位</span>
+            <span>热插拔</span>
+            <span>Type-C</span>
+          </div>
+          <div class="prod-links">
+            <a class="go" href="product-22e4.html">查看产品详情 →</a>
+            <a class="minor" href="firmware.html#22e4">固件</a>
+            <a class="minor" href="resources.html#res-22e4">模型资源</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="prod-card">
+        <div class="prod-thumb">
+          <span class="prod-badge">CXT</span>
+          <img src="assets/product/12e4-pro.svg" alt="CXT 12E4 Pro 键盘布局示意图" />
+        </div>
+        <div class="prod-body">
+          <h3>CXT 12E4 Pro</h3>
+          <p class="prod-sub">基础信息与固件先行上线，结构参数与资源文件整理后补齐。</p>
+          <div class="prod-tags">
+            <span>固件 v1.0.0</span>
+            <span>参数整理中</span>
+          </div>
+          <div class="prod-links">
+            <a class="go" href="product-12e4-pro.html">查看产品详情 →</a>
+            <a class="minor" href="firmware.html#12e4pro">固件</a>
+            <a class="minor" href="resources.html#res-12e4pro">模型资源</a>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="fw-empty" style="margin-top:18px">
+      <b>没有找到你的型号？</b>未列出的型号多为早期版本或渠道专供。可以先在 <a href="firmware.html">固件页</a> 核对型号，或通过
+      <a href="index.html#community">官方社群</a> 联系我们获取对应资料。
+    </div>
+
+    <div class="mt-40">
+      <div class="eyebrow">Support Map</div>
+      <h2 class="sec-title">产品页与支持入口的分工</h2>
+      <div class="cap-grid" style="grid-template-columns:repeat(3,1fr)">
+        <div class="cap">
+          <div class="card-icon"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M3 9h18M8 13h4"/></svg></div>
+          <h3>产品页</h3>
+          <p>某个型号的完整资料：定位、参数、该型号固件与专属资源。</p>
+        </div>
+        <div class="cap">
+          <div class="card-icon v2"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M6 9l6 6 6-6M4 21h16"/></svg></div>
+          <h3>固件（顶部入口）</h3>
+          <p>所有型号固件集中罗列，按型号直达下载，不必先进产品页。</p>
+        </div>
+        <div class="cap">
+          <div class="card-icon v3"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg></div>
+          <h3>资源（顶部入口）</h3>
+          <p>外壳模型等可下载文件集中罗列，支持按型号与类型筛选。</p>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot-in">
+    <div>© 2026 CXT · CXT Hub 键盘配置软件</div>
+  </div>
+</footer>
+
+<script src="assets/app.js"></script>
+</body>
+</html>
