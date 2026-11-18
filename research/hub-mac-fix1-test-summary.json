@@ -1,0 +1,178 @@
+[
+  {
+    "script": "pc/test_hub.py",
+    "exit_code": 0,
+    "seconds": 3.389,
+    "summary": [
+      "Ran 133 tests in 2.993s",
+      "OK"
+    ],
+    "initial_attempt": {
+      "exit_code": 1,
+      "summary": [
+        "Ran 133 tests in 3.723s",
+        "FAILED (errors=1)"
+      ],
+      "reason": "WinError 10053 on loopback HTTP; focused test subsequently passed"
+    }
+  },
+  {
+    "script": "pc/test_hub_demo.py",
+    "exit_code": 0,
+    "seconds": 1.088,
+    "summary": [
+      "Ran 10 tests in 0.669s",
+      "OK"
+    ]
+  },
+  {
+    "script": "pc/test_hub_desktop.py",
+    "exit_code": 0,
+    "seconds": 0.534,
+    "summary": [
+      "Ran 30 tests in 0.163s",
+      "OK"
+    ]
+  },
+  {
+    "script": "pc/test_hub_desktop_mac.py",
+    "exit_code": 0,
+    "seconds": 0.587,
+    "summary": [
+      "Ran 35 tests in 0.160s",
+      "OK"
+    ]
+  },
+  {
+    "script": "pc/test_hub_doctor.py",
+    "exit_code": 0,
+    "seconds": 0.97,
+    "summary": [
+      "Ran 13 tests in 0.345s",
+      "OK"
+    ]
+  },
+  {
+    "script": "pc/test_hub_gate.py",
+    "exit_code": 0,
+    "seconds": 3.145,
+    "summary": [
+      "Ran 20 tests in 2.686s",
+      "OK"
+    ]
+  },
+  {
+    "script": "pc/test_hub_hotkey.py",
+    "exit_code": 0,
+    "seconds": 0.459,
+    "summary": [
+      "Ran 34 tests in 0.041s",
+      "OK"
+    ]
+  },
+  {
+    "script": "pc/test_hub_install.py",
+    "exit_code": 0,
+    "seconds": 2.488,
+    "summary": [
+      "Ran 35 tests in 2.226s",
+      "OK"
+    ]
+  },
+  {
+    "script": "pc/test_hub_macos_fix.py",
+    "exit_code": 0,
+    "seconds": 0.406,
+    "summary": [
+      "Ran 3 tests in 0.033s",
+      "OK"
+    ]
+  },
+  {
+    "script": "pc/test_hub_overlay.py",
+    "exit_code": 0,
+    "seconds": 0.253,
+    "summary": [
+      "Ran 19 tests in 0.016s",
+      "OK"
+    ]
+  },
+  {
+    "script": "pc/test_hub_relay.py",
+    "exit_code": 0,
+    "seconds": 1.807,
+    "summary": [
+      "Ran 12 tests in 1.514s",
+      "OK"
+    ]
+  },
+  {
+    "script": "pc/test_hub_runtime.py",
+    "exit_code": 0,
+    "seconds": 1.604,
+    "summary": [
+      "Ran 6 tests in 1.012s",
+      "OK"
+    ]
+  },
+  {
+    "script": "pc/test_hub_virtual_device.py",
+    "exit_code": 0,
+    "seconds": 0.247,
+    "summary": [
+      "Ran 12 tests in 0.001s",
+      "OK"
+    ]
+  },
+  {
+    "script": "pc/test_ui.py",
+    "exit_code": 0,
+    "seconds": 0.082,
+    "summary": [
+      "UI: 7 groups passed"
+    ]
+  },
+  {
+    "script": "pc/test_daemon.py",
+    "exit_code": 0,
+    "seconds": 0.48,
+    "summary": [
+      "daemon offline tests: 10 groups passed"
+    ]
+  },
+  {
+    "script": "pc/test_pc.py",
+    "exit_code": 0,
+    "seconds": 0.285,
+    "summary": [
+      "PC and firmware loop: 4 groups passed"
+    ]
+  },
+  {
+    "script": "research/selftest_hub_replay.py",
+    "exit_code": 0,
+    "seconds": 1.654,
+    "summary": [
+      "PASS | Voice/screenshot and synthetic prompt chords (decode only)",
+      "PASS | Temporary process, random port, token and six sessions",
+      "PASS | Low risk: approve key returns Codex allow",
+      "PASS | High risk: two distinct approve presses required",
+      "PASS | Critical: immediate native fallback; approve stays locked",
+      "PASS | Deny: factory Ctrl then F returns Codex deny",
+      "PASS | Session keys select all six corresponding slots",
+      "PASS | All four knobs cycle both ways with wraparound",
+      "PASS | Factory Ctrl-first macro, repeat and consumed Ctrl",
+      "PASS | Confirmed Ctrl+0 alternate interrupt denies pending",
+      "PASS | Decisions persisted in the temporary audit chain",
+      "PASS | Temporary Hub startup and cleanup"
+    ]
+  },
+  {
+    "script": "pc/sim.py",
+    "exit_code": 0,
+    "seconds": 0.671,
+    "summary": [
+      "Rendered 42 scenarios -> D:\\desk\\hardware\\h1\\lcd1602\\preview-sim.png"
+    ]
+  }
+]

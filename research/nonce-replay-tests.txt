@@ -1,0 +1,18 @@
+
+Hub replay self-test (local HTTP; LCD/USB/desktop disabled)
+Result | Check
+-------|------
+PASS | Voice/screenshot and synthetic prompt chords (decode only)
+PASS | Temporary process, random port, token and six sessions
+PASS | Low risk: approve key returns Codex allow
+PASS | High risk: two distinct approve presses required
+PASS | Critical: immediate native fallback; approve stays locked
+PASS | Deny: factory Ctrl then F returns Codex deny
+PASS | Session keys select all six corresponding slots
+PASS | All four knobs cycle both ways with wraparound
+PASS | Factory Ctrl-first macro, repeat and consumed Ctrl
+PASS | Confirmed Ctrl+0 alternate interrupt denies pending
+PASS | Decisions persisted in the temporary audit chain
+PASS | Temporary Hub startup and cleanup
+12 PASS / 0 FAIL
+Physical Ctrl+session chords remain pending user confirmation; see pc/hub_keys.md.

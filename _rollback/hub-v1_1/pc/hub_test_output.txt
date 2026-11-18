@@ -1,0 +1,356 @@
+Static checks: AST parsing, tokenization, compilation, trailing whitespace, and Hub JSON files passed.
+No repository lint/typecheck configuration was found; unavailable tools: ruff, pyflakes, mypy. No dependencies installed.
+
+$ D:/conda/miniconda3/python.exe pc/test_daemon.py
+test_mapping: PASS
+test_focus: PASS
+test_hold_rechecked_before_focus_send: PASS
+test_focus_mutex_serializes_delayed_daemon_send_and_manual_hold: PASS
+test_focus_mutex_rechecks_hold_after_waiting_for_manual_owner: PASS
+test_focus_mutex_timeout_skips_send_and_retries_next_tick: PASS
+test_state_machine: PASS
+test_log_tick: PASS
+test_main_schedule_and_lock: PASS
+test_process_snapshot: PASS
+daemon offline tests: 10 groups passed
+Exit code: 0
+
+$ D:/conda/miniconda3/python.exe pc/test_deck.py
+Raw Input 只观察输入，不隔离系统键盘事件：宏键盘按键会漏到窗口
+--exclusive is experimental: the low-level hook precedes WM_INPUT; suppression is ineffective
+Raw Input 只观察输入，不隔离系统键盘事件：宏键盘按键会漏到窗口
+Raw Input 只观察输入，不隔离系统键盘事件：宏键盘按键会漏到窗口
+--exclusive is experimental: the low-level hook precedes WM_INPUT; suppression is ineffective
+test_mapping: PASS
+test_list_and_selection: PASS
+test_tool_selection_count_prefix_and_rotation: PASS
+test_tool_priority_and_newest_tie: PASS
+test_tool_actions_hold_and_cycle_origin: PASS
+test_tool_focus_resists_daemon_follow: PASS
+test_live_selftest_dump_parsing: PASS
+test_live_selftest_offline_success_and_failure_cleanup: PASS
+test_actions_and_logging: PASS
+test_approval_guards: PASS
+test_window_matching_and_input: PASS
+test_foreground_fallback_cleanup: PASS
+test_single_instance_and_daemon_launch: PASS
+test_cli_and_learn: PASS
+test_run_event_dispatch_and_cleanup: PASS
+test_action_queue_combo_priority_and_isolation: PASS
+test_run_action_thread_and_error_cleanup: PASS
+test_review_project_and_tool_must_both_match: PASS
+test_review_approval_uses_press_context_and_expires_during_query: PASS
+test_review_usb_queue_blocks_navigation_and_approval_in_same_report: PASS
+test_review_usb_modifier_overlap_and_sensitive_exact_binding: PASS
+test_review2_focus_lock_wraps_hold_touch_and_single_send: PASS
+test_review2_focus_lock_timeout_skips_without_touching_hold: PASS
+test_review2_deck_is_final_sender_after_delayed_daemon_send: PASS
+test_review5_focus_send_failure_restores_hold_and_selection: PASS
+test_review1_approval_binds_hwnd_process_and_title: PASS
+test_review3_tool_identity_ignores_project_name_words: PASS
+test_review4_backlog_merges_cycles_and_keeps_last_navigation: PASS
+test_review4_backlog_cannot_expire_approval_and_navigation_is_fast: PASS
+test_review4_exit_cancels_unexecuted_events: PASS
+test_review_hold_clears_disappeared_selection_and_ignores_partial_list: PASS
+test_review_hold_heartbeat_preserves_firmware_ttl_until_handoff: PASS
+test_review_window_matching_rejects_ambiguous_candidates: PASS
+test_review_hold_thread_serializes_io_and_joins: PASS
+test_review_rawinput_approval_sees_all_device_main_keys: PASS
+test_deck_input_transitions: PASS
+test_deck_input_device_filter: PASS
+test_deck_input_packets: PASS
+test_deck_input_lifecycle: PASS
+test_probe_unknown_interfaces_never_open: PASS
+test_probe_readonly_keymap: PASS
+test_probe_standard_qmk_usage: PASS
+test_probe_transport_rejects_writes_and_bad_responses: PASS
+test_probe_failures_close_and_exit_cleanly: PASS
+test_probe_matrix_definition_and_missing_dimensions: PASS
+test_probe_old_protocol_and_invalid_definition: PASS
+test_hook_raw_before_and_after_both_directions: PASS
+test_hook_other_unknown_injected_and_timeout_pass: PASS
+test_hook_matches_direction_scan_timestamp_and_exact_device: PASS
+test_hook_recent_expiry_one_use_ambiguity_and_late_raw: PASS
+test_hook_device_change_invalidates_cached_handle_and_recent_evidence: PASS
+test_hook_sided_modifiers_and_repeat_suppression: PASS
+test_modifiers_per_device_sides_release_and_explicit_binding: PASS
+test_hook_fail_open_callback_error_and_reentrancy: PASS
+test_hook_lifecycle_install_failure_and_observer: PASS
+AgentDeck offline tests: 55 groups passed
+Exit code: 0
+
+$ D:/conda/miniconda3/python.exe pc/test_deck_exclusive.py
+test_hook_raw_before_and_after_both_directions: PASS
+test_hook_other_unknown_injected_and_timeout_pass: PASS
+test_hook_matches_direction_scan_timestamp_and_exact_device: PASS
+test_hook_recent_expiry_one_use_ambiguity_and_late_raw: PASS
+test_hook_device_change_invalidates_cached_handle_and_recent_evidence: PASS
+test_hook_sided_modifiers_and_repeat_suppression: PASS
+test_modifiers_per_device_sides_release_and_explicit_binding: PASS
+test_hook_fail_open_callback_error_and_reentrancy: PASS
+test_hook_lifecycle_install_failure_and_observer: PASS
+deck exclusive offline tests: 9 groups passed
+Exit code: 0
+
+$ D:/conda/miniconda3/python.exe pc/test_deck_input.py
+test_deck_input_transitions: PASS
+test_deck_input_device_filter: PASS
+test_deck_input_packets: PASS
+test_deck_input_lifecycle: PASS
+deck Raw Input offline tests: 4 groups passed
+Exit code: 0
+
+$ D:/conda/miniconda3/python.exe pc/test_deck_keymap.py
+test_vendor_report_encoding: PASS
+test_vendor_response_decoding: PASS
+test_vendor_transport_read_only_and_errors: PASS
+test_plan_changes_exactly_eight_keys_and_first_encoder: PASS
+test_snapshot_validation_rejects_incomplete_or_guessed_geometry: PASS
+test_backup_complete_exclusive_original_and_no_overwrite: PASS
+test_apply_backs_up_before_any_write_and_verifies_every_layer: PASS
+test_apply_readback_mismatch_and_partial_failures_restore_backup: PASS
+test_rollback_failure_is_reported_with_backup: PASS
+test_second_interrupt_during_rollback_preparation_still_restores: PASS
+test_restore_uses_complete_backup_and_rejects_geometry_mismatch: PASS
+test_show_layer_zero_names_and_encoder_directions: PASS
+test_real_cli_gate_never_opens_or_sends_even_with_fake_supported_usage: PASS
+Keymap offline tests: 13 groups passed
+Exit code: 0
+
+$ D:/conda/miniconda3/python.exe pc/test_deck_probe.py
+test_probe_failures_close_and_exit_cleanly: PASS
+test_probe_matrix_definition_and_missing_dimensions: PASS
+test_probe_old_protocol_and_invalid_definition: PASS
+test_probe_readonly_keymap: PASS
+test_probe_standard_qmk_usage: PASS
+test_probe_transport_rejects_writes_and_bad_responses: PASS
+test_probe_unknown_interfaces_never_open: PASS
+deck probe offline tests: 7 groups passed
+Exit code: 0
+
+$ D:/conda/miniconda3/python.exe pc/test_deck_usb.py
+USB unavailable: pyusb unavailable
+USB unavailable: not found
+USB unavailable: temporarily unavailable
+USB unavailable: backend unavailable
+USB unavailable: pyusb unavailable
+USB unavailable: not found
+USB unavailable: temporarily unavailable
+USB unavailable: backend unavailable
+USB unavailable: pyusb unavailable
+USB unavailable: not found
+USB unavailable: temporarily unavailable
+USB unavailable: backend unavailable
+请先用 Zadig 把 4132:2107 接口0 换成 WinUSB (USB 4132:2107 not found)
+USB unavailable: USB 4132:2107 not found
+请先用 Zadig 把 4132:2107 接口0 换成 WinUSB (USB 4132:2107 not found)
+请先用 Zadig 把 4132:2107 接口0 换成 WinUSB (busy WinUSB)
+USB unavailable: busy WinUSB
+请先用 Zadig 把 4132:2107 接口0 换成 WinUSB (USB 4132:2107 not found)
+test_usb_report_diff_multi_key_and_repeat: PASS
+test_usb_modifier_combinations_sides_and_device_isolation: PASS
+test_usb_overlapping_modifiers_use_bare_key_and_full_pressed_set: PASS
+test_usb_report_metadata_is_captured_on_receipt_including_probe_packet: PASS
+test_usb_unknown_lengths_and_rollover_preserve_state: PASS
+test_usb_action_dispatch_ignores_release_repeat_and_prefers_combo: PASS
+test_usb_open_selects_only_interface_zero_interrupt_in: PASS
+test_usb_auto_rejects_claimed_but_unreadable_interface_with_zadig_hint: PASS
+test_usb_probe_timeout_proves_readable_idle_interface: PASS
+test_usb_probe_first_report_is_dispatched_once_without_losing_key: PASS
+test_usb_boot_protocol_failure_still_reads_real_length: PASS
+test_usb_timeouts_keep_connection_and_stop_releases_resources: PASS
+test_usb_disconnect_reconnects_after_two_seconds_and_resets_keys: PASS
+test_usb_initial_open_failure_retries_and_zadig_hint: PASS
+test_usb_open_failures_dispose_and_close_is_idempotent: PASS
+test_usb_callback_error_and_interrupt_cleanup: PASS
+test_usb_auto_backend_selection_success_and_observer_fallback: PASS
+test_usb_interface_zero_driver_only_uses_present_device_service: PASS
+test_usb_auto_failed_open_keeps_usb_unless_hidusb_confirmed: PASS
+test_usb_auto_missing_or_busy_winusb_startup_recovers_without_restart: PASS
+test_usb_explicit_backends_and_experimental_hook_opt_in: PASS
+test_usb_mapping_normalization_and_old_rawinput_bindings: PASS
+test_usb_run_uses_selected_backend_mapping_and_cleans_up: PASS
+test_usb_learn_prints_hid_key_once_and_cli_selects_usb: PASS
+deck USB offline tests: 24 groups passed
+Exit code: 0
+
+$ D:/conda/miniconda3/python.exe pc/test_focus_lock.py
+test_acquired_and_abandoned_mutex_release_and_close: PASS
+test_timeout_and_failed_wait_never_enter_or_release: PASS
+test_invalid_timeout_and_non_windows_fallback: PASS
+test_windows_named_mutex_excludes_other_process: PASS
+focus lock offline tests: 4 groups passed
+Exit code: 0
+
+$ D:/conda/miniconda3/python.exe pc/test_hub.py
+test_chain_uses_previous_line_sha256_and_survives_restart (__main__.AuditTests.test_chain_uses_previous_line_sha256_and_survives_restart) ... ok
+test_concurrent_decisions_form_one_chain (__main__.AuditTests.test_concurrent_decisions_form_one_chain) ... ok
+test_doctor_cli_dispatch_does_not_create_server_or_token (__main__.AuditTests.test_doctor_cli_dispatch_does_not_create_server_or_token) ... ok
+test_invalid_or_incomplete_log_is_never_overwritten (__main__.AuditTests.test_invalid_or_incomplete_log_is_never_overwritten) ... ok
+test_tampering_first_middle_and_last_line_is_detected (__main__.AuditTests.test_tampering_first_middle_and_last_line_is_detected) ... ok
+test_combo_presses_in_order_releases_in_reverse (test_hub_desktop.ComboTests.test_combo_presses_in_order_releases_in_reverse) ... ok
+test_held_modifiers_and_changed_foreground_prevent_input (test_hub_desktop.ComboTests.test_held_modifiers_and_changed_foreground_prevent_input) ... ok
+test_partial_input_releases_only_inserted_down_keys (test_hub_desktop.ComboTests.test_partial_input_releases_only_inserted_down_keys) ... ok
+test_default_capture_requests_all_screens (test_hub_desktop.DesktopTests.test_default_capture_requests_all_screens) ... ok
+test_failed_paste_never_sends_enter (test_hub_desktop.DesktopTests.test_failed_paste_never_sends_enter) ... ok
+test_focus_change_after_paste_never_sends_enter (test_hub_desktop.DesktopTests.test_focus_change_after_paste_never_sends_enter) ... ok
+test_focus_rejects_ambiguity_and_activation_failure (test_hub_desktop.DesktopTests.test_focus_rejects_ambiguity_and_activation_failure) ... ok
+test_focus_uses_project_and_tool_matching (test_hub_desktop.DesktopTests.test_focus_uses_project_and_tool_matching) ... ok
+test_foreground_change_after_clipboard_never_pastes (test_hub_desktop.DesktopTests.test_foreground_change_after_clipboard_never_pastes) ... ok
+test_interrupt_sends_one_escape (test_hub_desktop.DesktopTests.test_interrupt_sends_one_escape) ... ok
+test_native_adapter_is_lazy (test_hub_desktop.DesktopTests.test_native_adapter_is_lazy) ... ok
+test_prompt_pastes_unicode_then_enter (test_hub_desktop.DesktopTests.test_prompt_pastes_unicode_then_enter) ... ok
+test_screenshot_saves_path_and_never_sends_enter (test_hub_desktop.DesktopTests.test_screenshot_saves_path_and_never_sends_enter) ... ok
+test_voice_sends_win_h (test_hub_desktop.DesktopTests.test_voice_sends_win_h) ... ok
+test_all_checks_pass_and_state_is_authenticated (test_hub_doctor.DoctorTests.test_all_checks_pass_and_state_is_authenticated) ... ok
+test_auth_timeout_missing_login_unknown_and_text_status (test_hub_doctor.DoctorTests.test_auth_timeout_missing_login_unknown_and_text_status) ... ok
+test_empty_home_advice_without_creating_files_or_logging_in (test_hub_doctor.DoctorTests.test_empty_home_advice_without_creating_files_or_logging_in) ... ok
+test_health_and_protected_state_failures_print_guidance (test_hub_doctor.DoctorTests.test_health_and_protected_state_failures_print_guidance) ... ok
+test_hook_detection_requires_executed_relay_and_correct_agent (test_hub_doctor.DoctorTests.test_hook_detection_requires_executed_relay_and_correct_agent) ... ok
+test_stale_missing_future_and_invalid_agent_timestamps (test_hub_doctor.DoctorTests.test_stale_missing_future_and_invalid_agent_timestamps) ... ok
+test_token_empty_or_unreadable_does_not_make_protected_request (test_hub_doctor.DoctorTests.test_token_empty_or_unreadable_does_not_make_protected_request) ... ok
+test_binds_only_loopback_and_authenticates_every_protected_route (__main__.HTTPTests.test_binds_only_loopback_and_authenticates_every_protected_route) ... ok
+test_critical_http_fallback_and_authenticated_audit_tail (__main__.HTTPTests.test_critical_http_fallback_and_authenticated_audit_tail) ... ok
+test_empty_audit_does_not_create_file (__main__.HTTPTests.test_empty_audit_does_not_create_file) ... ok
+test_http_timeout_and_deny (__main__.HTTPTests.test_http_timeout_and_deny) ... ok
+test_permission_does_not_block_http_state_action_or_another_event (__main__.HTTPTests.test_permission_does_not_block_http_state_action_or_another_event) ... ok
+test_rejects_bad_requests (__main__.HTTPTests.test_rejects_bad_requests) ... ok
+test_relay_to_real_loopback_server_preserves_decision (__main__.HTTPTests.test_relay_to_real_loopback_server_preserves_decision) ... ok
+test_token_created_once_and_reused (__main__.HTTPTests.test_token_created_once_and_reused) ... ok
+test_agents_seen_keeps_last_event_time_after_session_end (__main__.HubTests.test_agents_seen_keeps_last_event_time_after_session_end) ... ok
+test_audit_failure_blocks_device_decision_but_releases_native_fallback (__main__.HubTests.test_audit_failure_blocks_device_decision_but_releases_native_fallback) ... ok
+test_critical_classification_precedes_high_and_is_configurable (__main__.HubTests.test_critical_classification_precedes_high_and_is_configurable) ... ok
+test_critical_returns_immediately_and_device_cannot_decide_locked_record (__main__.HubTests.test_critical_returns_immediately_and_device_cannot_decide_locked_record) ... ok
+test_decisions_audit_original_command_fields_and_sources_once (__main__.HubTests.test_decisions_audit_original_command_fields_and_sources_once) ... ok
+test_deny_and_interrupt_return_deny_with_message (__main__.HubTests.test_deny_and_interrupt_return_deny_with_message) ... ok
+test_desktop_actions_use_selected_session_and_bilingual_templates (__main__.HubTests.test_desktop_actions_use_selected_session_and_bilingual_templates) ... ok
+test_expired_request_does_not_consume_confirmation_for_next (__main__.HubTests.test_expired_request_does_not_consume_confirmation_for_next) ... ok
+test_high_risk_classification_and_configurable_rules (__main__.HubTests.test_high_risk_classification_and_configurable_rules) ... ok
+test_high_risk_confirmation_is_bound_to_request_and_expires (__main__.HubTests.test_high_risk_confirmation_is_bound_to_request_and_expires) ... ok
+test_high_risk_warning_survives_later_same_session_event (__main__.HubTests.test_high_risk_warning_survives_later_same_session_event) ... ok
+test_interrupt_denies_pending_even_after_selecting_nonwaiting_session (__main__.HubTests.test_interrupt_denies_pending_even_after_selecting_nonwaiting_session) ... ok
+test_invalid_events_do_not_create_sessions_or_consume_slots (__main__.HubTests.test_invalid_events_do_not_create_sessions_or_consume_slots) ... ok
+test_keys_match_existing_hook_for_both_agents (__main__.HubTests.test_keys_match_existing_hook_for_both_agents) ... ok
+test_lcd_failure_does_not_break_approval_or_hold_heartbeat (__main__.HubTests.test_lcd_failure_does_not_break_approval_or_hold_heartbeat) ... ok
+test_locked_arrival_preserves_waiter_and_stale_ids_do_not_retarget (__main__.HubTests.test_locked_arrival_preserves_waiter_and_stale_ids_do_not_retarget) ... ok
+test_locked_banner_renders_through_existing_firmware_protocol (__main__.HubTests.test_locked_banner_renders_through_existing_firmware_protocol) ... ok
+test_locked_record_survives_notification_and_clears_on_native_progress (__main__.HubTests.test_locked_record_survives_notification_and_clears_on_native_progress) ... ok
+test_new_waiter_displays_after_locked_native_fallback (__main__.HubTests.test_new_waiter_displays_after_locked_native_fallback) ... ok
+test_permission_blocks_until_approve (__main__.HubTests.test_permission_blocks_until_approve) ... ok
+test_requests_fifo_and_stale_id_cannot_approve_next_session (__main__.HubTests.test_requests_fifo_and_stale_id_cannot_approve_next_session) ... ok
+test_session_end_and_shutdown_release_waiters_without_deciding (__main__.HubTests.test_session_end_and_shutdown_release_waiters_without_deciding) ... ok
+test_shutdown_and_session_end_are_audited_as_native_fallbacks (__main__.HubTests.test_shutdown_and_session_end_are_audited_as_native_fallbacks) ... ok
+test_slot_numbers_stay_stable_and_released_slot_is_reused (__main__.HubTests.test_slot_numbers_stay_stable_and_released_slot_is_reused) ... ok
+test_slot_selection_selects_that_sessions_pending_request (__main__.HubTests.test_slot_selection_selects_that_sessions_pending_request) ... ok
+test_state_events_and_pending_are_not_lost (__main__.HubTests.test_state_events_and_pending_are_not_lost) ... ok
+test_timeout_falls_back_and_cannot_be_approved_later (__main__.HubTests.test_timeout_falls_back_and_cannot_be_approved_later) ... ok
+test_two_requests_in_one_session_still_need_separate_decisions (__main__.HubTests.test_two_requests_in_one_session_still_need_separate_decisions) ... ok
+test_usb_uses_same_actions_and_ignores_releases_modifiers_and_stale_reports (__main__.HubTests.test_usb_uses_same_actions_and_ignores_releases_modifiers_and_stale_reports) ... ok
+test_all_files_are_validated_before_any_write (test_hub_install.InstallTests.test_all_files_are_validated_before_any_write) ... ok
+test_cli_with_default_targets (test_hub_install.InstallTests.test_cli_with_default_targets) ... ok
+test_dry_run_never_creates_home_or_backups (test_hub_install.InstallTests.test_dry_run_never_creates_home_or_backups) ... ok
+test_invalid_options_are_rejected_without_writes (test_hub_install.InstallTests.test_invalid_options_are_rejected_without_writes) ... ok
+test_mixed_group_only_removes_own_handler (test_hub_install.InstallTests.test_mixed_group_only_removes_own_handler) ... ok
+test_ownership_is_executed_script_not_substring (test_hub_install.InstallTests.test_ownership_is_executed_script_not_substring) ... ok
+test_reinstall_reconciles_options_without_duplicate_or_foreign_changes (test_hub_install.InstallTests.test_reinstall_reconciles_options_without_duplicate_or_foreign_changes) ... ok
+test_round_trip_and_idempotence (test_hub_install.InstallTests.test_round_trip_and_idempotence) ... ok
+test_uninstall_noop_preserves_empty_foreign_configuration (test_hub_install.InstallTests.test_uninstall_noop_preserves_empty_foreign_configuration) ... ok
+test_exact_bytes_auth_and_timeouts (test_hub_relay.RelayTests.test_exact_bytes_auth_and_timeouts) ... ok
+test_main_preserves_text_and_silences_failures (test_hub_relay.RelayTests.test_main_preserves_text_and_silences_failures) ... ok
+test_missing_hub_process_silent_exit_zero (test_hub_relay.RelayTests.test_missing_hub_process_silent_exit_zero) ... ok
+
+----------------------------------------------------------------------
+Ran 75 tests in 1.304s
+
+OK
+Exit code: 0
+
+$ D:/conda/miniconda3/python.exe pc/test_hub_desktop.py
+test_combo_presses_in_order_releases_in_reverse (__main__.ComboTests.test_combo_presses_in_order_releases_in_reverse) ... ok
+test_held_modifiers_and_changed_foreground_prevent_input (__main__.ComboTests.test_held_modifiers_and_changed_foreground_prevent_input) ... ok
+test_partial_input_releases_only_inserted_down_keys (__main__.ComboTests.test_partial_input_releases_only_inserted_down_keys) ... ok
+test_default_capture_requests_all_screens (__main__.DesktopTests.test_default_capture_requests_all_screens) ... ok
+test_failed_paste_never_sends_enter (__main__.DesktopTests.test_failed_paste_never_sends_enter) ... ok
+test_focus_change_after_paste_never_sends_enter (__main__.DesktopTests.test_focus_change_after_paste_never_sends_enter) ... ok
+test_focus_rejects_ambiguity_and_activation_failure (__main__.DesktopTests.test_focus_rejects_ambiguity_and_activation_failure) ... ok
+test_focus_uses_project_and_tool_matching (__main__.DesktopTests.test_focus_uses_project_and_tool_matching) ... ok
+test_foreground_change_after_clipboard_never_pastes (__main__.DesktopTests.test_foreground_change_after_clipboard_never_pastes) ... ok
+test_interrupt_sends_one_escape (__main__.DesktopTests.test_interrupt_sends_one_escape) ... ok
+test_native_adapter_is_lazy (__main__.DesktopTests.test_native_adapter_is_lazy) ... ok
+test_prompt_pastes_unicode_then_enter (__main__.DesktopTests.test_prompt_pastes_unicode_then_enter) ... ok
+test_screenshot_saves_path_and_never_sends_enter (__main__.DesktopTests.test_screenshot_saves_path_and_never_sends_enter) ... ok
+test_voice_sends_win_h (__main__.DesktopTests.test_voice_sends_win_h) ... ok
+
+----------------------------------------------------------------------
+Ran 14 tests in 0.040s
+
+OK
+Exit code: 0
+
+$ D:/conda/miniconda3/python.exe pc/test_hub_doctor.py
+test_all_checks_pass_and_state_is_authenticated (__main__.DoctorTests.test_all_checks_pass_and_state_is_authenticated) ... ok
+test_auth_timeout_missing_login_unknown_and_text_status (__main__.DoctorTests.test_auth_timeout_missing_login_unknown_and_text_status) ... ok
+test_empty_home_advice_without_creating_files_or_logging_in (__main__.DoctorTests.test_empty_home_advice_without_creating_files_or_logging_in) ... ok
+test_health_and_protected_state_failures_print_guidance (__main__.DoctorTests.test_health_and_protected_state_failures_print_guidance) ... ok
+test_hook_detection_requires_executed_relay_and_correct_agent (__main__.DoctorTests.test_hook_detection_requires_executed_relay_and_correct_agent) ... ok
+test_stale_missing_future_and_invalid_agent_timestamps (__main__.DoctorTests.test_stale_missing_future_and_invalid_agent_timestamps) ... ok
+test_token_empty_or_unreadable_does_not_make_protected_request (__main__.DoctorTests.test_token_empty_or_unreadable_does_not_make_protected_request) ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.105s
+
+OK
+Exit code: 0
+
+$ D:/conda/miniconda3/python.exe pc/test_hub_install.py
+test_all_files_are_validated_before_any_write (__main__.InstallTests.test_all_files_are_validated_before_any_write) ... ok
+test_cli_with_default_targets (__main__.InstallTests.test_cli_with_default_targets) ... ok
+test_dry_run_never_creates_home_or_backups (__main__.InstallTests.test_dry_run_never_creates_home_or_backups) ... ok
+test_invalid_options_are_rejected_without_writes (__main__.InstallTests.test_invalid_options_are_rejected_without_writes) ... ok
+test_mixed_group_only_removes_own_handler (__main__.InstallTests.test_mixed_group_only_removes_own_handler) ... ok
+test_ownership_is_executed_script_not_substring (__main__.InstallTests.test_ownership_is_executed_script_not_substring) ... ok
+test_reinstall_reconciles_options_without_duplicate_or_foreign_changes (__main__.InstallTests.test_reinstall_reconciles_options_without_duplicate_or_foreign_changes) ... ok
+test_round_trip_and_idempotence (__main__.InstallTests.test_round_trip_and_idempotence) ... ok
+test_uninstall_noop_preserves_empty_foreign_configuration (__main__.InstallTests.test_uninstall_noop_preserves_empty_foreign_configuration) ... ok
+
+----------------------------------------------------------------------
+Ran 9 tests in 0.070s
+
+OK
+Exit code: 0
+
+$ D:/conda/miniconda3/python.exe pc/test_hub_relay.py
+test_exact_bytes_auth_and_timeouts (__main__.RelayTests.test_exact_bytes_auth_and_timeouts) ... ok
+test_main_preserves_text_and_silences_failures (__main__.RelayTests.test_main_preserves_text_and_silences_failures) ... ok
+test_missing_hub_process_silent_exit_zero (__main__.RelayTests.test_missing_hub_process_silent_exit_zero) ... ok
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.160s
+
+OK
+Exit code: 0
+
+$ D:/conda/miniconda3/python.exe pc/test_pc.py
+test_names_hooks: PASS
+test_ensure_daemon: PASS
+test_demo: PASS
+test_firmware_loop: PASS
+PC and firmware loop: 4 groups passed
+Exit code: 0
+
+$ D:/conda/miniconda3/python.exe pc/test_ui.py
+test_layout_states: PASS
+test_marquee: PASS
+test_focus: PASS
+test_compatibility: PASS
+test_priority_rotation: PASS
+test_bad_commands_glyphs: PASS
+test_dance: PASS
+UI: 7 groups passed
+Exit code: 0
+
+$ D:/conda/miniconda3/python.exe pc/sim.py C:\Users\king\AppData\Local\Temp\hub-v1_1-sim-uq6optdu\preview-sim.png
+Rendered 42 scenarios -> C:\Users\king\AppData\Local\Temp\hub-v1_1-sim-uq6optdu\preview-sim.png
+Exit code: 0
+
+Commands run: 16; failures: 0

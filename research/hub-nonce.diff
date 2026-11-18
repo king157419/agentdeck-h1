@@ -1,0 +1,1580 @@
+--- before/hub.py
++++ pc\hub.py
+@@ -35,6 +35,7 @@
+ PORT = 47800
+ APPROVE_TIMEOUT = 110.0
+ CONFIRM_SECONDS = 1.5
++SWITCH_GUARD_SECONDS = 0.3
+ GATE_CONFIRMED_SECONDS = 30.0
+ VOICE_NOTICE_SECONDS = 5.0
+ MAX_BODY = 1024 * 1024
+@@ -113,9 +114,10 @@
+     gate: bool = False
+     gate_confirmed: bool = False
+     input_hash: str = ""
++    nonce: int = field(default_factory=lambda: secrets.randbits(32))
+ 
+     def public(self):
+-        return {"id": self.id, "agent": self.session[0], "session_id": self.session[1],
++        return {"id": self.id, "nonce": self.nonce, "agent": self.session[0], "session_id": self.session[1],
+                 "tool_name": self.tool_name, "summary": self.summary, "risk": self.risk,
+                 "created_at": self.created_at, "armed": self.armed_at is not None,
+                 "status": self.status, "gate": self.gate,
+@@ -129,11 +131,14 @@
+     def __init__(self, *, approve_timeout=APPROVE_TIMEOUT, sender=None, desktop=None,
+                  focus_guard=None, hold_path=None, monotonic=None, wall_time=None,
+                  risk_rules=None, critical_rules=None, prompts=None, home=None, audit=None,
+-                 lcd_enabled=True, desktop_enabled=True, gate_mode="high",
++                 lcd_enabled=True, desktop_enabled=True, gate_mode="high", require_nonce=False,
+                  production_hosts=(), protected_branches=PROTECTED_BRANCHES, mcp_write_tools=()):
+         if not math.isfinite(approve_timeout) or approve_timeout <= 0:
+             raise ValueError("approve timeout must be positive and finite")
+         self.approve_timeout = approve_timeout
++        if not isinstance(require_nonce, bool):
++            raise ValueError("require_nonce must be a boolean")
++        self.require_nonce = require_nonce
+         if gate_mode not in ("high", "low", "off"):
+             raise ValueError("gate_mode must be high, low, or off")
+         self.gate_mode = gate_mode
+@@ -159,11 +164,15 @@
+         self.lock = threading.RLock()
+         self.sessions = {}
+         self.pending = {}
++        self.issued_nonces = set()
+         self.gate_passed = {}
+         self.locked = {}
+         self.agents_seen = {"cc": None, "cx": None}
+         self.selected = None
+         self.displayed_request_id = None
++        self.display_switched_at = float("-inf")
++        self.rendered_request = {"request_id": None, "nonce": None}
++        self.rendered_source = None
+         self.last_focus = float("-inf")
+         self.closed = False
+         self.voice_events = SimpleQueue()
+@@ -173,34 +182,86 @@
+ 
+     def _send(self, lines, focus=False):
+         if not self.lcd_enabled:
+-            return
++            return False
+         try:
+             if focus:
+                 with self.focus_guard(timeout=1.0):
+                     self.hold_path.touch()
+-                    self.sender(lines, retry_for=0.0)
++                    reply = self.sender(lines, retry_for=0.0, wait_reply=0.15)
+                     self.last_focus = self.monotonic()
++                    # Real serial output is acknowledged; injected synchronous
++                    # senders may return None. An empty/partial reply is not a render.
++                    if reply is not None:
++                        acknowledgements = reply.splitlines()
++                        expected = ["ok " + " ".join(line.split()[:3] if line.startswith("set ")
++                                                   else line.split()) for line in lines]
++                        if any(line not in acknowledgements for line in expected):
++                            return False
+             else:
+                 self.sender(lines, retry_for=0.0)
++            return True
+         except Exception as error:
+             log.warning("LCD unavailable: %s", error)
+             # A missing LCD must not cause a tight serial retry loop.
+             self.last_focus = self.monotonic()
++            return False
++
++    def record_rendered(self, request_id, nonce, source="overlay"):
++        """Publish an immutable snapshot only after a display has rendered it.
++
++        Input readers copy this without waiting for the Hub lock: a render or
++        queue change while dispatch is blocked must not retarget that key press.
++        """
++        with self.lock:
++            snapshot = {"request_id": request_id, "nonce": nonce}
++            if snapshot != self.rendered_request and request_id == self.displayed_request_id:
++                self.display_switched_at = self.monotonic()
++            self.rendered_source = source
++            self.rendered_request = snapshot
++
++    def _set_displayed(self, request_id):
++        if self.displayed_request_id != request_id:
++            self.displayed_request_id = request_id
++            self.display_switched_at = self.monotonic()
+ 
+     def _show(self):
+         session = self.sessions.get(self.selected)
+         if session is None:
+-            self._send(["focus -"], focus=True)
++            if self._send(["focus -"], focus=True):
++                self.record_rendered(None, None, "lcd")
+             return
+         name = self._display_name(session)
+         state = "wait" if session["state"] == "locked" else session["state"]
+-        self._send(["set %s %s %s" % (session["key"], state, name),
+-                    "focus " + session["key"]], focus=True)
++        if self._send(["set %s %s %s" % (session["key"], state, name),
++                       "focus " + session["key"]], focus=True):
++            request = self._displayed()
++            self.record_rendered(request.id if request else None,
++                                 request.nonce if request else None, "lcd")
+ 
+     def _displayed(self):
+         return self.pending.get(self.displayed_request_id) or self.locked.get(self.displayed_request_id)
+ 
++    def _new_nonce(self):
++        # Keep expired/decided values reserved for this Hub lifetime too: a
++        # random 32-bit collision must not revive an old nonce-only decision.
++        nonce = secrets.randbits(32)
++        while nonce in self.issued_nonces:
++            nonce = secrets.randbits(32)
++        self.issued_nonces.add(nonce)
++        return nonce
++
+     def _display_name(self, session):
++        name = self._display_label(session)
++        request = self._displayed()
++        # Leave room for the sprite and time/session indicators. Long labels
++        # keep their existing text; the overlay always shows the nonce suffix.
++        width = 13 - max(5, len(self.sessions) + 1)
++        if (request and request.session == (session["agent"], session["session_id"])
++                and len(name) + 5 <= width):
++            return name + " %04x" % (request.nonce & 0xffff)
++        return name
++
++    def _display_label(self, session):
+         request = self._displayed()
+         identity = (session["agent"], session["session_id"])
+         if session["state"] == "locked" or (request and request.session == identity and request.status == "locked"):
+@@ -253,21 +314,22 @@
+         self._send(["set %s %s %s" % (session["key"], state, self._display_name(session))])
+ 
+     def _next_request(self):
+-        self.displayed_request_id = next(iter(self.pending), None) or next(iter(self.locked), None)
++        self._set_displayed(next(iter(self.pending), None) or next(iter(self.locked), None))
+         request = self._displayed()
+         if request is not None:
+             self.selected = request.session
+         self._show()
+ 
+-    def _audit(self, request, decision, source):
++    def _audit(self, request, decision, source, **details):
++        fields = {"agent": request.session[0], "session_id": request.session[1],
++                  "project": request.project, "tool_name": request.tool_name,
++                  "command": request.command[:500], "risk": request.risk,
++                  "request_id": request.id, "nonce": request.nonce} if request else {"request_id": None, "nonce": None}
+         try:
+-            self.audit.append({"timestamp": self.wall_time(), "agent": request.session[0],
+-                               "session_id": request.session[1], "project": request.project,
+-                               "tool_name": request.tool_name, "command": request.command[:500],
+-                               "risk": request.risk, "decision": decision, "source": source,
+-                               "request_id": request.id})
++            self.audit.append(dict(fields, timestamp=self.wall_time(), decision=decision,
++                                   source=source, **details))
+         except (OSError, AuditError) as error:
+-            log.error("Cannot audit %s for %s: %s", decision, request.id, error)
++            log.error("Cannot audit %s for %s: %s", decision, request.id if request else None, error)
+             if decision in ("allow", "deny"):
+                 raise HubError("audit unavailable; use terminal approval", 503) from error
+ 
+@@ -350,7 +412,7 @@
+                     if request.session == identity:
+                         self.locked.pop(request.id)
+                         if self.displayed_request_id == request.id:
+-                            self.displayed_request_id = None
++                            self._set_displayed(None)
+                             cleared_display = True
+             if name == "SessionEnd":
+                 self.gate_passed = {key: passed for key, passed in self.gate_passed.items() if key[0] != identity}
+@@ -395,7 +457,7 @@
+                                   risk,
+                                   self.wall_time(), self.monotonic() + self.approve_timeout,
+                                   command=summary, project=session["project"], gate=gate,
+-                                  input_hash=tool_input_hash(tool_input))
++                                  input_hash=tool_input_hash(tool_input), nonce=self._new_nonce())
+                 request.gate_confirmed = not gate and (identity, request.input_hash) in self.gate_passed
+                 if request.risk == "critical" and not gate:
+                     request.status = "locked"
+@@ -457,11 +519,46 @@
+             return {"sessions": sessions, "pending": [p.public() for p in self.pending.values()],
+                     "locked": [p.public() for p in self.locked.values()],
+                     "agents_seen": dict(self.agents_seen),
++                    "nonce_required": self.require_nonce,
+                     "displayed_request_id": self.displayed_request_id,
+                     "selected_slot": selected["slot"] if selected else None}
+ 
+-    def action(self, payload, source="http"):
++    def _validate_decision(self, payload, command, source, received_at):
++        """Reject stale input before timeout/voice maintenance can mutate state."""
++        request = self._displayed()
++        reason = None
++        if "nonce" in payload:
++            nonce = payload["nonce"]
++            if (type(nonce) is not int or not 0 <= nonce < 2**32 or request is None
++                    or (request.id not in self.pending and request.id not in self.locked)
++                    or nonce != request.nonce or self.monotonic() >= request.deadline
++                    or (payload.get("request_id") is not None and payload["request_id"] != request.id)):
++                reason = "stale_nonce"
++        elif command == "approve" and self.require_nonce:
++            reason = "nonce_required"
++        if reason is None and "nonce" not in payload and payload.get("request_id") is not None:
++            if request is None or payload["request_id"] != request.id:
++                raise HubError("displayed request changed", 409)
++        if (reason is None and command == "approve" and request is not None
++                and request.status == "pending" and self.monotonic() < request.deadline
++                and received_at - self.display_switched_at < SWITCH_GUARD_SECONDS):
++            reason = "switch_guard"
++        if reason:
++            supplied = payload.get("nonce")
++            if supplied is not None and type(supplied) is not int:
++                # Malformed JSON values (including NaN) must not break the
++                # strict JSON audit encoder and turn a stale nonce into a 500.
++                supplied = repr(supplied)[:160]
++            self._audit(request, reason, source, reason=reason, action=command,
++                        supplied_nonce=supplied,
++                        supplied_request_id=payload.get("request_id"))
++            raise HubError(reason, 409)
++
++    def action(self, payload, source="http", *, received_at=None):
+         """The single action path used by both HTTP and the physical device."""
++        # This timestamp is an internal argument, never read from HTTP JSON.
++        # A press inside the guard must stay blocked while waiting for the lock.
++        received_at = self.monotonic() if received_at is None else received_at
+         if not isinstance(payload, dict) or not isinstance(payload.get("action"), str):
+             raise HubError("action must be a string")
+         parts = payload["action"].strip().split(maxsplit=1)
+@@ -476,6 +573,8 @@
+         with self.lock:
+             if self.closed:
+                 raise HubError("hub is shutting down", 503)
++            if command in ("approve", "deny"):
++                self._validate_decision(payload, command, source, received_at)
+             self._update_voice()
+             self._expire()
+             if command == "voice_up":
+@@ -541,8 +640,8 @@
+                 if previous is not None:
+                     previous.armed_at = None
+                 self.selected = selected
+-                self.displayed_request_id = next((p.id for p in self.pending.values() if p.session == selected), None) or next(
+-                    (p.id for p in self.locked.values() if p.session == selected), None)
++                self._set_displayed(next((p.id for p in self.pending.values() if p.session == selected), None) or next(
++                    (p.id for p in self.locked.values() if p.session == selected), None))
+                 self._show()
+                 session = self.sessions[selected]
+                 try:
+@@ -751,6 +850,8 @@
+         self.monotonic = time.monotonic if monotonic is None else monotonic
+ 
+     def __call__(self, event):
++        received_at = self.monotonic()
++        shown = dict(self.hub.rendered_request)
+         if event.get("modifier"):
+             return
+         # Releases may have no pressed keys, different modifiers or an aged
+@@ -764,7 +865,7 @@
+             if held is not None:
+                 binding, action = held
+                 if action == "voice_up" or 0 <= self.monotonic() - event.get("t", float("-inf")) <= 1.0:
+-                    self._dispatch(binding, action)
++                    self._dispatch(binding, action, shown, received_at)
+             return
+         if not 0 <= self.monotonic() - event.get("t", float("-inf")) <= 1.0:
+             return
+@@ -783,22 +884,19 @@
+             if modifiers and tuple(event.get("new_modifiers", ())) != modifiers:
+                 continue
+             action = actions.get("down") if isinstance(actions, dict) else actions
+-            if action is None or self._dispatch(binding, action):
++            if action is None or self._dispatch(binding, action, shown, received_at):
+                 if isinstance(actions, dict) and "up" in actions:
+                     self.held[physical] = (binding, actions["up"])
+             return
+ 
+-    def _dispatch(self, binding, action):
++    def _dispatch(self, binding, action, shown, received_at):
+         try:
+             payload = {"action": action}
+-            if action in ("approve", "deny", "interrupt"):
+-                # Bind this transition before dispatch so a changed display
+-                # cannot silently retarget a previously observed request.
+-                with self.hub.lock:
+-                    payload["request_id"] = self.hub.displayed_request_id
+-                    result = self.hub.action(payload, source="key")
+-            else:
+-                result = self.hub.action(payload, source="key")
++            if action in ("approve", "deny"):
++                payload.update(shown)
++            elif action == "interrupt":
++                payload["request_id"] = shown["request_id"]
++            result = self.hub.action(payload, source="key", received_at=received_at)
+             log.info("USB %s -> %s", binding, result)
+             return True
+         except (HubError, ValueError) as error:
+@@ -848,7 +946,7 @@
+     config = load_json(config_path) if args.config or config_path.exists() else {}
+     if not isinstance(config, dict):
+         raise ValueError("Hub config must be a JSON object")
+-    options = {name: config[name] for name in ("gate_mode", "production_hosts", "protected_branches", "mcp_write_tools")
++    options = {name: config[name] for name in ("gate_mode", "production_hosts", "protected_branches", "mcp_write_tools", "require_nonce")
+                if name in config}
+     if args.gate_mode is not None:
+         options["gate_mode"] = args.gate_mode
+--- before/hub_hotkey.py
++++ pc\hub_hotkey.py
+@@ -60,10 +60,10 @@
+         self.hub = hub
+ 
+     def snapshot(self):
+-        with self.hub.lock:
+-            return self.hub.displayed_request_id
+-
+-    def dispatch(self, binding, request_id):
++        return dict(self.hub.rendered_request)
++
++    def dispatch(self, binding, shown, *, received_at=None):
++        received_at = self.hub.monotonic() if received_at is None else received_at
+         try:
+             with self.hub.lock:
+                 action = binding.action
+@@ -71,14 +71,17 @@
+                     desktop = self.hub.desktop
+                     action = "voice_up" if desktop is not None and desktop.voice_active else "voice_down"
+                 payload = {"action": action}
+-                if action in ("approve", "deny", "interrupt"):
+-                    # Hub treats JSON null as an omitted id. Check it here too:
+-                    # an event observed with no request cannot decide a new one.
++                if action in ("approve", "deny"):
++                    # Keep the snapshot captured when the key was received,
++                    # including through modifier-release waits and lock contention.
++                    payload.update(shown or {"request_id": None, "nonce": None})
++                elif action == "interrupt":
++                    request_id = shown["request_id"] if shown else None
+                     if self.hub.displayed_request_id != request_id:
+                         log.warning("Hotkey %s ignored: displayed request changed", binding.name)
+                         return False
+                     payload["request_id"] = request_id
+-                result = self.hub.action(payload, source="hotkey")
++                result = self.hub.action(payload, source="hotkey", received_at=received_at)
+             log.info("Hotkey %s -> %s", binding.name, result)
+             return True
+         except (ValueError, RuntimeError) as error:
+@@ -165,6 +168,8 @@
+                         self.api = PynputHotkeys(monotonic=self.monotonic)
+                     else:
+                         self.api = Win32Hotkeys()
++                if hasattr(self.api, "snapshot"):
++                    self.api.snapshot = self.keys.snapshot
+                 self.thread_id = self.api.create_queue()
+             for identity, binding in enumerate(self.bindings, 1):
+                 if self.stopped.is_set():
+@@ -179,7 +184,7 @@
+                 event = self.api.next_event()
+                 if event is None:
+                     break
+-                identity, age = event
++                identity, age = event[:2]
+                 binding = registered.get(identity)
+                 if binding is None or not 0 <= age <= MAX_EVENT_AGE:
+                     continue
+@@ -190,7 +195,7 @@
+                     # apply decisions already waiting in Windows to its successor.
+                     log.warning("Hotkey %s ignored: queued before previous action completed", binding.name)
+                     continue
+-                request_id = self.keys.snapshot()
++                shown = event[2] if len(event) > 2 else self.keys.snapshot()
+                 # A Ctrl+prompt shortcut must release Ctrl before guarded paste.
+                 # Bound this wait and use the original request id throughout.
+                 while self.api.modifiers_down() and not self.stopped.is_set():
+@@ -199,7 +204,7 @@
+                     self.stopped.wait(0.01)
+                 if (not self.stopped.is_set() and not self.api.modifiers_down()
+                         and age + self.monotonic() - received_at <= MAX_EVENT_AGE):
+-                    if self.keys.dispatch(binding, request_id):
++                    if self.keys.dispatch(binding, shown, received_at=received_at - age):
+                         self.last_dispatch_finished = self.monotonic()
+         except OSError as error:
+             log.warning("Hotkey input stopped: %s", error)
+--- before/hub_hotkey_mac.py
++++ pc\hub_hotkey_mac.py
+@@ -8,7 +8,7 @@
+ class PynputHotkeys:
+     """Implement HotkeyInput's queue API without blocking the listener thread."""
+ 
+-    def __init__(self, *, keyboard=None, monotonic=None):
++    def __init__(self, *, keyboard=None, monotonic=None, snapshot=None):
+         if keyboard is None:
+             try:
+                 keyboard = importlib.import_module("pynput.keyboard")
+@@ -17,6 +17,7 @@
+                               "install pynput in this Python environment to enable hotkeys" % error) from error
+         self.keyboard = keyboard
+         self.monotonic = time.monotonic if monotonic is None else monotonic
++        self.snapshot = snapshot
+         self.events = queue.Queue()
+         self.bindings = {}
+         self.held = set()
+@@ -55,6 +56,10 @@
+     def _press(self, key):
+         if key is None or self.stopped.is_set():
+             return
++        # The listener may queue this event while the action thread is busy.
++        # Capture the visible request here, before any lock or queue wait.
++        received_at = self.monotonic()
++        shown = self.snapshot() if self.snapshot is not None else None
+         with self.lock:
+             if key in self.held:
+                 return
+@@ -64,7 +69,8 @@
+                 mask |= self.modifiers.get(held, 0)
+             for identity, (main, expected) in self.bindings.items():
+                 if key == main and mask == expected:
+-                    self.events.put((identity, self.monotonic()))
++                    event = (identity, received_at)
++                    self.events.put(event + (shown,) if self.snapshot is not None else event)
+ 
+     def _release(self, key):
+         with self.lock:
+@@ -106,8 +112,8 @@
+                 continue
+             if event is None:
+                 return None
+-            identity, pressed_at = event
+-            return identity, self.monotonic() - pressed_at
++            identity, pressed_at = event[:2]
++            return (identity, self.monotonic() - pressed_at) + event[2:]
+         return None
+ 
+     def modifiers_down(self):
+--- before/hub_overlay.py
++++ pc\hub_overlay.py
+@@ -51,7 +51,10 @@
+             label = "GATE · " + label
+         if request.get("gate_confirmed"):
+             label += " · 已在闸门确认"
+-        detail = {"id": request["id"], "summary": summary, "risk": risk,
++        nonce = request.get("nonce")
++        if type(nonce) is int:
++            label += " · #%04x" % (nonce & 0xffff)
++        detail = {"nonce": nonce, "id": request["id"], "summary": summary, "risk": risk,
+                   "label": label,
+                   "color": COLORS["ERR"] if risk in ("high", "critical") or locked else COLORS["ASK"],
+                   "can_approve": not locked, "can_deny": not locked}
+@@ -162,7 +165,7 @@
+         """May be called by another thread; Tk observes it on the next poll."""
+         self.stopped.set()
+ 
+-    def dispatch(self, action, request_id=None):
++    def dispatch(self, action, request_id=None, nonce=None):
+         """Label and hotkey controls ultimately call the same Hub.action method."""
+         if self.window is not None:
+             self.window.restore()
+@@ -172,6 +175,7 @@
+             if request_id is None:
+                 return None
+             payload["request_id"] = request_id
++            payload["nonce"] = nonce
+         try:
+             result = self.hub.action(payload, source="overlay")
+             self.message = result.get("message") or result.get("status", "")
+@@ -208,18 +212,18 @@
+         if self.model["slots"][number - 1]["occupied"]:
+             self.dispatch("slot %d" % number)
+ 
+-    def _decide(self, action, request_id, enabled):
++    def _decide(self, action, request_id, enabled, nonce=None):
+         if enabled:
+-            self.dispatch(action, request_id)
++            self.dispatch(action, request_id, nonce)
+ 
+     def _decision_press(self, event, action):
+         self._press(event)
+         request = self.model["request"]
+-        self._pressed_decisions[action] = (request["id"], request["can_" + action]) if request else (None, False)
++        self._pressed_decisions[action] = (request["id"], request["can_" + action], request.get("nonce")) if request else (None, False, None)
+ 
+     def _decision_release(self, action):
+-        request_id, enabled = self._pressed_decisions.pop(action, (None, False))
+-        self._decide(action, request_id, enabled)
++        request_id, enabled, nonce = self._pressed_decisions.pop(action, (None, False, None))
++        self._decide(action, request_id, enabled, nonce)
+ 
+     def _build(self):
+         import tkinter as tk
+@@ -308,17 +312,24 @@
+         if self.stopped.is_set():
+             self.root.quit()
+             return
++        previous_model = self.model
+         try:
+             self.model = display_model(self.hub.state())
+             self._render()
++            self.root.update_idletasks()
++            request = self.model["request"]
++            # Startup paints the withdrawn window for layout; acknowledge only visible pixels.
++            if self.root.state() != "withdrawn":
++                self.hub.record_rendered(request["id"] if request else None,
++                                         request.get("nonce") if request else None, source="overlay")
+             if self._height is not None:
+-                self.root.update_idletasks()
+                 height = self.root.winfo_reqheight()
+                 if height != self._height:
+                     self.root.geometry("%dx%d+%d+%d" % (WIDTH, height, self.root.winfo_x(),
+                                        max(0, self.root.winfo_y() + self._height - height)))
+                     self._height = height
+         except Exception as error:
++            self.model = previous_model
+             log.warning("Overlay refresh failed: %s", error)
+             self.note.configure(text="Hub state unavailable")
+         self.root.after(POLL_MS, self._poll)
+--- before/hub_virtual_device.py
++++ pc\hub_virtual_device.py
+@@ -68,7 +68,10 @@
+ 
+ # ---------------------------------------------------------------- actions
+ 
+-def control_action(control, ctrl=False, phase="down", request_id=None):
++_MISSING = object()
++
++
++def control_action(control, ctrl=False, phase="down", request_id=None, nonce=_MISSING):
+     """Map a control event to ``(payload or None, ctrl_after)``.
+ 
+     ``ctrl`` is the toggled modifier. It is consumed by the next action key.
+@@ -88,6 +91,8 @@
+         payload = {"action": "approve"}
+         if request_id is not None:
+             payload["request_id"] = request_id
++        if nonce is not _MISSING:
++            payload["nonce"] = nonce
+         return payload, False
+     if control == "deny":
+         if ctrl:
+@@ -95,6 +100,8 @@
+         payload = {"action": "deny"}
+         if request_id is not None:
+             payload["request_id"] = request_id
++        if nonce is not _MISSING:
++            payload["nonce"] = nonce
+         return payload, False
+     if control == "camera":
+         return {"action": "screenshot"}, False
+@@ -171,11 +178,13 @@
+     if len(summary) > 60:
+         summary = summary[:59] + "…"
+     risk = request.get("risk", "low")
++    nonce = request.get("nonce")
++    suffix = " #%04x" % (nonce & 0xffff) if type(nonce) is int else ""
+     if _is_locked(request):
+-        return "LOCKED: use terminal", COLORS["LOCKED"]
++        return "LOCKED: use terminal" + suffix, COLORS["LOCKED"]
+     red = risk in ("high", "critical")
+     head = "GATE " if request.get("gate") else ""
+-    return "%s%s [%s]" % (head, summary, risk.upper()), COLORS["ERR"] if red else COLORS["ASK"]
++    return "%s%s [%s]" % (head, summary, risk.upper()) + suffix, COLORS["ERR"] if red else COLORS["ASK"]
+ 
+ 
+ # ---------------------------------------------------------------- draw ops
+@@ -308,6 +317,7 @@
+         self._stop = threading.Event()
+         self._jobs = queue.Queue()
+         self._last_ops = None
++        self._drawn_request = (None, None)
+ 
+     # worker thread: polling and actions never block the Tk loop
+     def _worker(self):
+@@ -350,9 +360,11 @@
+             return
+         now = time.monotonic()
+         self.ui["pressed"][control] = now + PRESS_SECONDS
+-        request = displayed_request(self.state)
++        request_id, nonce = self._drawn_request
+         payload, self.ui["ctrl"] = control_action(
+-            control, self.ui["ctrl"], "down", request["id"] if request else None)
++            control, self.ui["ctrl"], "down", request_id, nonce)
++        if payload and payload["action"] in ("approve", "deny") and request_id is None:
++            payload = None
+         self.send(payload)
+         if control == "mic":
+             self.ui["pressed"][control] = now + 3600
+@@ -408,10 +420,15 @@
+             return
+         now = time.monotonic()
+         ui = {"ctrl": self.ui["ctrl"], "pressed": dict(self.ui["pressed"])}
+-        ops = build_scene(self.state, ui, now)
+-        if ops != self._last_ops:
++        snapshot = self.state
++        request = displayed_request(snapshot)
++        drawn_request = (request["id"], request.get("nonce")) if request else (None, None)
++        ops = build_scene(snapshot, ui, now)
++        if ops != self._last_ops or drawn_request != self._drawn_request:
++            self._draw(ops)
++            self.root.update_idletasks()
+             self._last_ops = ops
+-            self._draw(ops)
++            self._drawn_request = drawn_request
+         self.root.after(40, self._tick)
+ 
+     def run(self):
+--- before/hub_README.md
++++ pc\hub_README.md
+@@ -187,6 +187,7 @@
+ ```json
+ {
+   "gate_mode": "high",
++  "require_nonce": false,
+   "production_hosts": ["prod", "*.production.example.com"],
+   "protected_branches": ["main", "master", "release/*"],
+   "mcp_write_tools": ["mcp__database__write", "mcp__deploy__*"]
+@@ -256,7 +257,7 @@
+ high 用红色提示，首次 ✓ 提示再按一次，仍需在 1.5 秒内确认。
+ critical 显示 `LOCKED: use terminal`，禁用决定按钮，使用终端原生确认。
+ 鼠标按钮和热键使用与 HTTP `/action` 相同的状态机与风险检查；
+-按钮绑定画面中的请求 ID，画面过期时拒绝操作，不会改批后来的请求。
++按钮绑定按下时画面中的请求 ID 和 nonce，画面过期时拒绝操作，不会改批后来的请求。
+ 浮窗使用 Windows `WS_EX_NOACTIVATE` 并在按钮操作时保护原窗口焦点；
+ 选择槽位会按现有逻辑主动切到对应会话窗口。
+ 
+@@ -282,6 +283,47 @@
+ `approve-timeout + 5` seconds (ordinary events: five seconds).
+ 
+ ## HTTP
++
++Every approval request exposes a random 32-bit integer `nonce` beside its `id`
++in `/state`. Send both values in decisions, including the second high-risk
++confirmation:
++
++```json
++{"action": "approve", "request_id": "<displayed id>", "nonce": 305441741}
++```
++
++Both `approve` and `deny` reject an invalid, mismatched, already decided, or
++expired nonce with HTTP 409 and `{"error":"stale_nonce"}`. Validation refers to
++`displayed_request_id`, not another pending request. Rejection is audited and
++does not change request state. Nonces expire at the approval deadline (110 s by
++default), even if maintenance has not removed the request yet. Approval during
++the first 300 ms after a request switch or its first confirmed render returns
++409 `switch_guard`; denial remains available immediately. Guard checks retain
++the trusted receipt time through queue, modifier-release and lock waits; client
++JSON timestamps cannot override it. This guard also applies to legacy decisions
++without a nonce. Issued nonce values are reserved for the Hub process lifetime,
++including after expiry, so a random collision is resampled rather than reused.
++
++Legacy HTTP clients may omit the nonce by default; `/state` reports
++`nonce_required: false`. Set `"require_nonce": true` in the Hub configuration to
++reject nonce-free **approve** actions with 409 `nonce_required`. Legacy denial
++remains available. A supplied nonce is always validated, regardless of this flag.
++
++The overlay and virtual device send the nonce actually drawn when clicked;
++overlay button releases retain the value captured at press. Hotkeys and USB
++capture the last acknowledged LCD / rendered overlay snapshot on receipt,
++before waiting for the Hub lock or modifier release. Reading `/state` alone
++never marks a request as rendered. With neither LCD nor overlay rendered,
++hardware decisions fail closed; HTTP and virtual-device decisions still work.
++LCD acknowledgments use the existing `set` / `focus` protocol. Empty, failed or
++partial acknowledgments retain the previous snapshot. The nonce's four low
++hexadecimal digits appear in the overlay / virtual device and, when the existing
++name field has sufficient room, on the LCD. Firmware and hooks are unchanged.
++
++Audit records include the request nonce. Rejected decisions additionally record
++`reason`, `action`, `supplied_nonce`, and `supplied_request_id`; their `decision`
++is `stale_nonce`, `switch_guard`, or `nonce_required`. These records use the same
++hash chain as approval decisions.
+ 
+ | Method and route | Behavior |
+ | --- | --- |
+--- before/test_hub.py
++++ pc\test_hub.py
+@@ -143,6 +143,7 @@
+         self.wait_for(lambda: any(p["session_id"] == sid and p["agent"] == agent
+                                  for p in self.engine.state()["pending"]))
+         self.assertFalse(errors)
++        self.clock.value += 0.31  # Let the display switch settle before deciding.
+         return thread, result
+ 
+     def decision(self, result, behavior):
+@@ -181,12 +182,13 @@
+         self.assertEqual(self.engine.action({"action": "approve"})["status"], "no_request")
+ 
+     def test_high_risk_confirmation_is_bound_to_request_and_expires(self):
++        self.engine.approve_timeout = 3
+         thread, result = self.permission(command="rm -rf build")
+         first = self.engine.action({"action": "approve"})
+         self.assertEqual(first["status"], "confirm")
+         self.assertTrue(thread.is_alive())
+         self.assertTrue(any("HOLD! press again" in line for line in self.calls))
+-        self.clock.value += 1.6
++        self.clock.value += 1.51
+         second = self.engine.action({"action": "approve"})
+         self.assertEqual(second["status"], "confirm")
+         self.assertEqual(second["request_id"], first["request_id"])
+@@ -219,6 +221,7 @@
+         thread, result = self.permission("waiting")
+         self.event("SessionStart", "working")
+         self.engine.action({"action": "slot 2"})
++        self.clock.value += 0.31
+         self.assertIsNone(self.engine.state()["displayed_request_id"])
+         self.desktop.calls.clear()
+         self.assertEqual(self.engine.action({"action": "interrupt"})["status"], "denied")
+@@ -269,6 +272,7 @@
+         second, second_result = self.permission("two", "cx")
+         second_id = self.engine.state()["pending"][1]["id"]
+         selected = self.engine.action({"action": "slot 2"})
++        self.clock.value += 0.31
+         self.assertEqual(selected["request_id"], second_id)
+         self.engine.action({"action": "approve"})
+         second.join(1)
+@@ -554,6 +558,7 @@
+         second, second_result = self.permission("second", command="sudo test")
+         self.clock.value += 1.1
+         self.engine.maintain()
++        self.clock.value += 0.31
+         first.join(1)
+         self.assertEqual(first_result, [{}])
+         self.assertEqual(self.engine.action({"action": "approve"})["status"], "confirm")
+@@ -678,10 +683,12 @@
+         self.assertEqual(self.engine.state()["displayed_request_id"], waiting_id)
+         locked_id = self.engine.state()["locked"][0]["id"]
+         self.engine.action({"action": "slot 2"})
++        self.clock.value += 0.31
+         self.assertEqual(self.engine.action({"action": "approve"})["status"], "locked")
+         with self.assertRaises(hub.HubError):
+             self.engine.action({"action": "approve", "request_id": waiting_id})
+         self.engine.action({"action": "slot 1"})
++        self.clock.value += 0.31
+         self.engine.action({"action": "approve", "request_id": waiting_id})
+         thread.join(1)
+         self.decision(result, "allow")
+@@ -1059,6 +1066,7 @@
+         self.assertTrue(thread.is_alive())
+         self.assertEqual(self.request("POST", "/event?agent=cc", dict(event,
+                           hook_event_name="SessionStart", session_id="second")), (200, {}))
++        time.sleep(0.31)
+         response = self.request("POST", "/action", {"action": "approve",
+                                                     "request_id": state["displayed_request_id"]})
+         self.assertEqual(response[1]["status"], "allowed")
+@@ -1096,6 +1104,7 @@
+         while not self.engine.state()["pending"]:
+             self.assertLess(time.monotonic(), deadline)
+             time.sleep(0.002)
++        time.sleep(0.31)
+         self.request("POST", "/action", {"action": "approve"})
+         thread.join(2)
+         self.assertEqual(json.loads(results[0])["hookSpecificOutput"]["decision"], {"behavior": "allow"})
+--- before/test_hub_gate.py
++++ pc\test_hub_gate.py
+@@ -61,6 +61,7 @@
+         self.wait_for(lambda: bool({p["id"] for p in self.engine.state()["pending"]} - before) or bool(errors))
+         self.assertEqual(errors, [])
+         request = next(p for key, p in self.engine.pending.items() if key not in before)
++        self.clock.value += 0.31  # Let the display switch settle before deciding.
+         return thread, result, request
+ 
+     def decide(self, action="approve", request=None, source="key"):
+@@ -317,6 +318,7 @@
+                     while not engine.state()["pending"]:
+                         self.assertLess(time.monotonic(), deadline)
+                         time.sleep(0.002)
++                    time.sleep(0.31)
+                     self.assertEqual(engine.action({"action": "approve"})["status"], "confirm")
+                     self.assertEqual(result, [])
+                     engine.action({"action": "approve"})
+@@ -333,6 +335,7 @@
+                         time.sleep(0.002)
+                     self.assertTrue(engine.state()["pending"][0]["gate_confirmed"])
+                     self.assertEqual(result, [])
++                    time.sleep(0.31)
+                     self.assertEqual(engine.action({"action": "approve"})["status"], "allowed")
+                     worker.join(1)
+                     self.assertEqual(json.loads(result[0]), {"hookSpecificOutput": {
+--- before/test_hub_hotkey.py
++++ pc\test_hub_hotkey.py
+@@ -3,6 +3,7 @@
+ import json
+ from pathlib import Path
+ import threading
++import time
+ from types import SimpleNamespace
+ import unittest
+ from unittest.mock import patch
+@@ -13,15 +14,19 @@
+ 
+ class FakeHub:
+     def __init__(self):
++        self.monotonic = time.monotonic
+         self.lock = threading.RLock()
+         self.displayed_request_id = "request-1"
++        self.rendered_request = {"request_id": "request-1", "nonce": 123}
+         self.desktop = None
+         self.actions = []
+         self.failure = None
+ 
+-    def action(self, payload, source):
++    def action(self, payload, source, *, received_at=None):
+         if self.failure:
+             raise self.failure
++        if payload["action"] in ("approve", "deny") and (payload.get("request_id") != self.displayed_request_id or payload.get("nonce") != (123 if self.displayed_request_id == "request-1" else 456)):
++            raise ValueError("stale_nonce")
+         self.actions.append((payload, source))
+         if payload["action"] == "voice_down":
+             self.desktop = type("Voice", (), {"voice_active": True})()
+@@ -102,10 +107,10 @@
+         engine = FakeHub()
+         keys = HotkeyKeys(engine)
+         self.assertTrue(keys.dispatch(Binding("F19", 0, 0x82, "approve"), keys.snapshot()))
+-        self.assertEqual(engine.actions, [({"action": "approve", "request_id": "request-1"}, "hotkey")])
++        self.assertEqual(engine.actions, [({"action": "approve", "request_id": "request-1", "nonce": 123}, "hotkey")])
+         engine.displayed_request_id = "request-2"
+         with self.assertLogs("agentdeck.hub.hotkey", level="WARNING"):
+-            self.assertFalse(keys.dispatch(Binding("F19", 0, 0x82, "approve"), "request-1"))
++            self.assertFalse(keys.dispatch(Binding("F19", 0, 0x82, "approve"), {"request_id": "request-1", "nonce": 123}))
+             self.assertFalse(keys.dispatch(Binding("F20", 0, 0x83, "deny"), None))
+         self.assertEqual(len(engine.actions), 1)
+ 
+@@ -465,6 +470,60 @@
+         self.assertEqual(engine.actions, [({"action": "prompt continue"}, "hotkey")])
+         self.assertTrue(native.listener.stopped)
+ 
++    def test_callback_snapshot_survives_display_change_before_queue_drain(self):
++        engine = FakeHub()
++        native = None
++
++        def emit(listener):
++            listener.callbacks["on_press"](native.keyboard.Key.f19)
++            # The listener has queued the old displayed request, but the main
++            # dispatch loop has not consumed it when a new frame is rendered.
++            engine.displayed_request_id = "request-2"
++            engine.rendered_request = {"request_id": "request-2", "nonce": 456}
++            native.events.put(None)
++
++        moments = iter([10.0, 10.4])
++        native = PynputHotkeys(keyboard=self.keyboard(start=emit),
++                               monotonic=lambda: next(moments))
++        with self.assertLogs("agentdeck.hub.hotkey", level="WARNING") as logs:
++            HotkeyInput(engine, {"hotkey": {"F19": "approve"}}, api=native).run()
++        self.assertIn("stale_nonce", "\n".join(logs.output))
++        self.assertEqual(engine.actions, [])
++        self.assertEqual(engine.rendered_request,
++                         {"request_id": "request-2", "nonce": 456})
++
++    def test_callback_receipt_precedes_adapter_lock_contention(self):
++        entered = threading.Event()
++        release = threading.Event()
++        clock = [100.1]
++        shown = [{"request_id": "request-1", "nonce": 123}]
++
++        class ObservedLock:
++            def __enter__(self):
++                entered.set()
++                if not release.wait(2):
++                    raise RuntimeError("adapter lock test timed out")
++
++            def __exit__(self, *args):
++                pass
++
++        native = PynputHotkeys(keyboard=self.keyboard(), monotonic=lambda: clock[0])
++        native.snapshot = lambda: dict(shown[0])
++        native.register(1, Binding("F19", 0, 0x82, "approve"))
++        native.lock = ObservedLock()
++        thread = threading.Thread(target=native._press, args=(native.keyboard.Key.f19,))
++        thread.start()
++        try:
++            self.assertTrue(entered.wait(2))
++            clock[0] += 0.301
++            shown[0] = {"request_id": "request-2", "nonce": 456}
++        finally:
++            release.set()
++            thread.join(2)
++        self.assertFalse(thread.is_alive())
++        self.assertEqual(native.events.get_nowait(),
++                         (1, 100.1, {"request_id": "request-1", "nonce": 123}))
++
+     def test_queue_age_uses_press_timestamp(self):
+         moments = iter([10, 11.2])
+         native = PynputHotkeys(keyboard=self.keyboard(), monotonic=lambda: next(moments))
+--- before/test_hub_overlay.py
++++ pc\test_hub_overlay.py
+@@ -94,10 +94,54 @@
+         self.overlay._decision_press(None, "approve")
+         self.overlay.model = display_model({"displayed_request_id": "new", "pending": [{"id": "new"}]})
+         self.overlay._decision_release("approve")
+-        self.hub.action.assert_called_once_with({"action": "approve", "request_id": "old"}, source="overlay")
++        self.hub.action.assert_called_once_with({"action": "approve", "request_id": "old", "nonce": None}, source="overlay")
+         self.assertEqual(self.window.restore.call_count, 2)
+         self.window.remember.assert_called_once_with()
+         self.assertEqual(self.overlay.message, "allowed")
++
++    def test_nonce_is_captured_at_press_before_refresh(self):
++        self.overlay.model = display_model({"displayed_request_id": "a", "pending": [
++            {"id": "a", "nonce": 0x1234abcd}]})
++        self.assertEqual(self.overlay.model["request"]["label"], "LOW · #abcd")
++        self.overlay._decision_press(None, "deny")
++        self.overlay.model = display_model({"displayed_request_id": "b", "pending": [
++            {"id": "b", "nonce": 12}]})
++        self.overlay._decision_release("deny")
++        self.hub.action.assert_called_once_with(
++            {"action": "deny", "request_id": "a", "nonce": 0x1234abcd}, source="overlay")
++
++    def test_withdrawn_startup_does_not_acknowledge_invisible_render(self):
++        self.overlay.root = Mock()
++        self.overlay.root.state.return_value = "withdrawn"
++        self.hub.state.return_value = {"displayed_request_id": "a", "pending": [
++            {"id": "a", "nonce": 10}]}
++        with patch.object(self.overlay, "_render"):
++            self.overlay._poll()
++        self.hub.record_rendered.assert_not_called()
++        self.overlay.root.state.return_value = "normal"
++        with patch.object(self.overlay, "_render"):
++            self.overlay._poll()
++        self.hub.record_rendered.assert_called_once_with("a", 10, source="overlay")
++
++    def test_render_snapshot_recorded_only_after_successful_idle_update(self):
++        self.overlay.root = Mock()
++        self.overlay.note = Mock()
++        self.hub.state.return_value = {"displayed_request_id": "old", "pending": [
++            {"id": "old", "nonce": 10}]}
++        with patch.object(self.overlay, "_render"):
++            self.overlay._poll()
++        self.hub.record_rendered.assert_called_once_with("old", 10, source="overlay")
++        self.hub.record_rendered.reset_mock()
++        self.overlay.root.update_idletasks.side_effect = RuntimeError("failed render")
++        self.hub.state.return_value = {}
++        with patch.object(self.overlay, "_render"), self.assertLogs("agentdeck.hub.overlay"):
++            self.overlay._poll()
++        self.hub.record_rendered.assert_not_called()
++        self.assertEqual(self.overlay.model["request"]["id"], "old")
++        self.overlay.root.update_idletasks.side_effect = None
++        with patch.object(self.overlay, "_render"):
++            self.overlay._poll()
++        self.hub.record_rendered.assert_called_once_with(None, None, source="overlay")
+ 
+     def test_empty_or_locked_display_cannot_decide(self):
+         self.overlay.dispatch("approve")
+@@ -115,7 +159,7 @@
+             with self.subTest(action=action):
+                 self.overlay._decision_press(None, action)
+                 self.overlay._decision_release(action)
+-                self.hub.action.assert_called_with({"action": action, "request_id": "gate"},
++                self.hub.action.assert_called_with({"action": action, "request_id": "gate", "nonce": None},
+                                                   source="overlay")
+ 
+     def test_gate_render_shows_title_and_keeps_both_buttons_enabled(self):
+--- before/test_hub_virtual_device.py
++++ pc\test_hub_virtual_device.py
+@@ -1,5 +1,7 @@
+ """Offline checks for the virtual device draw model; no display or hub needed."""
+ import unittest
++from types import SimpleNamespace
++from unittest.mock import Mock, patch
+ 
+ import hub_virtual_device as vd
+ 
+@@ -99,6 +101,43 @@
+         self.assertEqual(self.act("wheel_down", True)[1], True)
+ 
+ 
++class NonceTests(unittest.TestCase):
++    def test_actions_and_display_include_nonce(self):
++        for action in ("approve", "deny"):
++            payload, _ = vd.control_action(action, request_id="r", nonce=0x1234abcd)
++            self.assertEqual(payload, {"action": action, "request_id": "r", "nonce": 0x1234abcd})
++        self.assertTrue(vd.request_line(state(request=req(nonce=0x1234abcd)))[0].endswith("#abcd"))
++
++    def test_worker_state_change_before_redraw_uses_drawn_nonce(self):
++        device = vd.VirtualDevice(Mock())
++        device.root = Mock()
++        device._draw = Mock()
++        device.state = state(request=req(id="old", nonce=11))
++        device._tick()
++        device.state = state(request=req(id="new", nonce=22))
++        x, y, w, h = vd.layout()["approve"]
++        event = SimpleNamespace(x=x+w/2, y=y+h/2)
++        device._press(event)
++        self.assertEqual(device._jobs.get_nowait(),
++                         {"action": "approve", "request_id": "old", "nonce": 11})
++        device._tick()
++        device._press(event)
++        self.assertEqual(device._jobs.get_nowait(),
++                         {"action": "approve", "request_id": "new", "nonce": 22})
++
++    def test_failed_draw_does_not_publish_worker_nonce(self):
++        device = vd.VirtualDevice(Mock())
++        device.root = Mock()
++        device._draw = Mock(side_effect=RuntimeError("draw failed"))
++        device.state = state(request=req(nonce=1))
++        with self.assertRaises(RuntimeError):
++            device._tick()
++        self.assertEqual(device._drawn_request, (None, None))
++        x, y, w, h = vd.layout()["approve"]
++        device._press(SimpleNamespace(x=x+w/2, y=y+h/2))
++        self.assertTrue(device._jobs.empty())
++
++
+ class SceneTests(unittest.TestCase):
+     def test_hit_test_matches_layout(self):
+         for name, (x, y, w, h) in vd.layout().items():
+--- before/test_hub_nonce.py
++++ pc\test_hub_nonce.py
+@@ -0,0 +1,523 @@
++"""Offline approval nonce acceptance tests; no serial port or live hub access."""
++import http.client
++from contextlib import nullcontext
++import json
++from pathlib import Path
++import tempfile
++import threading
++import time
++from types import SimpleNamespace
++import unittest
++from unittest.mock import patch
++
++import hub
++from hub_hotkey import HotkeyKeys
++from test_hub import Clock
++
++
++class NonceTests(unittest.TestCase):
++    def setUp(self):
++        temp = tempfile.TemporaryDirectory()
++        self.addCleanup(temp.cleanup)
++        self.clock = Clock()
++        self.engine = hub.Hub(home=temp.name, monotonic=self.clock,
++                              lcd_enabled=False, desktop_enabled=False,
++                              hold_path=Path(temp.name) / 'hold')
++        self.addCleanup(self.engine.close)
++        self.counter = 0
++
++    def request(self, risk='low'):
++        self.counter += 1
++        sid = 'nonce-session-%s' % self.counter
++        self.engine.event('cc', {'hook_event_name': 'SessionStart',
++                                 'session_id': sid, 'cwd': 'C:/nonce'})
++        request = hub.Pending('nonce-request-%s' % self.counter, ('cc', sid),
++                              'Bash', 'echo safe', risk, 1.0,
++                              self.clock() + 110)
++        with self.engine.lock:
++            self.engine.pending[request.id] = request
++            if self.engine.displayed_request_id is None:
++                self.engine._next_request()
++        return request
++
++    def approve(self, request, **fields):
++        return self.engine.action(dict(action='approve', nonce=request.nonce, **fields))
++
++    def reject(self, payload, reason='stale_nonce'):
++        with self.assertRaises(hub.HubError) as caught:
++            self.engine.action(payload)
++        self.assertEqual(caught.exception.status, 409)
++        self.assertEqual(str(caught.exception), reason)
++
++    def snapshot(self):
++        return (self.engine.displayed_request_id,
++                [(p.id, p.status, p.armed_at, dict(p.response), p.ready.is_set())
++                 for p in self.engine.pending.values()])
++
++    def test_nonce_is_random_32_bit_and_public(self):
++        with patch.object(hub.secrets, 'randbits', return_value=0x1234ABCD) as random:
++            request = self.request()
++        random.assert_called_once_with(32)
++        self.assertEqual(request.nonce, 0x1234ABCD)
++        self.assertEqual(self.engine.state()['pending'][0]['nonce'], request.nonce)
++        self.assertIs(self.engine.state()['nonce_required'], False)
++
++    def test_matching_nonce_approves(self):
++        request = self.request()
++        self.clock.value += .301
++        self.assertEqual(self.approve(request, request_id=request.id)['status'], 'allowed')
++        self.assertTrue(request.ready.is_set())
++
++    def test_mismatch_rejects_without_mutation(self):
++        request = self.request()
++        self.clock.value += .301
++        before = self.snapshot()
++        self.reject({'action': 'approve', 'nonce': request.nonce ^ 1})
++        self.assertEqual(self.snapshot(), before)
++
++    def test_invalid_nonce_types_never_coerce(self):
++        request = self.request()
++        self.clock.value += .301
++        for nonce in (None, True, False, str(request.nonce), float(request.nonce), [], {}):
++            with self.subTest(nonce=nonce):
++                before = self.snapshot()
++                self.reject({'action': 'approve', 'nonce': nonce})
++                self.assertEqual(self.snapshot(), before)
++
++    def test_malformed_nan_and_nested_nonce_values_are_auditable(self):
++        self.request()
++        for nonce in (float('nan'), float('inf'), {'nested': [float('nan')]}, [None, {'nonce': 7}]):
++            with self.subTest(nonce=repr(nonce)):
++                before = self.snapshot()
++                self.reject({'action': 'approve', 'nonce': nonce})
++                self.assertEqual(self.snapshot(), before)
++                record = self.engine.audit.recent(1)[0]
++                self.assertEqual(record['supplied_nonce'], repr(nonce)[:160])
++                self.assertEqual(record['reason'], 'stale_nonce')
++
++    def test_correct_nonce_wrong_request_id_rejects(self):
++        request = self.request()
++        self.clock.value += .301
++        before = self.snapshot()
++        self.reject({'action': 'deny', 'nonce': request.nonce, 'request_id': 'old'})
++        self.assertEqual(self.snapshot(), before)
++
++    def test_non_displayed_pending_nonce_rejects(self):
++        first = self.request()
++        second = self.request()
++        self.clock.value += .301
++        before = self.snapshot()
++        self.reject({'action': 'approve', 'nonce': second.nonce, 'request_id': second.id})
++        self.assertEqual(self.snapshot(), before)
++        self.assertEqual(self.engine.displayed_request_id, first.id)
++
++    def test_expiry_boundary_rejects_without_expiring_or_arming(self):
++        request = self.request('high')
++        self.clock.value = request.deadline
++        before = self.snapshot()
++        self.reject({'action': 'approve', 'nonce': request.nonce})
++        self.assertEqual(self.snapshot(), before)
++
++    def test_expired_nonce_cannot_replay_after_maintenance_and_new_request(self):
++        expired = self.request()
++        self.clock.value = expired.deadline
++        self.engine.maintain()
++        replacement = self.request()
++        self.clock.value += .301
++        before = self.snapshot()
++        self.reject({'action': 'approve', 'nonce': expired.nonce, 'request_id': expired.id})
++        self.assertEqual(self.snapshot(), before)
++        self.assertEqual(self.approve(replacement)['status'], 'allowed')
++
++    def test_real_requests_resample_expired_nonce_collision_before_accepting_replay(self):
++        threads = []
++        errors = []
++
++        def start_request(sid):
++            def request():
++                try:
++                    self.engine.event('cc', {'hook_event_name': 'PermissionRequest',
++                                            'session_id': sid, 'cwd': 'C:/nonce',
++                                            'tool_name': 'Bash', 'tool_input': {'command': 'echo safe'}})
++                except Exception as error:
++                    errors.append(error)
++
++            thread = threading.Thread(target=request, daemon=True)
++            threads.append(thread)
++            thread.start()
++            deadline = time.monotonic() + 2
++            while time.monotonic() < deadline:
++                with self.engine.lock:
++                    found = next((p for p in self.engine.pending.values() if p.session[1] == sid), None)
++                if found is not None:
++                    return found
++                if errors:
++                    raise errors[0]
++                time.sleep(.002)
++            self.fail('real permission event did not create pending request')
++
++        try:
++            with patch.object(hub.secrets, 'randbits', side_effect=[0x12345678, 0x12345678, 0x87654321]) as random:
++                expired = start_request('collision-first')
++                self.clock.value = expired.deadline
++                self.engine.maintain()
++                replacement = start_request('collision-second')
++                self.assertEqual(expired.nonce, 0x12345678)
++                self.assertEqual(replacement.nonce, 0x87654321)
++                self.assertEqual(random.call_count, 3)
++                self.clock.value += .301
++                before = self.snapshot()
++                self.reject({'action': 'approve', 'nonce': expired.nonce})
++                self.assertEqual(self.snapshot(), before)
++                self.assertEqual(self.approve(replacement)['status'], 'allowed')
++        finally:
++            self.engine.close()
++            for thread in threads:
++                thread.join(2)
++                self.assertFalse(thread.is_alive())
++        self.assertEqual(errors, [])
++
++    def test_initial_switch_guard_and_boundary(self):
++        request = self.request()
++        before = self.snapshot()
++        self.reject({'action': 'approve', 'nonce': request.nonce}, 'switch_guard')
++        self.assertEqual(self.snapshot(), before)
++        self.clock.value += .299
++        self.reject({'action': 'approve', 'nonce': request.nonce}, 'switch_guard')
++        self.clock.value += .002
++        self.assertEqual(self.approve(request)['status'], 'allowed')
++
++    def test_queue_switch_restarts_guard_and_deny_is_exempt(self):
++        first = self.request()
++        second = self.request()
++        self.clock.value += .301
++        self.approve(first)
++        self.reject({'action': 'approve', 'nonce': second.nonce}, 'switch_guard')
++        self.assertEqual(self.engine.action({'action': 'deny', 'nonce': second.nonce})['status'], 'denied')
++
++    def test_deny_is_exempt_from_initial_guard(self):
++        request = self.request()
++        self.assertEqual(self.engine.action({'action': 'deny', 'nonce': request.nonce})['status'], 'denied')
++
++    def test_high_risk_second_wrong_nonce_preserves_armed_state(self):
++        request = self.request('high')
++        self.clock.value += .301
++        self.assertEqual(self.approve(request)['status'], 'confirm')
++        before = self.snapshot()
++        self.reject({'action': 'approve', 'nonce': request.nonce ^ 1})
++        self.assertEqual(self.snapshot(), before)
++        self.assertEqual(self.approve(request)['status'], 'allowed')
++
++    def test_legacy_missing_nonce_works_after_guard(self):
++        self.request()
++        self.reject({'action': 'approve'}, 'switch_guard')
++        self.clock.value += .301
++        self.assertEqual(self.engine.action({'action': 'approve'})['status'], 'allowed')
++
++    def test_require_nonce_rejects_missing_approve_but_keeps_legacy_deny(self):
++        self.engine.require_nonce = True
++        self.request()
++        self.clock.value += .301
++        before = self.snapshot()
++        self.reject({'action': 'approve'}, 'nonce_required')
++        self.assertEqual(self.snapshot(), before)
++        self.assertIs(self.engine.state()['nonce_required'], True)
++        self.assertEqual(self.engine.action({'action': 'deny'})['status'], 'denied')
++
++    def test_require_nonce_constructor_requires_strict_boolean(self):
++        for value in (None, 0, 1, 'true', [], {}):
++            with self.subTest(value=value):
++                with self.assertRaisesRegex(ValueError, 'require_nonce must be a boolean'):
++                    hub.Hub(require_nonce=value)
++        with tempfile.TemporaryDirectory() as home:
++            engine = hub.Hub(home=home, require_nonce=True, lcd_enabled=False, desktop_enabled=False)
++            try:
++                self.assertIs(engine.state()['nonce_required'], True)
++            finally:
++                engine.close()
++
++    def test_main_forwards_require_nonce_from_explicit_config(self):
++        class ConstructorReached(Exception):
++            pass
++
++        with tempfile.TemporaryDirectory() as home:
++            config = Path(home) / 'nonce-config.json'
++            config.write_text(json.dumps({'require_nonce': True}), encoding='utf-8')
++            with patch.object(hub, 'Hub', side_effect=ConstructorReached) as constructor:
++                with self.assertRaises(ConstructorReached):
++                    hub.main(['--config', str(config), '--home', home,
++                              '--no-lcd', '--no-desktop', '--backend', 'none'])
++            self.assertIs(constructor.call_args.kwargs['require_nonce'], True)
++
++    def test_locked_request_accepts_current_nonce_without_unlocking(self):
++        request = self.request('critical')
++        self.engine.pending.pop(request.id)
++        request.status = 'locked'
++        self.engine.locked[request.id] = request
++        for action in ('approve', 'deny'):
++            result = self.engine.action({'action': action, 'nonce': request.nonce})
++            self.assertEqual(result['status'], 'locked')
++            self.assertIs(self.engine.locked[request.id], request)
++            self.assertEqual(request.status, 'locked')
++
++    def test_locked_wrong_or_expired_nonce_rejects_without_mutation(self):
++        request = self.request('critical')
++        self.engine.pending.pop(request.id)
++        request.status = 'locked'
++        self.engine.locked[request.id] = request
++        before = (request.status, request.armed_at, dict(request.response), request.ready.is_set())
++        self.reject({'action': 'approve', 'nonce': request.nonce ^ 1})
++        self.clock.value = request.deadline
++        self.reject({'action': 'deny', 'nonce': request.nonce})
++        self.assertIs(self.engine.locked[request.id], request)
++        self.assertEqual((request.status, request.armed_at, request.response, request.ready.is_set()), before)
++
++    def test_high_and_critical_gates_preserve_armed_state_on_wrong_second_nonce(self):
++        for risk in ('high', 'critical'):
++            with self.subTest(risk=risk):
++                request = self.request(risk)
++                request.gate = True
++                self.clock.value += .301
++                self.assertEqual(self.approve(request)['status'], 'confirm')
++                before = self.snapshot()
++                self.reject({'action': 'approve', 'nonce': request.nonce ^ 1})
++                self.assertEqual(self.snapshot(), before)
++                self.assertEqual(self.approve(request)['status'], 'allowed')
++                self.assertTrue(request.ready.is_set())
++                self.assertEqual(request.response, {})
++                self.assertIn((request.session, request.input_hash), self.engine.gate_passed)
++
++    def test_guard_allows_exact_300ms_boundary(self):
++        self.clock.value = 0
++        request = self.request()
++        self.clock.value = .3
++        self.assertEqual(self.approve(request)['status'], 'allowed')
++
++    def test_rejected_nonce_and_guard_are_audited(self):
++        request = self.request()
++        for supplied, reason in ((request.nonce ^ 1, 'stale_nonce'), (request.nonce, 'switch_guard')):
++            self.reject({'action': 'approve', 'nonce': supplied}, reason)
++            record = self.engine.audit.recent(1)[0]
++            self.assertEqual(record['decision'], reason)
++            self.assertEqual(record['reason'], reason)
++            self.assertEqual(record['action'], 'approve')
++            self.assertEqual(record['nonce'], request.nonce)
++            self.assertEqual(record['supplied_nonce'], supplied)
++            self.assertEqual(record['request_id'], request.id)
++
++    def test_http_stale_nonce_returns_409(self):
++        request = self.request()
++        server = hub.HubServer(self.engine, 'nonce-test-token', port=0)
++        thread = threading.Thread(target=server.serve_forever, daemon=True)
++        thread.start()
++        try:
++            connection = http.client.HTTPConnection(*server.server_address, timeout=3)
++            try:
++                connection.request('POST', '/action', json.dumps({'action': 'approve', 'nonce': request.nonce ^ 1}),
++                                   {'Content-Type': 'application/json', 'X-AgentDeck-Token': 'nonce-test-token'})
++                response = connection.getresponse()
++                self.assertEqual(response.status, 409)
++                self.assertEqual(json.loads(response.read())['error'], 'stale_nonce')
++            finally:
++                connection.close()
++        finally:
++            server.shutdown()
++            server.server_close()
++            thread.join(3)
++
++    def test_hotkey_uses_last_rendered_request_after_logical_switch(self):
++        first = self.request()
++        second = self.request()
++        self.engine.record_rendered(first.id, first.nonce)
++        self.engine.action({'action': 'deny', 'nonce': first.nonce})
++        self.clock.value += .301
++        keys = HotkeyKeys(self.engine)
++        self.assertEqual(keys.snapshot(), {'request_id': first.id, 'nonce': first.nonce})
++        self.assertFalse(keys.dispatch(SimpleNamespace(action='approve', name='test'), keys.snapshot()))
++        self.assertIn(second.id, self.engine.pending)
++        self.assertEqual(self.engine.audit.recent(1)[0]['reason'], 'stale_nonce')
++
++    def test_hotkey_snapshot_is_copy_and_survives_dispatch_lock_wait(self):
++        first = self.request()
++        second = self.request()
++        self.engine.record_rendered(first.id, first.nonce)
++        keys = HotkeyKeys(self.engine)
++        shown = keys.snapshot()
++        altered = keys.snapshot()
++        altered['nonce'] = -1
++        self.assertEqual(self.engine.rendered_request['nonce'], first.nonce)
++        original_lock = self.engine.lock
++        waiting = threading.Event()
++
++        class ObservedLock:
++            def __enter__(self):
++                if threading.current_thread() is not threading.main_thread():
++                    waiting.set()
++                return original_lock.__enter__()
++
++            def __exit__(self, *args):
++                return original_lock.__exit__(*args)
++
++        results = []
++        self.engine.lock = ObservedLock()
++        with original_lock:
++            thread = threading.Thread(target=lambda: results.append(keys.dispatch(
++                SimpleNamespace(action='approve', name='test'), shown)))
++            thread.start()
++            self.assertTrue(waiting.wait(2))
++            self.engine.action({'action': 'deny', 'nonce': first.nonce})
++            self.engine.record_rendered(second.id, second.nonce)
++            self.clock.value += .301
++        thread.join(2)
++        self.assertFalse(thread.is_alive())
++        self.assertEqual(results, [False])
++        self.assertEqual(shown, {'request_id': first.id, 'nonce': first.nonce})
++        self.assertIn(second.id, self.engine.pending)
++
++    def test_usb_captures_rendered_snapshot_before_lock_contention(self):
++        first = self.request()
++        second = self.request()
++        self.engine.record_rendered(first.id, first.nonce)
++        keys = hub.USBKeys(self.engine, mapping={'bindings': {'hid:0x0A': 'approve'}}, monotonic=self.clock)
++        entered = threading.Event()
++        payloads = []
++        action = self.engine.action
++
++        def observed(payload, source='http', *, received_at=None):
++            if source == 'key':
++                payloads.append(dict(payload))
++                entered.set()
++            return action(payload, source=source, received_at=received_at)
++
++        event = dict(down=True, usage=10, keys=['hid:0x0A'], pressed=[10],
++                     modifiers=[], new_modifiers=[], t=self.clock())
++        with patch.object(self.engine, 'action', side_effect=observed):
++            with self.engine.lock:
++                thread = threading.Thread(target=keys, args=(event,))
++                thread.start()
++                self.assertTrue(entered.wait(2))
++                action({'action': 'deny', 'nonce': first.nonce})
++                self.engine.record_rendered(second.id, second.nonce)
++                self.clock.value += .301
++            thread.join(2)
++        self.assertFalse(thread.is_alive())
++        self.assertEqual(payloads, [{'action': 'approve', 'request_id': first.id, 'nonce': first.nonce}])
++        self.assertIn(second.id, self.engine.pending)
++        self.assertEqual(self.engine.audit.recent(1)[0]['reason'], 'stale_nonce')
++
++    def test_lcd_failed_send_preserves_rendered_snapshot_and_ack_publishes(self):
++        request = self.request()
++        self.engine.record_rendered('old-render', 123)
++        self.engine.lcd_enabled = True
++        self.engine.focus_guard = lambda **kwargs: nullcontext()
++        self.engine.sender = lambda *args, **kwargs: ''
++        self.engine._show()
++        self.assertEqual(self.engine.rendered_request, {'request_id': 'old-render', 'nonce': 123})
++        session = self.engine.sessions[request.session]
++        key = session['key']
++        self.engine.sender = lambda *args, **kwargs: 'ok set %s idle\nok focus %s' % (key, key)
++        self.engine._show()
++        self.assertEqual(self.engine.rendered_request, {'request_id': request.id, 'nonce': request.nonce})
++        self.assertEqual(self.engine.rendered_source, 'lcd')
++
++    def test_short_lcd_name_displays_low_four_hex_digits(self):
++        request = self.request()
++        request.nonce = 0x1234ABCD
++        session = self.engine.sessions[request.session]
++        session['name'] = 'abc'
++        self.assertEqual(self.engine._display_name(session), 'abc abcd')
++
++    def test_http_action_receipt_guard_survives_same_request_lock_contention(self):
++        self.clock.value = 0
++        request = self.request('high')
++        before = self.snapshot()
++        original_lock = self.engine.lock
++        waiting = threading.Event()
++
++        class ObservedLock:
++            def __enter__(self):
++                if threading.current_thread() is not threading.main_thread():
++                    waiting.set()
++                return original_lock.__enter__()
++
++            def __exit__(self, *args):
++                return original_lock.__exit__(*args)
++
++        self.engine.lock = ObservedLock()
++        errors = []
++
++        def approve():
++            try:
++                self.approve(request)
++            except Exception as error:
++                errors.append(error)
++
++        with original_lock:
++            self.clock.value = .1
++            thread = threading.Thread(target=approve)
++            thread.start()
++            self.assertTrue(waiting.wait(2))
++            self.clock.value = .401
++        thread.join(2)
++        self.assertFalse(thread.is_alive())
++        self.assertEqual(len(errors), 1)
++        self.assertIsInstance(errors[0], hub.HubError)
++        self.assertEqual(str(errors[0]), 'switch_guard')
++        self.assertEqual(errors[0].status, 409)
++        self.assertEqual(self.snapshot(), before)
++        self.assertEqual(self.engine.audit.recent(1)[0]['reason'], 'switch_guard')
++
++    def test_hotkey_modifier_wait_preserves_original_guard_receipt(self):
++        self.clock.value = 0
++        request = self.request('high')
++        self.engine.record_rendered(request.id, request.nonce)
++        keys = HotkeyKeys(self.engine)
++        shown = keys.snapshot()
++        before = self.snapshot()
++        self.clock.value = .401
++        self.assertFalse(keys.dispatch(SimpleNamespace(action='approve', name='test'), shown,
++                                       received_at=.1))
++        self.assertEqual(self.snapshot(), before)
++        self.assertEqual(self.engine.audit.recent(1)[0]['reason'], 'switch_guard')
++
++    def test_usb_guard_uses_callback_receipt_before_same_request_lock_wait(self):
++        self.clock.value = 0
++        request = self.request('high')
++        self.engine.record_rendered(request.id, request.nonce)
++        before = self.snapshot()
++        keys = hub.USBKeys(self.engine, mapping={'bindings': {'hid:0x0A': 'approve'}}, monotonic=self.clock)
++        action = self.engine.action
++        entered = threading.Event()
++        receipts = []
++
++        def observed(payload, source='http', *, received_at=None):
++            receipts.append(received_at)
++            entered.set()
++            return action(payload, source=source, received_at=received_at)
++
++        self.clock.value = .1
++        event = dict(down=True, usage=10, keys=['hid:0x0A'], pressed=[10],
++                     modifiers=[], new_modifiers=[], t=.1)
++        with patch.object(self.engine, 'action', side_effect=observed):
++            with self.engine.lock:
++                thread = threading.Thread(target=keys, args=(event,))
++                thread.start()
++                self.assertTrue(entered.wait(2))
++                self.clock.value = .401
++            thread.join(2)
++        self.assertFalse(thread.is_alive())
++        self.assertEqual(receipts, [.1])
++        self.assertEqual(self.snapshot(), before)
++        self.assertEqual(self.engine.audit.recent(1)[0]['reason'], 'switch_guard')
++
++    def test_json_received_at_cannot_bypass_switch_guard(self):
++        self.clock.value = 0
++        request = self.request('high')
++        self.clock.value = .1
++        before = self.snapshot()
++        self.reject({'action': 'approve', 'nonce': request.nonce, 'received_at': 9999}, 'switch_guard')
++        self.assertEqual(self.snapshot(), before)
++
++
++if __name__ == '__main__':
++    unittest.main()
+--- before/selftest_hub_replay.py
++++ research\selftest_hub_replay.py
+@@ -73,6 +73,7 @@
+         self.port, self.token = port, token
+         self.lock = threading.RLock()
+         self.results = []
++        self.rendered_request = {"request_id": None, "nonce": None}
+ 
+     def request(self, method, route, payload=None):
+         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=3)
+@@ -95,7 +96,7 @@
+     def displayed_request_id(self):
+         return self.state()["displayed_request_id"]
+ 
+-    def action(self, payload, source="key"):
++    def action(self, payload, source="key", *, received_at=None):
+         # HTTP retains its own source attribution; no testing-only API bypass.
+         result = self.request("POST", "/action", payload)
+         self.results.append((dict(payload), result))
+@@ -206,6 +207,9 @@
+ 
+             request = until(arrived, risk + " PermissionRequest")
+             require(target.displayed_request_id == request["id"], "request was not displayed")
++            # Headless replay: explicitly simulate the last display render.
++            target.rendered_request = {"request_id": request["id"], "nonce": request["nonce"]}
++            time.sleep(0.31)
+             yield call, request
+         finally:
+             send_event(slot, "Stop")
+@@ -346,8 +350,9 @@
+     class Recorder:
+         def __init__(self):
+             self.results = []
+-
+-        def action(self, payload, source="key"):
++            self.rendered_request = {"request_id": None, "nonce": None}
++
++        def action(self, payload, source="key", *, received_at=None):
+             self.results.append((dict(payload), {}))
+             return {}
+ 

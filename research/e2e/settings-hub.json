@@ -1,0 +1,7 @@
+{
+  "hooks": {
+    "PermissionRequest": [
+      {"matcher": "", "hooks": [{"type": "command", "command": "D:/conda/miniconda3/python.exe D:/desk/hardware/h1/pc/hub_relay.py --agent cc", "timeout": 120}]}
+    ]
+  }
+}

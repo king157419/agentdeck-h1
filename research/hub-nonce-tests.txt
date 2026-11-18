@@ -1,0 +1,195 @@
+COMMAND: python -m unittest discover -s pc -p test_hub*.py
+EXIT: 0
+...2026-11-18 02:50:15,401 agentdeck.hub INFO Hub listening on 127.0.0.1:<MagicMock name='HubServer().server_port' id='2025855443568'> (none)
+.................2026-11-18 02:50:15,448 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:50:15,448 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=released restores=0 closed=True
+...........................2026-11-18 02:50:16,794 agentdeck.hub INFO USB hid:0x0A -> {'action': 'approve', 'request_id': '36ed6be4b1e44b0d82220a86e46d84bd', 'status': 'confirm', 'message': 'HOLD! press again'}
+2026-11-18 02:50:16,795 agentdeck.hub INFO USB hid:0x0A -> {'action': 'approve', 'request_id': '36ed6be4b1e44b0d82220a86e46d84bd', 'status': 'allowed'}
+...2026-11-18 02:50:16,828 agentdeck.hub WARNING Window focus unavailable: desktop output disabled
+..2026-11-18 02:50:16,841 agentdeck.hub.voice INFO Voice started: target=cc-abc123 hwnd=12
+2026-11-18 02:50:16,841 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abc123 hwnd=12 reason=released restores=0 closed=False
+2026-11-18 02:50:16,841 agentdeck.hub.voice WARNING Voice stop error: foreground changed or key combination failed
+2026-11-18 02:50:16,841 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abc123 hwnd=12 reason=released restores=0 closed=True
+..............2026-11-18 02:50:16,905 agentdeck.hub.voice INFO Voice started: target=cc-abc123 hwnd=12
+2026-11-18 02:50:16,905 agentdeck.hub.voice INFO Voice kept target: target=cc-abc123 hwnd=12 restores=1
+2026-11-18 02:50:16,925 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abc123 hwnd=12 reason=released restores=1 closed=True
+.........2026-11-18 02:50:17,048 agent_deck.usb INFO USB keyboard report length=8 (boot keyboard)
+2026-11-18 02:50:17,049 agentdeck.hub INFO USB hid:0x0B -> {'action': 'voice', 'status': 'sent'}
+.2026-11-18 02:50:17,050 agent_deck.usb INFO USB keyboard report length=8 (boot keyboard)
+2026-11-18 02:50:17,050 agentdeck.hub INFO USB ctrl+hid:0x0B -> {'action': 'voice_down', 'status': 'sent'}
+2026-11-18 02:50:17,050 agentdeck.hub INFO USB ctrl+hid:0x0B -> {'action': 'voice_up', 'status': 'sent'}
+..2026-11-18 02:50:17,053 agentdeck.hub INFO USB hid:0x08 -> {'action': 'slot', 'status': 'selected', 'slot': 2, 'request_id': None, 'window': 'focused'}
+2026-11-18 02:50:17,053 agentdeck.hub INFO USB hid:0x08 -> {'action': 'slot', 'status': 'selected', 'slot': 1, 'request_id': None, 'window': 'focused'}
+..2026-11-18 02:50:17,057 agent_deck.usb INFO USB keyboard report length=8 (boot keyboard)
+2026-11-18 02:50:17,058 agentdeck.hub INFO USB hid:0x0A -> {'action': 'approve', 'request_id': 'f19e8deb4610452085829fd956de122a', 'status': 'allowed'}
+2026-11-18 02:50:17,058 agentdeck.hub INFO USB hid:0x0B -> {'action': 'voice_down', 'status': 'sent'}
+.2026-11-18 02:50:17,060 agentdeck.hub INFO USB hid:0x0B -> {'action': 'voice_down', 'status': 'sent'}
+2026-11-18 02:50:17,060 agentdeck.hub INFO USB hid:0x0B -> {'action': 'voice_up', 'status': 'sent'}
+..2026-11-18 02:50:17,063 agentdeck.hub WARNING Desktop action failed: could not activate
+...................................2026-11-18 02:50:18,058 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:50:18,058 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=timeout restores=0 closed=True
+.2026-11-18 02:50:18,059 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:50:18,077 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=released restores=0 closed=True
+.2026-11-18 02:50:18,077 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:50:18,092 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=shutdown restores=0 closed=True
+.2026-11-18 02:50:18,093 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:50:18,107 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=released restores=0 closed=True
+.2026-11-18 02:50:18,108 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:50:18,108 agentdeck.hub.voice INFO Voice kept target: target=cc-abcdef hwnd=12 restores=1
+2026-11-18 02:50:18,123 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=released restores=1 closed=True
+.2026-11-18 02:50:18,124 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:50:18,139 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=released restores=0 closed=True
+.2026-11-18 02:50:18,139 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:50:18,156 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=released restores=0 closed=True
+..2026-11-18 02:50:18,156 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:50:18,156 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=focus_failed restores=0 closed=True
+..2026-11-18 02:50:18,157 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:50:18,171 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=released restores=1 closed=True
+.2026-11-18 02:50:18,172 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:50:18,172 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=window_lost restores=0 closed=True
+.2026-11-18 02:50:18,173 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:50:18,187 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=window_lost restores=0 closed=True
+.2026-11-18 02:50:18,188 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:50:18,188 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=timeout restores=0 closed=True
+.2026-11-18 02:50:18,188 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+.........................2026-11-18 02:50:18,708 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:50:18,708 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=released restores=0 closed=True
+.2026-11-18 02:50:18,709 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:50:18,709 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=timeout restores=0 closed=True
+.2026-11-18 02:50:18,710 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:50:18,715 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=released restores=0 closed=True
+.2026-11-18 02:50:18,716 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:50:18,731 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=shutdown restores=0 closed=True
+.2026-11-18 02:50:18,732 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:50:18,746 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=released restores=0 closed=True
+.2026-11-18 02:50:18,747 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:50:18,747 agentdeck.hub.voice INFO Voice kept target: target=cc-abcdef hwnd=12 restores=1
+2026-11-18 02:50:18,763 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=released restores=1 closed=True
+.2026-11-18 02:50:18,764 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:50:18,778 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=released restores=0 closed=True
+.2026-11-18 02:50:18,779 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:50:18,794 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=released restores=0 closed=True
+..2026-11-18 02:50:18,795 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:50:18,795 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=focus_failed restores=0 closed=True
+..2026-11-18 02:50:18,796 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:50:18,809 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=released restores=1 closed=True
+.2026-11-18 02:50:18,810 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:50:18,810 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=window_lost restores=0 closed=True
+.2026-11-18 02:50:18,810 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:50:18,825 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=window_lost restores=0 closed=True
+.2026-11-18 02:50:18,825 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:50:18,826 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=timeout restores=0 closed=True
+.2026-11-18 02:50:18,826 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+..............................2026-11-18 02:50:18,847 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=(42, '101', '')
+2026-11-18 02:50:18,856 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=(42, '101', '') reason=shutdown restores=0 closed=True
+.2026-11-18 02:50:18,857 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=(42, '101', '')
+2026-11-18 02:50:18,872 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=(42, '101', '') reason=released restores=0 closed=True
+.2026-11-18 02:50:18,872 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=(42, '101', '')
+2026-11-18 02:50:18,872 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=(42, '101', '') reason=timeout restores=0 closed=True
+2026-11-18 02:50:18,873 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=(42, '101', '')
+2026-11-18 02:50:18,873 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=(42, '101', '') reason=window_lost restores=0 closed=True
+.2026-11-18 02:50:18,873 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=(42, '101', '')
+2026-11-18 02:50:18,887 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=(42, '101', '') reason=released restores=0 closed=True
+.2026-11-18 02:50:18,888 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=(42, '101', '')
+2026-11-18 02:50:18,888 agentdeck.hub.voice INFO Voice kept target: target=cc-abcdef hwnd=(42, '101', '') restores=1
+2026-11-18 02:50:18,903 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=(42, '101', '') reason=released restores=1 closed=True
+.2026-11-18 02:50:18,904 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=(42, '101', '')
+2026-11-18 02:50:18,904 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=(42, '101', '') reason=window_lost restores=0 closed=True
+2026-11-18 02:50:18,905 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=(42, '101', '')
+2026-11-18 02:50:18,905 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=(42, '101', '') reason=focus_failed restores=0 closed=True
+..............2026-11-18 02:50:19,023 agentdeck.hub INFO Hub listening on 127.0.0.1:<MagicMock name='HubServer().server_port' id='2025860665024'> (none)
+2026-11-18 02:50:19,024 agentdeck.hub INFO Hub listening on 127.0.0.1:<MagicMock name='HubServer().server_port' id='2025860665024'> (none)
+........................2026-11-18 02:50:22,643 agentdeck.hub.hotkey INFO Hotkey F19 -> {'status': 'sent'}
+.2026-11-18 02:50:22,659 agentdeck.hub.hotkey INFO Hotkey ctrl+F13 -> {'status': 'sent'}
+......2026-11-18 02:50:22,660 agentdeck.hub.hotkey INFO Hotkey F19 -> {'status': 'sent'}
+...2026-11-18 02:50:22,661 agentdeck.hub.hotkey INFO Hotkey F21 -> {'status': 'sent'}
+2026-11-18 02:50:22,661 agentdeck.hub.hotkey INFO Hotkey F21 -> {'status': 'sent'}
+2026-11-18 02:50:22,661 agentdeck.hub.hotkey INFO Hotkey F21 -> {'status': 'sent'}
+2026-11-18 02:50:22,661 agentdeck.hub.hotkey INFO Hotkey F21 -> {'status': 'sent'}
+2026-11-18 02:50:22,661 agentdeck.hub.hotkey INFO Hotkey F21 -> {'status': 'sent'}
+..........2026-11-18 02:50:22,662 agentdeck.hub.hotkey INFO Hotkey ctrl+F13 -> {'status': 'sent'}
+.........................................................2026-11-18 02:50:23,537 agentdeck.hub.hotkey WARNING Hotkey test action failed: switch_guard
+.2026-11-18 02:50:23,554 agentdeck.hub.hotkey WARNING Hotkey test action failed: stale_nonce
+.2026-11-18 02:50:23,570 agentdeck.hub.hotkey WARNING Hotkey test action failed: stale_nonce
+......................2026-11-18 02:50:24,342 agentdeck.hub WARNING USB action failed: stale_nonce
+.2026-11-18 02:50:24,351 agentdeck.hub WARNING USB action failed: switch_guard
+....................................2026-11-18 02:50:25,215 agentdeck.hub INFO Hub listening on 127.0.0.1:12345 (usb,hotkey)
+...2026-11-18 02:50:25,431 agentdeck.hub INFO Hub listening on 127.0.0.1:12345 (none)
+2026-11-18 02:50:25,440 agentdeck.hub INFO Hub listening on 127.0.0.1:12345 (usb)
+2026-11-18 02:50:25,449 agentdeck.hub INFO Hub listening on 127.0.0.1:12345 (hotkey)
+2026-11-18 02:50:25,459 agentdeck.hub INFO Hub listening on 127.0.0.1:12345 (usb,hotkey)
+.2026-11-18 02:50:25,469 agentdeck.hub INFO Hub listening on 127.0.0.1:12345 (usb,hotkey)
+................
+----------------------------------------------------------------------
+Ran 403 tests in 10.147s
+
+OK
+
+
+COMMAND: python research/selftest_hub_replay.py
+EXIT: 0
+
+Hub replay self-test (local HTTP; LCD/USB/desktop disabled)
+Result | Check
+-------|------
+PASS | Voice/screenshot and synthetic prompt chords (decode only)
+PASS | Temporary process, random port, token and six sessions
+PASS | Low risk: approve key returns Codex allow
+PASS | High risk: two distinct approve presses required
+PASS | Critical: immediate native fallback; approve stays locked
+PASS | Deny: factory Ctrl then F returns Codex deny
+PASS | Session keys select all six corresponding slots
+PASS | All four knobs cycle both ways with wraparound
+PASS | Factory Ctrl-first macro, repeat and consumed Ctrl
+PASS | Confirmed Ctrl+0 alternate interrupt denies pending
+PASS | Decisions persisted in the temporary audit chain
+PASS | Temporary Hub startup and cleanup
+12 PASS / 0 FAIL
+Physical Ctrl+session chords remain pending user confirmation; see pc/hub_keys.md.
+
+
+COMMAND: python pc/test_ui.py
+EXIT: 0
+test_layout_states: PASS
+test_marquee: PASS
+test_focus: PASS
+test_compatibility: PASS
+test_priority_rotation: PASS
+test_bad_commands_glyphs: PASS
+test_dance: PASS
+UI: 7 groups passed
+
+
+COMMAND: python pc/test_daemon.py
+EXIT: 0
+test_mapping: PASS
+test_focus: PASS
+test_hold_rechecked_before_focus_send: PASS
+test_focus_mutex_serializes_delayed_daemon_send_and_manual_hold: PASS
+test_focus_mutex_rechecks_hold_after_waiting_for_manual_owner: PASS
+test_focus_mutex_timeout_skips_send_and_retries_next_tick: PASS
+test_state_machine: PASS
+test_log_tick: PASS
+test_main_schedule_and_lock: PASS
+test_process_snapshot: PASS
+daemon offline tests: 10 groups passed
+
+
+COMMAND: python pc/test_pc.py
+EXIT: 0
+test_names_hooks: PASS
+test_ensure_daemon: PASS
+test_demo: PASS
+test_firmware_loop: PASS
+PC and firmware loop: 4 groups passed
+
+
+COMMAND: python pc/sim.py
+EXIT: 0
+Rendered 42 scenarios -> D:\desk\hardware\h1\lcd1602\preview-sim.png
+
+
+STATIC: syntax and indentation checks passed for 12 changed Python files
+Lint/typecheck: no configured project commands; no dependencies added.
+
+{"discovered_test_executions": 403, "unique_test_cases": 331, "static_python_files": 12, "all_passed": true}

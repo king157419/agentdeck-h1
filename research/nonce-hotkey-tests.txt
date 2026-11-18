@@ -1,0 +1,41 @@
+test_cleanup_continues_after_message_and_unregister_failures (__main__.HotkeyTests.test_cleanup_continues_after_message_and_unregister_failures) ... ok
+test_decision_cannot_retarget_during_modifier_wait (__main__.HotkeyTests.test_decision_cannot_retarget_during_modifier_wait) ... ok
+test_decision_queued_before_previous_action_finished_is_dropped (__main__.HotkeyTests.test_decision_queued_before_previous_action_finished_is_dropped) ... ok
+test_default_mapping (__main__.HotkeyTests.test_default_mapping) ... ok
+test_dispatch_uses_shared_action_and_observed_request (__main__.HotkeyTests.test_dispatch_uses_shared_action_and_observed_request) ... ok
+test_modifier_release_precedes_prompt_dispatch (__main__.HotkeyTests.test_modifier_release_precedes_prompt_dispatch) ... ok
+test_modifier_wait_is_bounded_and_stale_action_dropped (__main__.HotkeyTests.test_modifier_wait_is_bounded_and_stale_action_dropped) ... ok
+test_native_register_uses_no_repeat_and_pointer_safe_queue (__main__.HotkeyTests.test_native_register_uses_no_repeat_and_pointer_safe_queue) ... ok
+test_parser_normalizes_modifiers_and_vkeys (__main__.HotkeyTests.test_parser_normalizes_modifiers_and_vkeys) ... ok
+test_parser_rejects_unsupported_and_duplicate_keys (__main__.HotkeyTests.test_parser_rejects_unsupported_and_duplicate_keys) ... ok
+test_registration_conflict_warns_once_other_keys_dispatch_and_cleanup (__main__.HotkeyTests.test_registration_conflict_warns_once_other_keys_dispatch_and_cleanup) ... ok
+test_stale_events_never_dispatch (__main__.HotkeyTests.test_stale_events_never_dispatch) ... ok
+test_stop_before_run_has_no_native_effects (__main__.HotkeyTests.test_stop_before_run_has_no_native_effects) ... ok
+test_stop_wakes_running_message_thread_and_releases_all_keys (__main__.HotkeyTests.test_stop_wakes_running_message_thread_and_releases_all_keys) ... ok
+test_voice_toggle_tracks_actual_voice_after_timeout_and_failure (__main__.HotkeyTests.test_voice_toggle_tracks_actual_voice_after_timeout_and_failure) ... ok
+test_adapter_is_lazy_and_preserves_f13_to_f20_mapping (__main__.MacHotkeyTests.test_adapter_is_lazy_and_preserves_f13_to_f20_mapping) ... ok
+test_all_unsupported_bindings_do_not_start_listener (__main__.MacHotkeyTests.test_all_unsupported_bindings_do_not_start_listener) ... ok
+test_callback_receipt_precedes_adapter_lock_contention (__main__.MacHotkeyTests.test_callback_receipt_precedes_adapter_lock_contention) ... ok
+test_callback_snapshot_survives_display_change_before_queue_drain (__main__.MacHotkeyTests.test_callback_snapshot_survives_display_change_before_queue_drain) ... ok
+test_callbacks_queue_events_without_dispatching_and_ignore_repeat (__main__.MacHotkeyTests.test_callbacks_queue_events_without_dispatching_and_ignore_repeat) ... ok
+test_dead_listener_is_rejected_even_when_accessibility_is_trusted (__main__.MacHotkeyTests.test_dead_listener_is_rejected_even_when_accessibility_is_trusted) ... ok
+test_false_class_trust_does_not_prevent_listener_start (__main__.MacHotkeyTests.test_false_class_trust_does_not_prevent_listener_start) ... ok
+test_input_monitoring_listener_runs_without_accessibility_trust (__main__.MacHotkeyTests.test_input_monitoring_listener_runs_without_accessibility_trust) ... ok
+test_left_and_right_modifier_release_do_not_clear_other_side (__main__.MacHotkeyTests.test_left_and_right_modifier_release_do_not_clear_other_side) ... ok
+test_listener_callbacks_feed_shared_dispatch_after_modifier_release (__main__.MacHotkeyTests.test_listener_callbacks_feed_shared_dispatch_after_modifier_release) ... ok
+test_listener_permissions_fail_without_actions_or_exception (__main__.MacHotkeyTests.test_listener_permissions_fail_without_actions_or_exception) ... ok
+test_listener_start_failure_is_logged_and_cleaned_up (__main__.MacHotkeyTests.test_listener_start_failure_is_logged_and_cleaned_up) ... ok
+test_missing_pynput_disables_hotkeys_with_install_hint (__main__.MacHotkeyTests.test_missing_pynput_disables_hotkeys_with_install_hint) ... ok
+test_modifiers_must_match_exactly_including_command (__main__.MacHotkeyTests.test_modifiers_must_match_exactly_including_command) ... ok
+test_platform_dispatch_uses_pynput_only_on_mac (__main__.MacHotkeyTests.test_platform_dispatch_uses_pynput_only_on_mac) ... ok
+test_pynput_import_os_error_also_disables_hotkeys (__main__.MacHotkeyTests.test_pynput_import_os_error_also_disables_hotkeys) ... ok
+test_queue_age_uses_press_timestamp (__main__.MacHotkeyTests.test_queue_age_uses_press_timestamp) ... ok
+test_register_rejects_virtual_key_outside_f1_to_f20 (__main__.MacHotkeyTests.test_register_rejects_virtual_key_outside_f1_to_f20) ... ok
+test_stop_wakes_queue_and_stops_listener (__main__.MacHotkeyTests.test_stop_wakes_queue_and_stops_listener) ... ok
+test_unknown_keys_and_stopped_callbacks_have_no_effect (__main__.MacHotkeyTests.test_unknown_keys_and_stopped_callbacks_have_no_effect) ... ok
+test_unsupported_function_keys_warn_and_other_bindings_continue (__main__.MacHotkeyTests.test_unsupported_function_keys_warn_and_other_bindings_continue) ... ok
+
+----------------------------------------------------------------------
+Ran 36 tests in 0.021s
+
+OK

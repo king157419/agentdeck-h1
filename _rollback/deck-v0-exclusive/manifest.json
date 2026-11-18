@@ -1,0 +1,22 @@
+[
+  {
+    "file": "pc/deck.py",
+    "sha256": "77f42b52d74f06613d8b322ddbd0e43f6981b17d280174a0136a3a43419bd259"
+  },
+  {
+    "file": "pc/deck_input.py",
+    "sha256": "26eef19b92cb7c84929c6c59392635c83f7c2f45c0f352af29a38cfd8d0ea6cf"
+  },
+  {
+    "file": "pc/deck_map.json",
+    "sha256": "abd9c561721771f045f55cfbccd79249bcf06d1d8b75d87352b46e1fa23b0cdd"
+  },
+  {
+    "file": "pc/test_deck.py",
+    "sha256": "c8328cce546dc1d7f24318f4ff7ea42f9a51d8781e4e68d3c70fd307869eb416"
+  },
+  {
+    "file": "lcd1602/README.md",
+    "sha256": "7d05e4e83010211fbe9472da6f3fe2278964cf21c2fd79fecbf8825cf150f098"
+  }
+]

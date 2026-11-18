@@ -1,0 +1,190 @@
+test_chain_uses_previous_line_sha256_and_survives_restart (__main__.AuditTests.test_chain_uses_previous_line_sha256_and_survives_restart) ... ok
+test_concurrent_decisions_form_one_chain (__main__.AuditTests.test_concurrent_decisions_form_one_chain) ... ok
+test_doctor_cli_dispatch_does_not_create_server_or_token (__main__.AuditTests.test_doctor_cli_dispatch_does_not_create_server_or_token) ... ok
+test_headless_cli_disables_lcd_and_desktop_outputs (__main__.AuditTests.test_headless_cli_disables_lcd_and_desktop_outputs) ... 2026-11-18 02:47:59,430 agentdeck.hub INFO Hub listening on 127.0.0.1:<MagicMock name='HubServer().server_port' id='1944233263520'> (none)
+ok
+test_invalid_or_incomplete_log_is_never_overwritten (__main__.AuditTests.test_invalid_or_incomplete_log_is_never_overwritten) ... ok
+test_tampering_first_middle_and_last_line_is_detected (__main__.AuditTests.test_tampering_first_middle_and_last_line_is_detected) ... ok
+test_combo_presses_in_order_releases_in_reverse (test_hub_desktop.ComboTests.test_combo_presses_in_order_releases_in_reverse) ... ok
+test_held_modifiers_and_changed_foreground_prevent_input (test_hub_desktop.ComboTests.test_held_modifiers_and_changed_foreground_prevent_input) ... ok
+test_native_window_existence_uses_handle_even_when_not_visible (test_hub_desktop.ComboTests.test_native_window_existence_uses_handle_even_when_not_visible) ... ok
+test_partial_input_releases_only_inserted_down_keys (test_hub_desktop.ComboTests.test_partial_input_releases_only_inserted_down_keys) ... ok
+test_default_capture_requests_all_screens (test_hub_desktop.DesktopTests.test_default_capture_requests_all_screens) ... ok
+test_failed_paste_never_sends_enter (test_hub_desktop.DesktopTests.test_failed_paste_never_sends_enter) ... ok
+test_focus_change_after_paste_never_sends_enter (test_hub_desktop.DesktopTests.test_focus_change_after_paste_never_sends_enter) ... ok
+test_focus_rejects_ambiguity_and_activation_failure (test_hub_desktop.DesktopTests.test_focus_rejects_ambiguity_and_activation_failure) ... ok
+test_focus_uses_project_and_tool_matching (test_hub_desktop.DesktopTests.test_focus_uses_project_and_tool_matching) ... ok
+test_foreground_change_after_clipboard_never_pastes (test_hub_desktop.DesktopTests.test_foreground_change_after_clipboard_never_pastes) ... ok
+test_interrupt_sends_one_escape (test_hub_desktop.DesktopTests.test_interrupt_sends_one_escape) ... ok
+test_native_adapter_is_lazy (test_hub_desktop.DesktopTests.test_native_adapter_is_lazy) ... ok
+test_prompt_pastes_unicode_then_enter (test_hub_desktop.DesktopTests.test_prompt_pastes_unicode_then_enter) ... ok
+test_screenshot_saves_path_and_never_sends_enter (test_hub_desktop.DesktopTests.test_screenshot_saves_path_and_never_sends_enter) ... ok
+test_voice_sends_win_h (test_hub_desktop.DesktopTests.test_voice_sends_win_h) ... 2026-11-18 02:47:59,480 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:47:59,481 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=released restores=0 closed=True
+ok
+test_all_checks_pass_and_state_is_authenticated (test_hub_doctor.DoctorTests.test_all_checks_pass_and_state_is_authenticated) ... ok
+test_auth_timeout_missing_login_unknown_and_text_status (test_hub_doctor.DoctorTests.test_auth_timeout_missing_login_unknown_and_text_status) ... ok
+test_empty_home_advice_without_creating_files_or_logging_in (test_hub_doctor.DoctorTests.test_empty_home_advice_without_creating_files_or_logging_in) ... ok
+test_health_and_protected_state_failures_print_guidance (test_hub_doctor.DoctorTests.test_health_and_protected_state_failures_print_guidance) ... ok
+test_hook_detection_requires_executed_relay_and_correct_agent (test_hub_doctor.DoctorTests.test_hook_detection_requires_executed_relay_and_correct_agent) ... ok
+test_macos_accessibility_denied_or_timeout_has_permission_guidance (test_hub_doctor.DoctorTests.test_macos_accessibility_denied_or_timeout_has_permission_guidance) ... ok
+test_macos_adds_two_harmless_bounded_probes (test_hub_doctor.DoctorTests.test_macos_adds_two_harmless_bounded_probes) ... ok
+test_macos_doctor_explains_required_dictation_shortcut (test_hub_doctor.DoctorTests.test_macos_doctor_explains_required_dictation_shortcut) ... ok
+test_macos_doctor_lists_screen_recording_and_input_monitoring (test_hub_doctor.DoctorTests.test_macos_doctor_lists_screen_recording_and_input_monitoring) ... ok
+test_macos_missing_osascript_logs_and_reports_without_raising (test_hub_doctor.DoctorTests.test_macos_missing_osascript_logs_and_reports_without_raising) ... ok
+test_macos_relay_detection_understands_posix_quoted_paths (test_hub_doctor.DoctorTests.test_macos_relay_detection_understands_posix_quoted_paths) ... ok
+test_stale_missing_future_and_invalid_agent_timestamps (test_hub_doctor.DoctorTests.test_stale_missing_future_and_invalid_agent_timestamps) ... ok
+test_token_empty_or_unreadable_does_not_make_protected_request (test_hub_doctor.DoctorTests.test_token_empty_or_unreadable_does_not_make_protected_request) ... ok
+test_binds_only_loopback_and_authenticates_every_protected_route (__main__.HTTPTests.test_binds_only_loopback_and_authenticates_every_protected_route) ... ok
+test_critical_http_fallback_and_authenticated_audit_tail (__main__.HTTPTests.test_critical_http_fallback_and_authenticated_audit_tail) ... ok
+test_empty_audit_does_not_create_file (__main__.HTTPTests.test_empty_audit_does_not_create_file) ... ok
+test_http_timeout_and_deny (__main__.HTTPTests.test_http_timeout_and_deny) ... ok
+test_http_voice_press_release_and_compatibility (__main__.HTTPTests.test_http_voice_press_release_and_compatibility) ... ok
+test_permission_does_not_block_http_state_action_or_another_event (__main__.HTTPTests.test_permission_does_not_block_http_state_action_or_another_event) ... ok
+test_rejects_bad_requests (__main__.HTTPTests.test_rejects_bad_requests) ... ok
+test_relay_to_real_loopback_server_preserves_decision (__main__.HTTPTests.test_relay_to_real_loopback_server_preserves_decision) ... ok
+test_token_created_once_and_reused (__main__.HTTPTests.test_token_created_once_and_reused) ... ok
+test_agents_seen_keeps_last_event_time_after_session_end (__main__.HubTests.test_agents_seen_keeps_last_event_time_after_session_end) ... ok
+test_audit_failure_blocks_device_decision_but_releases_native_fallback (__main__.HubTests.test_audit_failure_blocks_device_decision_but_releases_native_fallback) ... ok
+test_critical_classification_precedes_high_and_is_configurable (__main__.HubTests.test_critical_classification_precedes_high_and_is_configurable) ... ok
+test_critical_returns_immediately_and_device_cannot_decide_locked_record (__main__.HubTests.test_critical_returns_immediately_and_device_cannot_decide_locked_record) ... ok
+test_decisions_audit_original_command_fields_and_sources_once (__main__.HubTests.test_decisions_audit_original_command_fields_and_sources_once) ... 2026-11-18 02:48:00,719 agentdeck.hub INFO USB hid:0x0A -> {'action': 'approve', 'request_id': '79bf6d6bf29642c38f3d9153626e1182', 'status': 'confirm', 'message': 'HOLD! press again'}
+2026-11-18 02:48:00,720 agentdeck.hub INFO USB hid:0x0A -> {'action': 'approve', 'request_id': '79bf6d6bf29642c38f3d9153626e1182', 'status': 'allowed'}
+ok
+test_deny_and_interrupt_return_deny_with_message (__main__.HubTests.test_deny_and_interrupt_return_deny_with_message) ... ok
+test_desktop_actions_use_selected_session_and_bilingual_templates (__main__.HubTests.test_desktop_actions_use_selected_session_and_bilingual_templates) ... ok
+test_disabled_outputs_preserve_decisions_without_native_effects (__main__.HubTests.test_disabled_outputs_preserve_decisions_without_native_effects) ... 2026-11-18 02:48:00,757 agentdeck.hub WARNING Window focus unavailable: desktop output disabled
+ok
+test_expired_request_does_not_consume_confirmation_for_next (__main__.HubTests.test_expired_request_does_not_consume_confirmation_for_next) ... ok
+test_failed_voice_stop_blocks_other_actions_until_retry_succeeds (__main__.HubTests.test_failed_voice_stop_blocks_other_actions_until_retry_succeeds) ... 2026-11-18 02:48:00,773 agentdeck.hub.voice INFO Voice started: target=cc-abc123 hwnd=12
+2026-11-18 02:48:00,773 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abc123 hwnd=12 reason=released restores=0 closed=False
+2026-11-18 02:48:00,773 agentdeck.hub.voice WARNING Voice stop error: foreground changed or key combination failed
+2026-11-18 02:48:00,773 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abc123 hwnd=12 reason=released restores=0 closed=True
+ok
+test_high_risk_classification_and_configurable_rules (__main__.HubTests.test_high_risk_classification_and_configurable_rules) ... ok
+test_high_risk_confirmation_is_bound_to_request_and_expires (__main__.HubTests.test_high_risk_confirmation_is_bound_to_request_and_expires) ... ok
+test_high_risk_warning_survives_later_same_session_event (__main__.HubTests.test_high_risk_warning_survives_later_same_session_event) ... ok
+test_interrupt_denies_pending_even_after_selecting_nonwaiting_session (__main__.HubTests.test_interrupt_denies_pending_even_after_selecting_nonwaiting_session) ... ok
+test_invalid_events_do_not_create_sessions_or_consume_slots (__main__.HubTests.test_invalid_events_do_not_create_sessions_or_consume_slots) ... ok
+test_keys_match_existing_hook_for_both_agents (__main__.HubTests.test_keys_match_existing_hook_for_both_agents) ... ok
+test_lcd_failure_does_not_break_approval_or_hold_heartbeat (__main__.HubTests.test_lcd_failure_does_not_break_approval_or_hold_heartbeat) ... ok
+test_locked_arrival_preserves_waiter_and_stale_ids_do_not_retarget (__main__.HubTests.test_locked_arrival_preserves_waiter_and_stale_ids_do_not_retarget) ... ok
+test_locked_banner_renders_through_existing_firmware_protocol (__main__.HubTests.test_locked_banner_renders_through_existing_firmware_protocol) ... ok
+test_locked_record_survives_notification_and_clears_on_native_progress (__main__.HubTests.test_locked_record_survives_notification_and_clears_on_native_progress) ... ok
+test_new_waiter_displays_after_locked_native_fallback (__main__.HubTests.test_new_waiter_displays_after_locked_native_fallback) ... ok
+test_old_guard_completion_cannot_clear_a_new_target (__main__.HubTests.test_old_guard_completion_cannot_clear_a_new_target) ... ok
+test_permission_blocks_until_approve (__main__.HubTests.test_permission_blocks_until_approve) ... ok
+test_real_guard_callback_reaches_lcd_while_hub_lock_is_held (__main__.HubTests.test_real_guard_callback_reaches_lcd_while_hub_lock_is_held) ... 2026-11-18 02:48:00,849 agentdeck.hub.voice INFO Voice started: target=cc-abc123 hwnd=12
+2026-11-18 02:48:00,850 agentdeck.hub.voice INFO Voice kept target: target=cc-abc123 hwnd=12 restores=1
+2026-11-18 02:48:00,863 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abc123 hwnd=12 reason=released restores=1 closed=True
+ok
+test_requests_fifo_and_stale_id_cannot_approve_next_session (__main__.HubTests.test_requests_fifo_and_stale_id_cannot_approve_next_session) ... ok
+test_session_end_and_shutdown_release_waiters_without_deciding (__main__.HubTests.test_session_end_and_shutdown_release_waiters_without_deciding) ... ok
+test_shutdown_and_session_end_are_audited_as_native_fallbacks (__main__.HubTests.test_shutdown_and_session_end_are_audited_as_native_fallbacks) ... ok
+test_slot_numbers_stay_stable_and_released_slot_is_reused (__main__.HubTests.test_slot_numbers_stay_stable_and_released_slot_is_reused) ... ok
+test_slot_selection_selects_that_sessions_pending_request (__main__.HubTests.test_slot_selection_selects_that_sessions_pending_request) ... ok
+test_state_events_and_pending_are_not_lost (__main__.HubTests.test_state_events_and_pending_are_not_lost) ... ok
+test_timeout_falls_back_and_cannot_be_approved_later (__main__.HubTests.test_timeout_falls_back_and_cannot_be_approved_later) ... ok
+test_two_requests_in_one_session_still_need_separate_decisions (__main__.HubTests.test_two_requests_in_one_session_still_need_separate_decisions) ... ok
+test_usb_legacy_string_binding_still_dispatches_one_shot_voice (__main__.HubTests.test_usb_legacy_string_binding_still_dispatches_one_shot_voice) ... 2026-11-18 02:48:01,001 agent_deck.usb INFO USB keyboard report length=8 (boot keyboard)
+2026-11-18 02:48:01,001 agentdeck.hub INFO USB hid:0x0B -> {'action': 'voice', 'status': 'sent'}
+ok
+test_usb_pairs_release_even_after_modifiers_and_pressed_keys_change (__main__.HubTests.test_usb_pairs_release_even_after_modifiers_and_pressed_keys_change) ... 2026-11-18 02:48:01,002 agent_deck.usb INFO USB keyboard report length=8 (boot keyboard)
+2026-11-18 02:48:01,003 agentdeck.hub INFO USB ctrl+hid:0x0B -> {'action': 'voice_down', 'status': 'sent'}
+2026-11-18 02:48:01,003 agentdeck.hub INFO USB ctrl+hid:0x0B -> {'action': 'voice_up', 'status': 'sent'}
+ok
+test_usb_rejects_malformed_transition_bindings (__main__.HubTests.test_usb_rejects_malformed_transition_bindings) ... ok
+test_usb_selects_named_profile_and_keeps_default_bindings (__main__.HubTests.test_usb_selects_named_profile_and_keeps_default_bindings) ... 2026-11-18 02:48:01,005 agentdeck.hub INFO USB hid:0x08 -> {'action': 'slot', 'status': 'selected', 'slot': 2, 'request_id': None, 'window': 'focused'}
+2026-11-18 02:48:01,005 agentdeck.hub INFO USB hid:0x08 -> {'action': 'slot', 'status': 'selected', 'slot': 1, 'request_id': None, 'window': 'focused'}
+ok
+test_usb_unaccepted_press_has_no_release_action (__main__.HubTests.test_usb_unaccepted_press_has_no_release_action) ... ok
+test_usb_uses_same_actions_and_ignores_releases_modifiers_and_stale_reports (__main__.HubTests.test_usb_uses_same_actions_and_ignores_releases_modifiers_and_stale_reports) ... 2026-11-18 02:48:01,032 agent_deck.usb INFO USB keyboard report length=8 (boot keyboard)
+2026-11-18 02:48:01,033 agentdeck.hub INFO USB hid:0x0A -> {'action': 'approve', 'request_id': '1ba64aafaa1b475e83706b36f2483486', 'status': 'allowed'}
+2026-11-18 02:48:01,034 agentdeck.hub INFO USB hid:0x0B -> {'action': 'voice_down', 'status': 'sent'}
+ok
+test_usb_voice_release_cannot_be_lost_to_a_stale_timestamp (__main__.HubTests.test_usb_voice_release_cannot_be_lost_to_a_stale_timestamp) ... 2026-11-18 02:48:01,036 agentdeck.hub INFO USB hid:0x0B -> {'action': 'voice_down', 'status': 'sent'}
+2026-11-18 02:48:01,037 agentdeck.hub INFO USB hid:0x0B -> {'action': 'voice_up', 'status': 'sent'}
+ok
+test_voice_blocks_window_changes_and_text_input (__main__.HubTests.test_voice_blocks_window_changes_and_text_input) ... ok
+test_voice_failures_are_reported_and_do_not_resolve_hooks (__main__.HubTests.test_voice_failures_are_reported_and_do_not_resolve_hooks) ... 2026-11-18 02:48:01,041 agentdeck.hub WARNING Desktop action failed: could not activate
+ok
+test_voice_keeps_original_session_when_another_request_arrives (__main__.HubTests.test_voice_keeps_original_session_when_another_request_arrives) ... ok
+test_voice_kept_target_notice_is_transient_and_preserves_session (__main__.HubTests.test_voice_kept_target_notice_is_transient_and_preserves_session) ... ok
+test_voice_release_is_safe_without_a_session_and_idempotent (__main__.HubTests.test_voice_release_is_safe_without_a_session_and_idempotent) ... ok
+test_voice_stop_warnings_reach_lcd (__main__.HubTests.test_voice_stop_warnings_reach_lcd) ... ok
+test_voice_stops_on_target_session_end_and_shutdown (__main__.HubTests.test_voice_stops_on_target_session_end_and_shutdown) ... ok
+test_all_files_are_validated_before_any_write (test_hub_install.InstallTests.test_all_files_are_validated_before_any_write) ... ok
+test_cli_with_default_targets (test_hub_install.InstallTests.test_cli_with_default_targets) ... ok
+test_default_python_is_the_running_interpreter (test_hub_install.InstallTests.test_default_python_is_the_running_interpreter) ... ok
+test_dry_run_never_creates_home_or_backups (test_hub_install.InstallTests.test_dry_run_never_creates_home_or_backups) ... ok
+test_gate_cli_dry_run_and_temp_home_round_trip (test_hub_install.InstallTests.test_gate_cli_dry_run_and_temp_home_round_trip) ... ok
+test_gate_opt_in_separate_hooks_idempotent_and_clean_uninstall (test_hub_install.InstallTests.test_gate_opt_in_separate_hooks_idempotent_and_clean_uninstall) ... ok
+test_invalid_options_are_rejected_without_writes (test_hub_install.InstallTests.test_invalid_options_are_rejected_without_writes) ... ok
+test_invalid_python_override_is_rejected_before_writing (test_hub_install.InstallTests.test_invalid_python_override_is_rejected_before_writing) ... ok
+test_macos_cli_python_override_reaches_all_hook_commands (test_hub_install.InstallTests.test_macos_cli_python_override_reaches_all_hook_commands) ... ok
+test_macos_command_quotes_paths_and_options_for_a_posix_shell (test_hub_install.InstallTests.test_macos_command_quotes_paths_and_options_for_a_posix_shell) ... ok
+test_mixed_group_only_removes_own_handler (test_hub_install.InstallTests.test_mixed_group_only_removes_own_handler) ... ok
+test_ownership_is_executed_script_not_substring (test_hub_install.InstallTests.test_ownership_is_executed_script_not_substring) ... ok
+test_reinstall_preserves_gate_and_reconciles_gate_and_telemetry_options (test_hub_install.InstallTests.test_reinstall_preserves_gate_and_reconciles_gate_and_telemetry_options) ... ok
+test_reinstall_reconciles_options_without_duplicate_or_foreign_changes (test_hub_install.InstallTests.test_reinstall_reconciles_options_without_duplicate_or_foreign_changes) ... ok
+test_round_trip_and_idempotence (test_hub_install.InstallTests.test_round_trip_and_idempotence) ... ok
+test_uninstall_noop_preserves_empty_foreign_configuration (test_hub_install.InstallTests.test_uninstall_noop_preserves_empty_foreign_configuration) ... ok
+test_windows_command_keeps_list2cmdline_quoting (test_hub_install.InstallTests.test_windows_command_keeps_list2cmdline_quoting) ... ok
+test_exact_bytes_auth_and_timeouts (test_hub_relay.RelayTests.test_exact_bytes_auth_and_timeouts) ... ok
+test_failure_diagnostics_stay_in_supplied_home (test_hub_relay.RelayTests.test_failure_diagnostics_stay_in_supplied_home) ... ok
+test_gate_accepts_only_empty_response_or_pretooluse_deny (test_hub_relay.RelayTests.test_gate_accepts_only_empty_response_or_pretooluse_deny) ... ok
+test_gate_cli_passes_option_and_does_not_block_malformed_input_or_exception (test_hub_relay.RelayTests.test_gate_cli_passes_option_and_does_not_block_malformed_input_or_exception) ... ok
+test_gate_failure_denies_only_risky_operations (test_hub_relay.RelayTests.test_gate_failure_denies_only_risky_operations) ... ok
+test_gate_failure_path_is_fast_and_light (test_hub_relay.RelayTests.test_gate_failure_path_is_fast_and_light) ... ok
+test_gate_failure_uses_config_and_defaults (test_hub_relay.RelayTests.test_gate_failure_uses_config_and_defaults) ... ok
+test_gate_query_long_timeout_and_unmodified_empty_response (test_hub_relay.RelayTests.test_gate_query_long_timeout_and_unmodified_empty_response) ... ok
+test_gate_unclassifiable_events_do_not_block_and_are_logged (test_hub_relay.RelayTests.test_gate_unclassifiable_events_do_not_block_and_are_logged) ... ok
+test_main_preserves_text_and_silences_failures (test_hub_relay.RelayTests.test_main_preserves_text_and_silences_failures) ... ok
+test_missing_hub_process_gate_denies_risky_and_passes_the_rest (test_hub_relay.RelayTests.test_missing_hub_process_gate_denies_risky_and_passes_the_rest) ... ok
+test_missing_hub_process_silent_exit_zero (test_hub_relay.RelayTests.test_missing_hub_process_silent_exit_zero) ... ok
+test_60_second_limit_closes_without_waiting_for_release (test_hub_desktop.VoiceTests.test_60_second_limit_closes_without_waiting_for_release) ... 2026-11-18 02:48:02,051 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:48:02,051 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=timeout restores=0 closed=True
+ok
+test_changing_target_title_preserves_handle_and_closes_successfully (test_hub_desktop.VoiceTests.test_changing_target_title_preserves_handle_and_closes_successfully) ... 2026-11-18 02:48:02,052 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:48:02,059 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=released restores=0 closed=True
+ok
+test_close_stops_active_voice_before_returning (test_hub_desktop.VoiceTests.test_close_stops_active_voice_before_returning) ... 2026-11-18 02:48:02,059 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:48:02,074 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=shutdown restores=0 closed=True
+ok
+test_concurrent_releases_close_once_and_callback_once (test_hub_desktop.VoiceTests.test_concurrent_releases_close_once_and_callback_once) ... 2026-11-18 02:48:02,075 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:48:02,090 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=released restores=0 closed=True
+ok
+test_duplicate_down_keeps_original_session_and_handle (test_hub_desktop.VoiceTests.test_duplicate_down_keeps_original_session_and_handle) ... 2026-11-18 02:48:02,090 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:48:02,091 agentdeck.hub.voice INFO Voice kept target: target=cc-abcdef hwnd=12 restores=1
+2026-11-18 02:48:02,106 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=released restores=1 closed=True
+ok
+test_existing_handle_is_kept_when_window_is_hidden_or_titleless (test_hub_desktop.VoiceTests.test_existing_handle_is_kept_when_window_is_hidden_or_titleless) ... 2026-11-18 02:48:02,106 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:48:02,121 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=released restores=0 closed=True
+ok
+test_failed_close_retains_ownership_until_explicit_retry_succeeds (test_hub_desktop.VoiceTests.test_failed_close_retains_ownership_until_explicit_retry_succeeds) ... 2026-11-18 02:48:02,121 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:48:02,136 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=released restores=0 closed=True
+ok
+test_failed_open_never_starts_guard_or_closes_unowned_dictation (test_hub_desktop.VoiceTests.test_failed_open_never_starts_guard_or_closes_unowned_dictation) ... ok
+test_failed_restore_ends_guard_without_typing_or_approval (test_hub_desktop.VoiceTests.test_failed_restore_ends_guard_without_typing_or_approval) ... 2026-11-18 02:48:02,137 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:48:02,137 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=focus_failed restores=0 closed=True
+ok
+test_failed_thread_start_and_failed_close_keep_ownership_for_retry (test_hub_desktop.VoiceTests.test_failed_thread_start_and_failed_close_keep_ownership_for_retry) ... ok
+test_first_100ms_tick_restores_target_and_release_joins_guard (test_hub_desktop.VoiceTests.test_first_100ms_tick_restores_target_and_release_joins_guard) ... 2026-11-18 02:48:02,138 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:48:02,151 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=released restores=1 closed=True
+ok
+test_missing_window_stops_on_next_tick_and_only_sends_global_close (test_hub_desktop.VoiceTests.test_missing_window_stops_on_next_tick_and_only_sends_global_close) ... 2026-11-18 02:48:02,152 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:48:02,152 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=window_lost restores=0 closed=True
+ok
+test_release_notices_window_loss_before_next_tick (test_hub_desktop.VoiceTests.test_release_notices_window_loss_before_next_tick) ... 2026-11-18 02:48:02,153 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:48:02,167 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=window_lost restores=0 closed=True
+ok
+test_timeout_ends_thread_even_if_owned_dictation_cannot_close (test_hub_desktop.VoiceTests.test_timeout_ends_thread_even_if_owned_dictation_cannot_close) ... 2026-11-18 02:48:02,168 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-18 02:48:02,168 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=timeout restores=0 closed=True
+ok
+test_window_query_error_still_attempts_owned_dictation_close (test_hub_desktop.VoiceTests.test_window_query_error_still_attempts_owned_dictation_close) ... 2026-11-18 02:48:02,168 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+ok
+
+----------------------------------------------------------------------
+Ran 133 tests in 2.800s
+
+OK

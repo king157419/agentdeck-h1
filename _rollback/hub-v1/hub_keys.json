@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "_instructions": [
+    "Physical codes copied from measured pc/deck_map.json. USB interface 0 must already use WinUSB. This map does not reprogram the keyboard.",
+    "E -> slot 1; B -> slot 2; Ctrl+Z -> slot 3; G -> approve; Ctrl+F -> deny; Space -> interrupt; H -> voice; L (knob 1 press) -> screenshot.",
+    "Knob 1 clockwise S -> cycle +1, counterclockwise F -> cycle -1, press L -> screenshot.",
+    "Knob 2 clockwise R -> cycle +1, counterclockwise P -> cycle -1, press Q -> prompt tests.",
+    "Knob 3 clockwise - -> cycle +1, counterclockwise = -> cycle -1, press V -> prompt summary.",
+    "Knob 4 clockwise ] -> cycle +1, counterclockwise [ -> cycle -1, press Ctrl+0 -> prompt continue.",
+    "Slots 4..6 are available through HTTP or custom bindings. Only fresh single-key presses with exact device modifiers trigger actions. High-risk approvals need two presses within 1.5 seconds."
+  ],
+  "bindings": {
+    "hid:0x08": "slot 1",
+    "hid:0x05": "slot 2",
+    "ctrl+hid:0x1D": "slot 3",
+    "hid:0x0A": "approve",
+    "ctrl+hid:0x09": "deny",
+    "hid:0x2C": "interrupt",
+    "hid:0x0B": "voice",
+    "hid:0x0F": "screenshot",
+    "hid:0x16": "cycle +1",
+    "hid:0x09": "cycle -1",
+    "hid:0x15": "cycle +1",
+    "hid:0x13": "cycle -1",
+    "hid:0x2D": "cycle +1",
+    "hid:0x2E": "cycle -1",
+    "hid:0x30": "cycle +1",
+    "hid:0x2F": "cycle -1",
+    "hid:0x14": "prompt tests",
+    "hid:0x19": "prompt summary",
+    "ctrl+hid:0x27": "prompt continue"
+  }
+}

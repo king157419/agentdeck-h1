@@ -1,0 +1,802 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>桌面小画 · 仿真样机</title>
+<style>
+:root{
+  --bg:#0e0f13; --panel:#16181f; --line:#262a35; --txt:#cfd3dc; --dim:#7d8394; --acc:#ffb84a;
+  --case:#1b1c20; --case-hi:#2a2c32; --side:#101114;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--txt);
+  font-family:system-ui,-apple-system,"Microsoft YaHei","PingFang SC",sans-serif;font-size:14px;line-height:1.5}
+.wrap{max-width:1120px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:18px;font-weight:600;margin:0 0 2px;letter-spacing:.04em}
+.sub{color:var(--dim);margin:0 0 18px;font-size:13px}
+.grid{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:20px;align-items:start}
+@media (max-width:860px){.grid{grid-template-columns:minmax(0,1fr)}}
+.stage{background:radial-gradient(ellipse at 50% 40%,#1b1e27 0,#12141a 70%);border:1px solid var(--line);
+  border-radius:14px;padding:28px 16px 22px;display:flex;flex-direction:column;align-items:center;gap:14px}
+.devwrap{width:100%;display:flex;justify-content:center;padding:14px 18px 6px 0}
+.dev{position:relative;width:min(100%,672px);aspect-ratio:35/39;background:var(--case);
+  border-radius:5.5% / 5%;
+  box-shadow:
+   1px -1px 0 var(--side),2px -2px 0 var(--side),3px -3px 0 var(--side),4px -4px 0 var(--side),
+   5px -5px 0 var(--side),6px -6px 0 var(--side),7px -7px 0 var(--side),8px -8px 0 var(--side),
+   9px -9px 0 var(--side),10px -10px 0 var(--side),11px -11px 0 var(--side),12px -12px 0 var(--side),
+   inset 0 0 0 2px var(--case-hi),
+   -10px 40px 50px rgba(0,0,0,.55)}
+.scr{position:absolute;left:14.2857%;width:71.4286%;top:17.95%;aspect-ratio:1;background:#000;
+  padding:1.2%;border-radius:2.5%;box-shadow:0 0 0 3px #08090b,0 0 0 4px #2a2c33}
+.scr canvas{display:block;width:100%;height:100%;image-rendering:pixelated;image-rendering:crisp-edges;image-rendering:pixelated}
+.port{position:absolute;left:41%;width:18%;height:1.4%;bottom:3.2%;background:#050506;border-radius:99px;opacity:.9}
+body[data-case="white"]{--case:#e9e7e1;--case-hi:#ffffff;--side:#b9b6ae}
+body[data-case="white"] .port{background:#8c8a84}
+.cap{color:var(--dim);font-size:12px;text-align:center}
+.mini{display:flex;gap:16px;align-items:flex-end;justify-content:center;flex-wrap:wrap}
+.mini .dev{width:35mm;aspect-ratio:35/39;box-shadow:1px -1px 0 var(--side),2px -2px 0 var(--side),3px -3px 0 var(--side),4px -4px 0 var(--side),inset 0 0 0 1px var(--case-hi),-3px 8px 10px rgba(0,0,0,.5)}
+.mini .scr{box-shadow:0 0 0 1px #08090b;padding:0}
+.mini canvas{image-rendering:auto}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:14px}
+.panel h2{font-size:12px;font-weight:600;color:var(--dim);margin:0 0 10px;letter-spacing:.12em}
+.btns{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.btns.two{grid-template-columns:repeat(2,1fr)}
+.btns.four{grid-template-columns:repeat(4,1fr)}
+button{font:inherit;color:var(--txt);background:#1f222b;border:1px solid #2d3240;border-radius:8px;padding:9px 6px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;gap:6px;min-height:40px}
+button:hover{background:#262a36}
+button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+button[aria-pressed="true"]{background:#2b2f3d;border-color:var(--acc);color:#fff}
+.dot{width:8px;height:8px;border-radius:2px;flex:none}
+#state-desc{margin:10px 0 0;color:var(--dim);font-size:12.5px;min-height:38px}
+.auto{margin-top:10px;width:100%}
+.auto[aria-pressed="true"]{background:#3a2d12;border-color:var(--acc)}
+#diff{margin:10px 0 0;font-size:12.5px;color:var(--dim)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;min-height:34px}
+.chip{min-height:34px;padding:5px 9px;font-size:12.5px;gap:6px}
+.chip small{color:var(--dim);font-size:11.5px}
+.chip .dot{width:9px;height:9px}
+.desc{margin:10px 0 0;color:var(--dim);font-size:12.5px}
+button:disabled{opacity:.45;cursor:default}
+#stat{font-variant-numeric:tabular-nums;font-size:12px;color:var(--dim);margin:0}
+</style>
+</head>
+<body data-case="black">
+<div class="wrap">
+  <h1>桌面小画 · 仿真样机</h1>
+  <p class="sub">把 AI 编程 Agent 的工作状态，画成一幅安静的像素小画。240×240 · RGB565 · 20 帧/秒 · 无按键无触摸。</p>
+  <div class="grid">
+    <div class="stage">
+      <div class="devwrap">
+        <div class="dev" id="dev">
+          <div class="scr"><canvas id="lcd" width="240" height="240" aria-label="设备屏幕（放大约 2 倍）"></canvas></div>
+          <div class="port"></div>
+        </div>
+      </div>
+      <div class="cap">外壳比例 35×39×45 mm · 屏幕 240×240 像素放大显示</div>
+      <div class="mini">
+        <div>
+          <div class="dev" id="mdev">
+            <div class="scr"><canvas id="mini" width="95" height="95" aria-label="实物大小预览"></canvas></div>
+            <div class="port"></div>
+          </div>
+        </div>
+        <div class="cap" style="text-align:left;max-width:180px">实物大小预览<br>屏幕约 25 mm 见方（1.4 寸级）。按 CSS 毫米近似，实际尺寸随显示器 DPI 略有偏差。</div>
+      </div>
+    </div>
+    <div>
+      <div class="panel">
+        <h2>会话</h2>
+        <div class="chips" id="sess"></div>
+        <div class="btns">
+          <button id="s-add">＋ 新会话</button>
+          <button id="s-end">结束选中</button>
+          <button id="s-clr">清空暗窗</button>
+        </div>
+        <p id="sess-desc" class="desc"></p>
+      </div>
+      <div class="panel">
+        <h2>选中会话的状态</h2>
+        <div class="btns" id="states"></div>
+        <p id="state-desc"></p>
+        <button class="auto" id="auto" aria-pressed="false">自动演示：关</button>
+      </div>
+      <div class="panel">
+        <h2>画面风格</h2>
+        <div class="btns two" id="scenes"></div>
+        <p id="diff"></p>
+      </div>
+      <div class="panel">
+        <h2>外壳</h2>
+        <div class="btns two" id="cases">
+          <button data-c="black" aria-pressed="true">黑色</button>
+          <button data-c="white" aria-pressed="false">白色</button>
+        </div>
+      </div>
+      <p id="stat"></p>
+    </div>
+  </div>
+</div>
+
+<script>
+(()=>{
+'use strict';
+const W=240;
+const cv=document.getElementById('lcd'), gMain=cv.getContext('2d');
+let g=gMain;   /* 当前绘图目标：屏幕，或「小楼」的背景缓冲 */
+const mv=document.getElementById('mini'), mg=mv.getContext('2d');
+g.imageSmoothingEnabled=false;
+/* 背景缓冲：固件上对应一块 120×120 的 RGB565 逻辑底图（28.8 KB），推屏时 2 倍放大 */
+const bgc=document.createElement('canvas'); bgc.width=W; bgc.height=W;
+const bgg=bgc.getContext('2d'); bgg.imageSmoothingEnabled=false;
+
+/* ---------- RGB565 量化与绘图原语（只有 矩形/点/线/圆 ） ---------- */
+const cc=Object.create(null);
+function col(h){
+  let k=cc[h]; if(k) return k;
+  const n=h, r=(n>>16)&255, gg=(n>>8)&255, b=n&255;
+  const r5=r>>3, g6=gg>>2, b5=b>>3;
+  const R8=(r5<<3)|(r5>>2), G8=(g6<<2)|(g6>>4), B8=(b5<<3)|(b5>>2);
+  return cc[h]='rgb('+R8+','+G8+','+B8+')';
+}
+let ops=0, oob=0, oobTotal=0, sub=0;
+function R(x,y,w,h,c){
+  x=x|0;y=y|0;w=w|0;h=h|0;
+  if(w<=0||h<=0) return;
+  if(!sub) ops++;
+  if(x<0||y<0||x+w>W||y+h>W){oob++;oobTotal++;}
+  g.fillStyle=col(c); g.fillRect(x,y,w,h);
+}
+function P(x,y,c){R(x,y,1,1,c);}
+function Pc(x,y,c){ x|=0;y|=0; if(x<0||y<0||x>=W||y>=W) return; R(x,y,1,1,c); } /* 特效粒子：显式裁剪 */
+function line(x0,y0,x1,y1,c,t){
+  x0|=0;y0|=0;x1|=0;y1|=0;t=t||1; ops++; sub++;
+  const dx=abs(x1-x0), dy=-abs(y1-y0), sx=x0<x1?1:-1, sy=y0<y1?1:-1;
+  let e=dx+dy;
+  for(;;){
+    R(x0,y0,t,t,c);
+    if(x0===x1&&y0===y1) break;
+    const e2=2*e;
+    if(e2>=dy){e+=dy;x0+=sx;}
+    if(e2<=dx){e+=dx;y0+=sy;}
+  }
+  sub--;
+}
+function disc(cx,cy,r,c){
+  cx|=0;cy|=0;
+  if(r<=0){P(cx,cy,c);return;}
+  ops++; sub++;
+  for(let dy=-r;dy<=r;dy++){
+    const dx=Math.round(Math.sqrt(r*r+r*0.8-dy*dy));
+    R(cx-dx,cy+dy,2*dx+1,1,c);
+  }
+  sub--;
+}
+function ring(cx,cy,r,c){
+  cx|=0;cy|=0; ops++; sub++;
+  for(let dy=-r;dy<=r;dy++){
+    const xo=Math.round(Math.sqrt(r*r+r*0.8-dy*dy));
+    const ri=r-1;
+    if(abs(dy)>=ri){R(cx-xo,cy+dy,2*xo+1,1,c);continue;}
+    const xi=Math.round(Math.sqrt(ri*ri+ri*0.8-dy*dy));
+    const w=Math.max(1,xo-xi);
+    R(cx-xo,cy+dy,w,1,c); R(cx+xo-w+1,cy+dy,w,1,c);
+  }
+  sub--;
+}
+const sin=Math.sin, abs=Math.abs, fl=Math.floor, rd=Math.round;
+function hs(n){n=n|0;n=(n^61)^(n>>>16);n=(n+(n<<3))|0;n=n^(n>>>4);n=Math.imul(n,0x27d4eb2d);n=n^(n>>>15);return (n>>>0)/4294967296;}
+function lp(a,b,k){return a+(b-a)*k;}
+
+/* 共用叠加：等你确认的琥珀色呼吸边框（最显眼），错误感叹号 */
+function beacon(tf){
+  const p=tf%20; if(p>=12) return;
+  const c=p<6?0xffc030:0xc08012;
+  R(0,0,240,3,c);R(0,237,240,3,c);R(0,3,3,234,c);R(237,3,3,234,c);
+}
+function bang(x,y,c){R(x,y,3,9,c);R(x,y+11,3,3,c);}
+function errMark(tf){ if((tf%12)<8) bang(20,18,0xf05060); }
+
+/* ================= 画面一：盆栽 ================= */
+const Plant={
+  name:'盆栽', leaves:[-999,-999,-999], droop:0, bloom:0, gt:0, sick:0, fall:null,
+  diff:'低', note:'每帧约 80–135 个图元（矩形/圆，圆与线各算 1 个），无位图素材',
+  H(){return this.leaves.length*13+14;},
+  off(y,tf){const u=(192-y)/this.H();return rd(this.droop*u*u*8+sin(tf*0.07)*u*u*2);},
+  enter(p,n,tf){
+    if(n==='think'&&p==='idle'){this.leaves=[-999,-999];this.bloom=0;this.fall=null;}
+    if(n==='error'){
+      if(this.leaves.length>1){
+        const k=this.leaves.length-1, side=k%2?1:-1, y=178-k*13;
+        this.fall={x:120+this.off(y,tf)+side*12,x0:0,y:y,f:0,side:side};
+        this.fall.x0=this.fall.x;
+        this.leaves.pop();
+      }
+      this.sick=80;
+    }
+  },
+  draw(st,sf,tf){
+    // 更新
+    this.droop=lp(this.droop,st==='wait'?1:(st==='error'?0.35:0),0.15);
+    if(st==='think'||st==='tool'){
+      if(this.gt--<=0){this.gt=st==='tool'?24:40; if(this.leaves.length<9) this.leaves.push(tf);}
+    }
+    if(st==='done') this.bloom=Math.min(1,this.bloom+1/30);
+    else if(st!=='idle') this.bloom=Math.max(0,this.bloom-1/15);
+    if(this.sick>0) this.sick--;
+    // 背景
+    R(0,0,240,240,st==='idle'?0x0d1519:0x12212a);
+    R(0,226,240,14,0x3a2a22); R(0,226,240,2,0x57402f);
+    // 花盆
+    for(let i=0;i<30;i++){const w=52-(i>>1)*1; R(120-(w>>1),196+i,w,1,0xa5563a);}
+    R(92,192,56,6,0xc0694a); R(96,198,48,2,0x2e1d18);
+    const Hh=this.H(), topY=192-Hh;
+    // 茎
+    for(let y=192;y>=topY;y-=4){R(120+this.off(y,tf)-1,y-2,3,4,0x4f9a52);}
+    R(120+this.off(topY,tf)-1,topY-2,3,3,0x4f9a52);
+    // 叶
+    for(let k=0;k<this.leaves.length;k++){
+      const s=Math.min(1,(tf-this.leaves[k])/30); const L=rd(21*s); if(L<2) continue;
+      const sy=178-k*13, sx=120+this.off(sy,tf), side=k%2?1:-1;
+      const tx=sx+side*rd(L*(1-0.3*this.droop)), ty=sy+rd((-7+24*this.droop)*s);
+      const lc=this.sick>0?(k%2?0xb8a040:0xa89038):(k%2?0x6cc070:0x58ac5e);
+      disc(rd(sx+(tx-sx)*0.3),rd(sy+(ty-sy)*0.3),2,0x3f8446);
+      disc(rd(sx+(tx-sx)*0.62),rd(sy+(ty-sy)*0.62),s>0.5?4:2,lc);
+      disc(tx,ty,s>0.5?3:2,lc);
+    }
+    // 顶端：花苞/花
+    const bx=120+this.off(topY,tf), by=topY-2;
+    if(this.bloom<=0.05){ disc(bx,by,3,0x8be08f); }
+    else{
+      const d=rd(7*this.bloom), pr=Math.max(1,rd(3.5*this.bloom)), by2=by-4;
+      for(let a=0;a<6;a++){const an=a*Math.PI/3+0.3; disc(bx+rd(Math.cos(an)*d),by2+rd(Math.sin(an)*d),pr,0xe88fa8);}
+      disc(bx,by2,Math.max(1,rd(3*this.bloom)),0xf2d062);
+      if(st==='done'&&sf<50){
+        for(let j=0;j<8;j++){
+          if(((sf+j*5)%16)>=8) continue;
+          const an=hs(j)*6.28, dd=16+hs(j+9)*16, x=bx+Math.cos(an)*dd, y=by2+Math.sin(an)*dd;
+          const c=j%2?0xfff0b0:0xffc0d0;
+          Pc(x,y,c);Pc(x-1,y,c);Pc(x+1,y,c);Pc(x,y-1,c);Pc(x,y+1,c);
+        }
+      }
+    }
+    // 状态点缀
+    if(st==='think'){ for(let j=0;j<3;j++){ if(((tf>>3)%4)>j) disc(26+j*9,30,2,0x9ad0e0); } }
+    if(st==='tool'){ for(let j=0;j<6;j++){ const yy=188-((tf*1.5+j*21)%110); Pc(112+hs(j)*32,yy,0xa6f0a0); } }
+    if(st==='wait'){
+      if((tf%16)<10){
+        const dc=0x6ec6ff, wd=[1,1,3,3,5,5,7,7,7,5,3];
+        for(let i=0;i<wd.length;i++) R(200-wd[i],40+i*2,wd[i]*2,2,dc);
+        R(196,54,3,4,0xe8f8ff);
+      }
+    }
+    if(st==='error') errMark(tf);
+    // 掉落的叶
+    if(this.fall){
+      const f=this.fall; f.f++;
+      if(f.y<222){f.y+=(f.f%2?2:1);f.x=f.x0+f.side*rd(sin(f.f*0.2)*6);}
+      else if(f.f>300) this.fall=null;
+      if(this.fall){line(f.x,f.y,f.x+f.side*5,f.y+2,0x8a6a30,2);disc(f.x+f.side*5,f.y+2,2,0xb08a3a);}
+    }
+    if(st==='wait') beacon(tf);
+  }
+};
+
+/* ================= 画面二：星图 ================= */
+const PATH=[[40,170],[62,138],[50,100],[84,84],[104,52],[136,66],[160,40],[186,70],[176,108],[200,138],[184,174],[150,156],[112,184],[78,204]];
+const SKYC=[0x2c3760,0x56669a,0x9fb0e0];
+const Stars={
+  name:'星图', n:0, births:[], tg:0,
+  diff:'低', note:'每帧约 60–175 个图元（36 颗背景星 + 最多 14 颗星座星与连线），几乎全是点和线',
+  enter(p,n){
+    if(n==='think'&&p==='idle'){this.n=0;this.births=[];}
+    if(n==='tool'){ if(this.n>=PATH.length){this.n=0;this.births=[];} this.tg=0; }
+  },
+  draw(st,sf,tf){
+    if(st==='tool'){ if(this.tg++%18===0&&this.n<PATH.length){this.births[this.n]=tf;this.n++;} }
+    R(0,0,240,240,0x070b1a);
+    // 背景星
+    const jit=(st==='error'&&sf<40)?(((tf>>1)&1)?1:-1):0;
+    for(let i=0;i<36;i++){
+      const x=8+fl(hs(i*3+1)*224), y=8+fl(hs(i*3+2)*224);
+      let lv=hs(i*3+3)<0.3?1:0;
+      if(st==='think'&&i%2===0){const tw=((tf>>2)+i*5)%8; lv=tw<2?2:(tw<5?1:0);}
+      else if(st==='tool'&&i%4===0){const tw=((tf>>2)+i*5)%8; lv=tw<2?2:lv;}
+      else if(st==='wait') lv=0;
+      else if(st==='idle'&&i%12===0){ lv=((tf>>4)+i)%4===0?2:lv; }
+      else if(st==='done'&&sf<40){ lv=(hs(i+(tf>>2)*37)>0.6)?2:lv; }
+      const c=SKYC[lv], xx=x+jit, yy=y+(jit?-jit:0);
+      P(xx,yy,c);
+      if(lv===2){P(xx-1,yy,0x56669a);P(xx+1,yy,0x56669a);P(xx,yy-1,0x56669a);P(xx,yy+1,0x56669a);}
+    }
+    // 星座连线与星
+    const bad=st==='error';
+    for(let i=1;i<this.n;i++){
+      const a=PATH[i-1], b=PATH[i], p=Math.min(1,(tf-this.births[i])/10);
+      line(a[0],a[1],a[0]+(b[0]-a[0])*p,a[1]+(b[1]-a[1])*p,(bad&&i===this.n-1)?0x8a2a3a:0x3f5aa0,1);
+    }
+    for(let i=0;i<this.n;i++){
+      const [x,y]=PATH[i], age=tf-this.births[i];
+      const red=bad&&i===this.n-1&&((tf>>2)&1);
+      const cm=bad&&i===this.n-1?0xe0484c:0xf6efd2, ca=bad&&i===this.n-1?0xa83040:0xb8b2d8;
+      if(age<10) ring(x,y,age+2,0x6f86c8);
+      const arm=age<8?5:(age<16?4:3);
+      R(x-arm,y,2*arm+1,1,ca); R(x,y-arm,1,2*arm+1,ca);
+      R(x-1,y-1,3,3,red?0xff9aa0:cm);
+    }
+    // 完成：流星
+    if(st==='done'&&sf<40){
+      const hx=236-6*sf, hy=8+4*sf;
+      for(let j=0;j<10;j++){
+        const c=j<2?0xffffff:(j<5?0xb8c8f0:0x5a6aa0), x=hx+j*3, y=hy-j*2;
+        if(j<3){Pc(x,y,c);Pc(x+1,y,c);Pc(x,y+1,c);Pc(x+1,y+1,c);} else Pc(x,y,c);
+      }
+    }
+    // 等你确认：规律脉动亮星 + 琥珀边框
+    if(st==='wait'){
+      const p=tf%20, r=rd(2+(p<10?p:20-p)*0.7);
+      if(r>=5) ring(120,120,r*2+4,0xc08012);
+      R(120-(r*2+3),120,2*(r*2+3)+1,1,0xffd870); R(120,120-(r*2+3),1,2*(r*2+3)+1,0xffd870);
+      disc(120,120,r,0xfff0b0);
+      beacon(tf);
+    }
+    if(bad){
+      if(this.n===0){disc(120,120,2,(tf>>2)&1?0xff9aa0:0xe0484c);}
+      errMark(tf);
+    }
+  }
+};
+
+/* ================= 画面三：小楼（多会话） =================
+   逻辑画布 120×120，一个「画素」= 2×2 屏幕像素。所有坐标都是逻辑整数坐标。
+   背景（天、月、屋顶、墙、路灯、窗框）只在布局变化时画进背景缓冲；
+   每帧只重画「内容有变化」的窗、烟囱的烟、琥珀边框、等待标签。 */
+const PAL={
+  SKY:0x121630,  WALL_L:0x3e4766, MOON:0xf2e6b8, WALL:0x2e3550, WALL_D:0x232840,
+  ROOF:0x4a2f3e, ROOF_L:0x6e4250, WOOD:0x8c6446, WARM:0xf4c06a, WARM_D:0xa86a32,
+  GLASS:0x141a2e, SIL:0x3a2430,  AMBER:0xffa828, RED:0xe0485a,  GREEN:0x5c9a58,
+  BLUE:0x5c6cb8, TEAL:0x3c8a86
+};
+const HUES=[PAL.ROOF_L,PAL.TEAL,PAL.BLUE,PAL.MOON];   /* 窗帘：4 色 × 3 款 = 12 种 */
+const CONF=[PAL.BLUE,PAL.TEAL,PAL.RED,PAL.GREEN];
+let CL=null; /* 逻辑裁剪框：画窗内内容时限制在玻璃内 */
+function Q(x,y,w,h,c){
+  if(CL){ const x2=Math.min(x+w,CL.x+CL.w), y2=Math.min(y+h,CL.y+CL.h);
+    x=Math.max(x,CL.x); y=Math.max(y,CL.y); w=x2-x; h=y2-y; }
+  R(x*2,y*2,w*2,h*2,c);
+}
+function B(x,y,w,h){ /* 从背景缓冲恢复一块（固件：从底图推一个矩形），算 1 个图元 */
+  x*=2;y*=2;w*=2;h*=2; if(w<=0||h<=0) return; ops++;
+  if(x<0||y<0||x+w>W||y+h>W){oob++;oobTotal++;}
+  g.drawImage(bgc,x,y,w,h,x,y,w,h);
+}
+function discQ(cx,cy,r,c){ for(let dy=-r;dy<=r;dy++){ const dx=rd(Math.sqrt(r*r+r*0.8-dy*dy)); Q(cx-dx,cy+dy,2*dx+1,1,c); } }
+/* 3×5 像素字体（ASCII 子集） */
+const FONT={
+  A:'010101111101101',B:'110101110101110',C:'011100100100011',D:'110101101101110',E:'111100110100111',
+  F:'111100110100100',G:'011100101101011',H:'101101111101101',I:'111010010010111',J:'001001001101010',
+  K:'101101110101101',L:'100100100100111',M:'101111111101101',N:'110101101101101',O:'010101101101010',
+  P:'110101110100100',Q:'010101101110011',R:'110101110101101',S:'011100010001110',T:'111010010010010',
+  U:'101101101101111',V:'101101101101010',W:'101101111111101',X:'101101010101101',Y:'101101010010010',
+  Z:'111001010100111','0':'111101101101111','1':'010110010010111','2':'110001010100111','3':'110001010001110',
+  '4':'101101111001001','5':'111100110001110','6':'011100111101111','7':'111001010010010','8':'111101111101111',
+  '9':'111101111001110','-':'000000111000000','_':'000000000000111','+':'000010111010000','.':'000000000000010',
+  ' ':'000000000000000'
+};
+function textW(s){return s.length*4-1;}
+function text(x,y,s,c){
+  for(let k=0;k<s.length;k++){
+    const b=FONT[s[k]]||FONT[' '];
+    for(let r=0;r<5;r++){ let run=-1;
+      for(let q=0;q<=3;q++){ const on=q<3&&b[r*3+q]==='1';
+        if(on&&run<0) run=q; if(!on&&run>=0){ Q(x+k*4+run,y+r,q-run,1,c); run=-1; } } }
+  }
+}
+/* 人影：以 (px, 脚底) 为原点的单位矩形，s 为放大倍数；dir<0 时左右镜像 */
+const BODY=[[-1,-14,2,1],[-2,-13,4,2],[-1,-11,2,1],[-2,-10,4,1],[-3,-9,6,5]];
+const BODY_ERR=[[-1,-13,2,1],[-2,-12,4,2],[-1,-10,2,1],[-3,-9,6,5]];
+const LEGS=[[[-2,-4,2,4],[0,-4,2,4]],[[-3,-4,2,4],[1,-4,2,4]]];
+const ARMS={
+  none:[[-4,-9,1,4],[3,-9,1,4]],
+  think:[[-4,-9,1,4],[3,-10,1,2],[2,-11,1,1]],
+  carry:[[-4,-9,1,4],[3,-8,1,1]],
+  waveA:[[-4,-9,1,4],[3,-10,1,1],[4,-11,1,1],[5,-12,1,1],[6,-14,2,2]],   /* 小窗里手举到头的高度挥，免得被窗帘挡住 */
+  waveB:[[-4,-9,1,4],[3,-10,3,1],[6,-11,2,2]],
+  cheer:[[-4,-14,1,5],[-5,-16,2,2],[3,-14,1,5],[3,-16,2,2]],
+  err:[[-4,-9,1,4],[3,-11,1,3],[2,-12,1,1]]
+};
+/* 大窗专用的细一号人影（22 画素高，不是小人影放大，避免糊成一团） */
+const BIG={
+  BODY:[[-2,-22,4,1],[-3,-21,6,5],[-2,-16,4,1],[-1,-15,2,1],[-4,-14,8,1],[-5,-13,10,6],[-4,-7,8,1]],
+  BODY_ERR:[[-2,-21,4,1],[-3,-20,6,5],[-2,-15,4,1],[-4,-14,8,1],[-5,-13,10,6],[-4,-7,8,1]],
+  LEGS:[[[-4,-6,3,6],[1,-6,3,6]],[[-5,-6,3,6],[2,-6,3,5]]],
+  ARMS:{
+    none:[[-6,-13,1,7],[5,-13,1,7]],
+    think:[[-6,-13,1,7],[5,-13,1,3],[3,-17,2,2]],
+    carry:[[-6,-13,1,7],[5,-13,1,2]],
+    waveA:[[-6,-13,1,7],[5,-21,1,8],[5,-23,2,2]],
+    waveB:[[-6,-13,1,7],[6,-15,1,2],[7,-17,1,2],[8,-19,1,2],[9,-21,2,2]],
+    cheer:[[-6,-21,1,8],[-7,-23,2,2],[5,-21,1,8],[5,-23,2,2]],
+    err:[[-6,-13,1,7],[5,-14,1,2],[6,-18,1,4],[4,-20,2,2]]
+  },
+  BOX:[[5,-12,5,4]], DOT:[6,3,-19,2], HALF:9
+};
+const SMALL={BODY,BODY_ERR,LEGS,ARMS,BOX:[[4,-10,3,3]],DOT:[4,2,-13,1],HALF:5};
+function sprite(list,px,base,s,dir,c){
+  for(const [dx,dy,w,h] of list){ const x=dir<0?-dx-w:dx; Q(px+x*s,base+dy*s,w*s,h*s,c); }
+}
+/* 窗位几何：G=1 一扇大窗；G=2 2×2；G=3 3×3 */
+function wrect(G,i){
+  let cx,y,w,h,s;
+  if(G===1){cx=56;y=42;w=44;h=38;s=2;}
+  else if(G===2){cx=[35,77][i&1];y=[39,73][i>>1];w=26;h=22;s=1;}
+  else{cx=[29,56,83][i%3];y=[36,59,82][(i/3)|0];w=19;h=13;s=1;}
+  const x=cx-(w>>1);
+  return {x,y,w,h,s,cx,G,
+    ty:G===1?y+6:(G===2?y+3:y+2),            /* 横档（气窗）位置 */
+    base:G===3?y+h+4:y+h-2,                    /* 人影脚底；3×3 时只看得见上半身 */
+    ly:y+h+(G===3?3:4)};                       /* 等待标签的字顶 */
+}
+function townLayout(){
+  let hi=-1; for(let i=0;i<9;i++) if(slotSid[i]!==null||slotVac[i]) hi=i;
+  const need=Math.max(hi+1,1), G=need<=1?1:(need<=4?2:3);
+  return {G,over:sessions.filter(s=>s.slot<0).length};
+}
+const Town={
+  name:'小楼', sig:'', keys:[], fkeys:[], bkey:'', skey:'', lkey:'', lrect:null, force:true,
+  diff:'中（要一块 120×120 背景缓冲 + 脏窗记账）',
+  note:'实测每帧 0–150 个图元：4 会话自动演示平均约 22、峰值约 115；9 扇窗都在跑工具平均约 90；切换布局那一帧画背景约 110–130 个。每帧预算封顶 150，超出的窗顺延到下一帧',
+  enter(){},
+  renderBg(G,over){
+    const P=PAL; g=bgg;
+    Q(0,0,120,120,P.SKY);
+    for(const [x,y] of [[6,22],[38,4],[60,13],[67,3],[94,6],[104,28],[114,42],[7,46],[30,16],[113,60]]) Q(x,y,1,1,P.WALL_L);
+    for(const [x,y] of [[48,7],[100,15]]){ Q(x-1,y,3,1,P.WALL_L); Q(x,y-1,1,3,P.WALL_L); Q(x,y,1,1,P.MOON); }
+    discQ(20,11,6,P.MOON); discQ(23,9,5,P.SKY);                       /* 新月 */
+    Q(76,14,5,12,P.WALL_L); Q(76,17,5,1,P.WALL); Q(76,20,5,1,P.WALL); Q(75,13,7,2,P.WALL_D); /* 烟囱 */
+    for(let i=0;i<5;i++){ Q(11+3*i,30-2*i,90-6*i,2,P.ROOF); Q(11+3*i,30-2*i,1,2,P.ROOF_L); }  /* 阶梯屋顶，左侧受月光 */
+    Q(23,22,66,1,P.ROOF_L); Q(10,32,92,1,P.ROOF_L); Q(11,33,90,1,P.ROOF);
+    Q(14,34,84,70,P.WALL); Q(14,34,84,1,P.WALL_D);                     /* 墙 + 檐下阴影 */
+    Q(14,35,1,69,P.WALL_L); Q(97,35,1,69,P.WALL_D);
+    for(const [x,y] of [[16,44],[87,52],[18,77],[84,90],[44,101],[60,36]]){      /* 疏落的几簇砖 */
+      Q(x,y,4,1,P.WALL_L); Q(x+5,y,3,1,P.WALL_L); Q(x+2,y+2,4,1,P.WALL_L); }
+    Q(14,104,84,2,P.WALL_D);
+    Q(0,106,120,14,P.WALL_D); Q(0,106,120,1,P.WALL);                    /* 人行道 */
+    for(const x of [8,30,52,74,96]) Q(x,108,1,3,P.GLASS);
+    Q(101,106,17,1,P.WALL_L); Q(103,107,13,1,P.WALL); Q(105,108,9,1,P.WALL);   /* 路灯光斑 */
+    Q(109,71,1,35,P.SIL); Q(108,104,3,2,P.SIL); Q(109,67,1,1,P.SIL); Q(107,68,5,1,P.SIL); Q(108,69,3,2,P.WARM);
+    if(G===1){ Q(80,91,10,13,P.WOOD); Q(81,92,8,12,P.ROOF); Q(82,93,6,2,P.WARM_D); Q(87,99,1,1,P.WARM); Q(78,104,14,1,P.WALL_L); }
+    for(let i=0;i<G*G;i++){
+      const r=wrect(G,i);
+      if(G<3) Q(r.x-2,r.y-3,r.w+4,1,P.WALL_L);                        /* 窗楣 */
+      Q(r.x-1,r.y-1,r.w+2,r.h+2,P.WOOD); Q(r.x,r.y,r.w,r.h,P.GLASS);
+      Q(r.x-2,r.y+r.h+1,r.w+4,G===3?1:2,P.WOOD); Q(r.x-1,r.y+r.h+(G===3?2:3),r.w+2,1,P.WALL_D); /* 窗台 + 影 */
+    }
+    if(over>0){ const t='+'+over; text(115-textW(t),4,t,P.MOON); }
+    g=gMain;
+    B(0,0,120,120);
+  },
+  params(S,r,i,tf){
+    const P=PAL;
+    if(!S) return {k:'v',glass:P.GLASS,dark:1};
+    const st=S.state, sf=S.sf, s=r.s, t=tf+i*5, tq=t>>1, rng=(r.w>>1)-(r.G===1?BIG:SMALL).HALF;
+    const p={k:'L',glass:P.WARM,floor:P.WARM_D,pose:'',px:r.cx,legs:0,bob:0,dir:1,dots:0,conf:-1,mark:0,chair:0,combo:S.combo,dark:0,base:r.base};
+    if(st==='idle'){ p.glass=P.WARM_D; p.floor=P.WOOD; p.chair=1; }
+    else if(st==='think'){ const a=tq*0.045+i*1.7; p.pose='think'; p.px=r.cx+rd(sin(a)*rng); p.dir=Math.cos(a)>=0?1:-1; p.legs=p.px&1; p.dots=(t>>3)%4; }
+    else if(st==='tool'){ const Pd=Math.max(2,2*rng), q=tq%Pd; p.px=r.cx-rng+(q<rng?q:Pd-q); p.dir=q<rng?1:-1; p.legs=(tq>>1)&1; p.bob=p.legs; p.pose='carry'; }
+    else if(st==='wait'){ p.pose=((t>>3)&1)?'waveA':'waveB'; p.base=r.base+(r.G===1?2:1); }
+    else if(st==='done'){
+      if(sf<36){ const q=(sf+i)>>2; p.pose='cheer'; p.bob=q&1; p.conf=q; }   /* 5 Hz、按窗位错开，9 扇同时庆祝也不会同帧全重画 */
+      else if(sf<48){ p.glass=P.WARM_D; p.floor=P.WOOD; }
+      else { p.glass=P.GLASS; p.dark=1; }
+    }
+    else if(st==='error'){ const c=t%40; if((c>=10&&c<12)||(c>=26&&c<29)){p.glass=P.GLASS;p.dark=1;} p.pose='err'; p.px=r.cx-(rng>>1); p.mark=1; }
+    return p;
+  },
+  curtains(r,combo,lit){
+    const hue=HUES[combo&3], sty=((combo>>2)%3), x=r.x,y=r.y,w=r.w,h=r.h;
+    if(sty===0){ const cw=r.G===1?7:(r.G===2?4:3), ch=rd(h*0.62), lw=Math.max(1,cw-2);
+      if(lit){ Q(x,y,cw,ch,hue); Q(x,y+ch,lw,h-ch,hue); Q(x+w-cw,y,cw,ch,hue); Q(x+w-lw,y+ch,lw,h-ch,hue); }
+      else { Q(x+cw-1,y,1,ch,hue); Q(x+w-cw,y,1,ch,hue); }
+    } else if(sty===1){ const vh=r.ty-y+(r.G===1?4:(r.G===2?2:1)), st=r.G===1?6:4, sw=r.G===1?3:2;
+      if(lit){ Q(x,y,w,vh,hue); for(let xx=x+1;xx+sw<=x+w;xx+=st) Q(xx,y+vh,sw,1,hue); }
+      else Q(x,y+vh-1,w,1,hue);
+    } else { const cy=y+rd(h*0.76), hw=w>>1;
+      if(lit){ Q(x,cy,hw,h-(cy-y),hue); Q(x+hw+1,cy,w-hw-1,h-(cy-y),hue); Q(x,cy-1,w,1,PAL.WOOD); }
+      else Q(x,cy,w,1,hue);
+    }
+  },
+  drawWin(r,p,i,sid){
+    const P=PAL, s=r.s;
+    CL={x:r.x,y:r.y,w:r.w,h:r.h};
+    Q(r.x,r.y,r.w,r.h,p.glass);
+    if(!p.dark&&r.G<3){ const fh=r.G===1?6:3; Q(r.x,r.y+r.h-fh,r.w,fh,p.floor); }
+    if(p.chair){ const cx=r.cx-(r.w>>2); sprite([[0,-8,1,8],[0,-4,4,1],[3,-3,1,3]],cx,r.base,s,1,P.SIL); }
+    if(r.G===1&&!p.dark&&p.k==='L'){ /* 大窗：吊灯 */
+      const lx=r.cx+9; Q(lx,r.ty+1,1,4,P.SIL); Q(lx-3,r.ty+5,7,2,P.WOOD); Q(lx-1,r.ty+7,3,1,P.MOON); }
+    if(p.pose){
+      const SP=r.G===1?BIG:SMALL, base=p.base-p.bob;
+      sprite(p.pose==='err'?SP.BODY_ERR:SP.BODY,p.px,base,1,p.dir,P.SIL);
+      sprite(SP.LEGS[p.legs],p.px,base,1,p.dir,P.SIL);
+      sprite(SP.ARMS[p.pose],p.px,base,1,p.dir,P.SIL);
+      if(p.pose==='carry') sprite(SP.BOX,p.px,base,1,p.dir,P.WOOD);
+      const [d0,dd,dy,dz]=SP.DOT;
+      for(let j=0;j<p.dots&&j<3;j++) Q(p.px+(d0+j*dd)*p.dir-(p.dir<0?dz:0),base+dy,dz,dz,P.SIL);
+    }
+    if(p.k==='L') this.curtains(r,p.combo,!p.dark);
+    Q(r.x,r.ty,r.w,1,P.WOOD);
+    if(r.G===1){ Q(r.x+14,r.y,1,r.ty-r.y,P.WOOD); Q(r.x+29,r.y,1,r.ty-r.y,P.WOOD); }
+    if(p.conf>=0){ for(let j=0;j<7;j++){
+      const cx=r.x+1+fl(hs(j*7+sid*13)*(r.w-2)), cy=r.y+((p.conf*(2+(j&1))+fl(hs(j*3+sid)*r.h))%r.h);
+      Q(cx,cy,s,s,CONF[j&3]); } }
+    if(p.mark){ Q(r.x+r.w-2-s,r.ty+2*s,s,3*s,P.RED); Q(r.x+r.w-2-s,r.ty+6*s,s,s,P.RED); }
+    if(p.dark){ for(let j=0;j<(r.G===1?3:2);j++) Q(r.x+2+j*s,r.ty+2+(2-j)*s,s,s,P.WALL_L); }
+    if(p.k==='L'){ const x0=r.x+r.w-2-3*s, y0=r.y+r.h-2*s;
+      Q(x0,y0,3*s,2*s,P.WALL_L); Q(x0,y0-2*s,s,s,P.GREEN); Q(x0+s,y0-3*s,s,3*s,P.GREEN); Q(x0+2*s,y0-2*s,s,s,P.GREEN); }
+    CL=null;
+  },
+  draw(st,sf,tf){
+    const P=PAL, L=townLayout(), G=L.G, sig=G+':'+L.over;
+    if(sig!==this.sig||this.force){
+      this.sig=sig; this.force=false; this.renderBg(G,L.over);
+      this.keys=[]; this.fkeys=[]; this.bkey=''; this.skey=''; this.lkey=''; this.lrect=null;
+    }
+    let busy=false; const waits=[];
+    for(let i=0;i<G*G;i++){ const sid=slotSid[i], S=sid===null?null:S_(sid);
+      if(S&&S.state==='tool') busy=true;
+      if(S&&S.state==='wait') waits.push([S,wrect(G,i)]); }
+    /* 烟囱：有会话在跑工具时冒几粒烟 */
+    const sk=busy?'b'+(tf>>2):'n';
+    if(sk!==this.skey){ this.skey=sk; Q(73,2,16,11,P.SKY);
+      if(busy) for(let k=0;k<3;k++){ const a=((tf>>2)+k*5)%15, y=11-fl(a*9/14), x=77+(a>>2)+(k===1?1:0), z=a<5?2:1;
+        if(y+z<=13) Q(x,y,z,z,a<5?P.WALL_L:P.WALL); } }
+    /* 等待标签：多个同时在等时，每 2.5 秒轮换 */
+    const anyWait=sessions.some(s=>s.state==='wait');
+    let lk='';
+    if(waits.length){ const [S,r]=waits[fl(tf/50)%waits.length]; lk=S.sid+':'+S.name+':'+G+':'+S.slot;
+    }
+    if(lk!==this.lkey&&ops+48<=150){        /* 标签也受每帧预算约束，超了就晚一帧 */
+      this.lkey=lk;
+      if(this.lrect){ B(...this.lrect); this.lrect=null; }
+      if(lk){ const [S,r]=waits[fl(tf/50)%waits.length], t=S.name.slice(0,6).toUpperCase(), tw=textW(t), lx=r.cx-(tw>>1);
+        this.lrect=[lx-2,r.ly-1,tw+4,7]; Q(lx-2,r.ly-1,tw+4,7,P.GLASS); text(lx,r.ly,t,P.AMBER); }
+    }
+    /* 琥珀边框：常亮，0.8 秒一档明暗交替 */
+    const bk=anyWait?((tf>>4)&1?'d':'b'):'';
+    if(bk!==this.bkey){ this.bkey=bk;
+      if(bk){ const c=bk==='b'?P.AMBER:P.WARM_D; Q(0,0,120,2,c); Q(0,118,120,2,c); Q(0,2,2,116,c); Q(118,2,2,116,c); }
+      else { B(0,0,120,2); B(0,118,120,2); B(0,2,2,116); B(118,2,2,116); } }
+    /* 窗：只重画内容变了的；按轮转顺序，每帧预算 150 图元，超了的留到下一帧 */
+    const n=G*G, BUDGET=150, WCOST=G===1?45:32;
+    for(let k=0;k<n;k++){
+      const i=(k+tf)%n, sid=slotSid[i], S=sid===null?null:S_(sid), r=wrect(G,i);
+      const fk=S?(S.state==='wait'?'a':'w'):'v';
+      if(fk!==this.fkeys[i]&&ops+4<=BUDGET){ this.fkeys[i]=fk; const c=fk==='a'?P.AMBER:(fk==='w'?P.WOOD:P.WALL_D);
+        Q(r.x-1,r.y-1,r.w+2,1,c); Q(r.x-1,r.y+r.h,r.w+2,1,c); Q(r.x-1,r.y,1,r.h,c); Q(r.x+r.w,r.y,1,r.h,c); }
+      const p=this.params(S,r,i,tf);
+      const key=[p.k,p.glass,p.px,p.pose,p.legs,p.bob,p.dir,p.dots,p.conf,p.mark,p.chair,p.combo,p.base].join(',');
+      if(key!==this.keys[i]&&ops+WCOST<=BUDGET){ this.keys[i]=key; this.drawWin(r,p,i,sid||0); }
+    }
+  }
+};
+
+/* ================= 画面四：潮汐 ================= */
+const CREST=[0x6fc4e8,0x4fa3d6,0x3a86c0,0x2c6aa6,0x225690];
+const CRESTE=[0xf0a0a0,0xe08890,0xc87080,0xa85870,0x8a4660];
+const Tide={
+  name:'潮汐', amp:1.2, sp:0.03, ph:0, L:0, bp:0,
+  diff:'中', note:'每帧约 200–320 个图元（5 条波浪 × 30 段为主），是四种里最重的',
+  enter(){},
+  wy(i,x,base,tf){return base+rd(sin(x*0.06+this.ph+i*1.9)*this.amp*(1-i*0.08));},
+  draw(st,sf,tf){
+    const T={idle:[1.2,0.03],think:[3.5,0.07],tool:[6,0.15],wait:[0,0],done:[2,0.05],error:[7,0.3]}[st];
+    this.amp=lp(this.amp,T[0],0.1); this.sp=lp(this.sp,T[1],0.1); this.ph+=this.sp;
+    this.L=lp(this.L,st==='done'?34:(st==='idle'?this.L:0),0.06);
+    this.bp=lp(this.bp,st==='wait'?1:0,0.12);
+    const L=rd(this.L), top=98+L;
+    const flash=st==='error'&&((tf>>2)&1);
+    R(0,0,240,240,flash?0x2a1220:0x0b1428);
+    for(let i=0;i<10;i++){ const x=6+fl(hs(i*2+5)*228), y=6+fl(hs(i*2+6)*70); P(x,y,flash?0x8a5060:0x3a4a78); }
+    R(0,86,240,1,0x1c2c4a);
+    // 沙滩
+    if(L>1){
+      for(let x=0;x<240;x+=8){ const ty=88+rd(sin(x*0.05+1)*3)-(x>150?3:0); R(x,ty,8,top-ty,0xc9b27c); }
+      R(0,top-4,240,4,0x9a8458); R(0,top-8,240,4,0xb09a6a);
+      for(let j=0;j<4;j++) P(20+j*52,92+(j*7)%(Math.max(2,L-10)),0xe8dcc0);
+      if(L>14){ const sx=176, sy=89+rd(L*0.4); R(sx-2,sy,5,1,0xe8909a);R(sx,sy-2,1,5,0xe8909a); }
+    }
+    // 水
+    R(0,top,240,240-top,0x123a66);
+    const ce=st==='error'?CRESTE:CREST;
+    for(let i=0;i<5;i++){
+      const base=top+i*22;
+      for(let x=0;x<240;x+=8) R(x,this.wy(i,x,base,tf),8,3,ce[i]);
+    }
+    if(st==='tool'){
+      for(let k=0;k<10;k++){ const i=k%5, x=8*fl(hs(k+(tf>>1)*13)*30)+3; Pc(x,this.wy(i,x,top+i*22,tf)-1,0xffffff); }
+    }
+    if(st==='done'&&sf<60){
+      for(let k=0;k<10;k++){ if(((sf+k*5)%14)>=7) continue; const i=k%3, x=8*fl(hs(k+90)*30)+3; Pc(x,top+i*22+1,0xffffff);Pc(x-1,top+i*22+1,0xb8e0f0);Pc(x+1,top+i*22+1,0xb8e0f0); }
+      if(L>6){ for(let k=0;k<3;k++){ if(((sf+k*9)%12)<6) P(36+k*60,92,0xffffff); } }
+    }
+    // 漂流瓶
+    if(this.bp>0.03){
+      const off=rd((1-this.bp)*26), bob=rd(sin(tf*0.12)*3), tilt=sin(tf*0.09);
+      const cy=top-12+off+bob;
+      R(104,top+5+off,32,1,0x2a6a94); R(110,top+9+off,20,1,0x225690);
+      for(let r=-16;r<=15;r++){
+        const dx=rd(tilt*r/16*4), x=120+dx, y=cy+r;
+        if(r<=-13) R(x-3,y,6,1,0xc08a50);
+        else if(r<=-7) R(x-3,y,6,1,0xa8dcea);
+        else{ R(x-7,y,14,1,0xa8dcea); R(x-7,y,1,1,0x5ca0b0); R(x+6,y,1,1,0x5ca0b0); if(r>=-3&&r<=11) R(x-3,y,6,1,0xf2e2b0); }
+      }
+      if((tf%16)<10){ R(119,cy-26,3,3,0xffd870); R(117,cy-24,7,1,0xffb020); R(120,cy-28,1,7,0xffb020); }
+    }
+    if(st==='error') errMark(tf);
+    if(st==='wait') beacon(tf);
+  }
+};
+
+const SCENES=[Plant,Stars,Town,Tide];
+const STATES=[
+  ['idle','空闲','#7d8394','没事干：画面安静，只留一点呼吸感。'],
+  ['think','思考中','#5aa8ff','Agent 在推理：画面轻轻流动，节奏慢。'],
+  ['tool','跑工具','#5ad08a','Agent 在执行命令/改文件：画面最活跃。'],
+  ['wait','等你确认','#ffb84a','需要你介入：全屏琥珀色边框常亮明暗交替，人影站到窗前挥手，窗下显示项目名，最显眼。'],
+  ['done','完成','#4fd1c5','做完了：一个短暂的小庆祝，之后归于平静。'],
+  ['error','出错','#f05060','出错：红色感叹号、画面抖动或受损。']
+];
+const SNAME=Object.fromEntries(STATES.map(s=>[s[0],s[1]]));
+/* 自动演示：4 条「车道」，每条 60 秒一循环、节奏各不相同。
+   16–22 秒 h1-fw 与 webapp 同时在等；notes 在 28 秒结束（暗窗），44 秒起一个新的 notes 会话住进同一扇窗。 */
+const LANES=[
+  ['h1-fw', [['think',3],['tool',7],['think',3],['wait',9],['tool',6],['done',4],['idle',6],['think',4],['tool',8],['done',4],['idle',6]]],
+  ['webapp',[['tool',5],['think',6],['tool',5],['wait',8],['think',4],['tool',6],['error',4],['think',4],['tool',6],['done',4],['idle',8]]],
+  ['notes', [['idle',4],['think',5],['tool',9],['done',5],['idle',5],['end',16],['think',4],['tool',6],['wait',6]]],
+  ['api',   [['idle',8],['think',4],['tool',4],['error',5],['think',4],['tool',10],['wait',5],['tool',5],['done',4],['idle',11]]]
+];
+const NAMES=['h1-fw','webapp','notes','api','blog','infra','ml-lab','docs','cli','shop','bot','site','game','wiki'];
+
+/* ---------- 会话模型 ---------- */
+let sessions=[], nextSid=1, sel=null, comboPtr=0, lanes=[];
+const slotSid=new Array(9).fill(null), slotVac=new Array(9).fill(false);
+function S_(sid){ for(const s of sessions) if(s.sid===sid) return s; return null; }
+function curSel(){ return sel===null?null:S_(sel); }
+function selState(){ const s=curSel(); return s?s.state:'idle'; }
+function giveSlot(s){ for(let i=0;i<9;i++) if(slotSid[i]===null){ slotSid[i]=s.sid; slotVac[i]=false; s.slot=i; return; } }
+function addSession(name,st){
+  if(!name) name=NAMES.find(n=>!sessions.some(s=>s.name===n))||('s'+nextSid);
+  let c=comboPtr; for(let k=0;k<12;k++){ const cc=(comboPtr+k)%12; if(!sessions.some(s=>s.combo===cc)){c=cc;break;} }
+  comboPtr=(c+1)%12;
+  const s={sid:nextSid++,name,state:st||'idle',sf:0,combo:c,slot:-1};
+  sessions.push(s); giveSlot(s);
+  if(sel===null) select(s.sid);
+  refreshUI(); return s.sid;
+}
+function endSession(sid){
+  const s=S_(sid); if(!s) return;
+  sessions.splice(sessions.indexOf(s),1);
+  if(s.slot>=0){ slotSid[s.slot]=null; slotVac[s.slot]=true; const q=sessions.find(x=>x.slot<0); if(q) giveSlot(q); }
+  if(sel===sid){ const p=s.state; sel=sessions.length?sessions[0].sid:null; const n=selState(); for(const sc of SCENES) if(sc.enter) sc.enter(p,n,tf); }
+  refreshUI();
+}
+function setSessionState(sid,st){
+  const s=S_(sid); if(!s) return;
+  const p=s.state; s.state=st; s.sf=0;
+  if(sid===sel) for(const sc of SCENES) if(sc.enter) sc.enter(p,st,tf);
+  refreshUI();
+}
+function select(sid){
+  const p=selState(); sel=sid; const n=selState();
+  if(p!==n) for(const sc of SCENES) if(sc.enter) sc.enter(p,n,tf);
+  refreshUI();
+}
+function setState(s){ if(sel!==null) setSessionState(sel,s); }   /* 兼容：改选中会话 */
+
+/* ---------- 状态机 ---------- */
+let tf=0, sceneI=2, auto=false, pk=0;
+const maxOps={};
+function setScene(i){sceneI=i;Town.force=true;refreshUI();}
+function applyLane(L){
+  const st=L.sc[L.i][0];
+  if(st==='end'){ if(L.sid!==null){ endSession(L.sid); L.sid=null; } }
+  else if(L.sid===null||!S_(L.sid)) L.sid=addSession(L.n,st);
+  else setSessionState(L.sid,st);
+}
+function startAuto(){
+  sessions=[]; slotSid.fill(null); slotVac.fill(false); sel=null; comboPtr=0;
+  lanes=LANES.map(([n,sc])=>({n,sc,i:0,t:0,sid:null}));
+  for(const L of lanes) applyLane(L);
+  select(lanes[0].sid);
+}
+
+function frame(){
+  ops=0;oob=0;
+  const cs=curSel(), st=cs?cs.state:'idle', ssf=cs?cs.sf:0;
+  SCENES[sceneI].draw(st,ssf,tf);
+  const k=sceneI+':'+st; if(!maxOps[k]||ops>maxOps[k]) maxOps[k]=ops;
+  if(ops>pk) pk=ops;
+  mg.imageSmoothingEnabled=true; mg.imageSmoothingQuality='high';
+  mg.drawImage(cv,0,0,95,95);
+  for(const s of sessions) s.sf++;
+  tf++;
+  if(auto) for(const L of lanes){ L.t++; if(L.t>=L.sc[L.i][1]*20){ L.i=(L.i+1)%L.sc.length; L.t=0; applyLane(L); } }
+}
+
+/* ---------- UI ---------- */
+const elS=document.getElementById('states'), elC=document.getElementById('scenes');
+STATES.forEach(([id,name,c])=>{
+  const b=document.createElement('button');
+  b.dataset.s=id; b.innerHTML='<span class="dot" style="background:'+c+'"></span>'+name;
+  b.onclick=()=>{ if(sel===null) return; if(auto) setAuto(false); setState(id); };
+  elS.appendChild(b);
+});
+SCENES.forEach((sc,i)=>{
+  const b=document.createElement('button'); b.dataset.i=i; b.textContent=sc.name; b.onclick=()=>setScene(i); elC.appendChild(b);
+});
+const autoBtn=document.getElementById('auto'), elSess=document.getElementById('sess');
+function setAuto(v){
+  auto=v; autoBtn.setAttribute('aria-pressed',v); autoBtn.textContent='自动演示：'+(v?'开（4 个会话）':'关');
+  if(v) startAuto();
+  refreshUI();
+}
+autoBtn.onclick=()=>setAuto(!auto);
+document.getElementById('s-add').onclick=()=>{ if(auto) setAuto(false); const id=addSession(null,'idle'); select(id); };
+document.getElementById('s-end').onclick=()=>{ if(sel===null) return; if(auto) setAuto(false); endSession(sel); };
+document.getElementById('s-clr').onclick=()=>{ slotVac.fill(false); refreshUI(); };
+elSess.onclick=e=>{ const b=e.target.closest('button'); if(b) select(+b.dataset.sid); };
+document.querySelectorAll('#cases button').forEach(b=>b.onclick=()=>{
+  document.body.dataset.case=b.dataset.c;
+  document.querySelectorAll('#cases button').forEach(x=>x.setAttribute('aria-pressed',x===b));
+});
+const hex=n=>'#'+n.toString(16).padStart(6,'0');
+const SCOL=Object.fromEntries(STATES.map(s=>[s[0],s[2]]));
+let sessHTML='';
+function refreshUI(){
+  const st=selState(), cs=curSel();
+  elS.querySelectorAll('button').forEach(b=>{ b.setAttribute('aria-pressed',!!cs&&b.dataset.s===st); b.disabled=!cs; });
+  elC.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',+b.dataset.i===sceneI));
+  document.getElementById('state-desc').textContent=cs?('「'+cs.name+'」'+STATES.find(s=>s[0]===st)[3]):'没有选中的会话。';
+  const h=[...sessions].sort((a,b)=>(a.slot<0?99:a.slot)-(b.slot<0?99:b.slot)).map(s=>
+    '<button class="chip" data-sid="'+s.sid+'" aria-pressed="'+(s.sid===sel)+'">'+
+    '<span class="dot" style="background:'+hex(HUES[s.combo&3])+'"></span>'+s.name+
+    ' <small><span style="color:'+SCOL[s.state]+'">●</span> '+SNAME[s.state]+(s.slot<0?' · 排队':' · '+(s.slot+1)+'号窗')+'</small></button>').join('');
+  if(h!==sessHTML){ sessHTML=h; elSess.innerHTML=h; }
+  const n=sessions.length, L=townLayout(), vac=slotVac.filter(Boolean).length;
+  document.getElementById('sess-desc').textContent=n+' 个会话 · 小楼 '+(L.G===1?'一扇大窗':L.G+'×'+L.G)+
+    (L.over?' · 另有 '+L.over+' 个排队（角上显示 +'+L.over+'）':'')+(vac?' · '+vac+' 扇暗窗':'')+
+    '。点上面的会话选中它，再点状态按钮。';
+  document.getElementById('s-end').disabled=!cs;
+  const sc=SCENES[sceneI];
+  document.getElementById('diff').textContent='在板子上实现的难度：'+sc.diff+' · '+sc.note+(sceneI===2?'':'（显示选中会话）');
+}
+
+/* ---------- 主循环（固定 20 帧/秒） ---------- */
+let last=performance.now(), acc=0, fpsN=0, fpsT=last, fps=0;
+function loop(now){
+  acc+=now-last; last=now;
+  if(acc>250) acc=250;
+  while(acc>=50){acc-=50;frame();fpsN++;}
+  if(now-fpsT>=1000){fps=fpsN*1000/(now-fpsT);fpsN=0;fpsT=now;
+    document.getElementById('stat').textContent='帧率 '+fps.toFixed(0)+' fps · 本帧图元 '+ops+' · 近 1 秒峰值 '+pk+' · 越界绘制 '+oobTotal; pk=0;}
+  requestAnimationFrame(loop);
+}
+setAuto(true);
+frame();
+requestAnimationFrame(loop);
+
+window.__sim={
+  setState,setScene,setAuto,addSession,endSession,select,setSessionState,
+  clearVacant(){slotVac.fill(false);refreshUI();},
+  step(n){for(let i=0;i<(n||1);i++)frame();},
+  sessions(){return sessions.map(s=>({sid:s.sid,name:s.name,state:s.state,slot:s.slot,combo:s.combo,sf:s.sf}));},
+  info(){return {state:selState(),sceneI,tf,ops,oobTotal,maxOps,layout:townLayout()};},
+  shot(){return cv.toDataURL();},
+  hash(){const d=g.getImageData(0,0,240,240).data;let h=0;for(let i=0;i<d.length;i+=4){h=(Math.imul(h,31)+d[i]+d[i+1]*3+d[i+2]*7)|0;}return h;}
+};
+})();
+</script>
+</body>
+</html>

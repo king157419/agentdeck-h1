@@ -1,0 +1,27 @@
+test_config_file_defaults_and_cli_override (__main__.GateIntegrationTests.test_config_file_defaults_and_cli_override) ... 2026-11-18 02:47:29,551 agentdeck.hub INFO Hub listening on 127.0.0.1:<MagicMock name='HubServer().server_port' id='3000100574544'> (none)
+2026-11-18 02:47:29,553 agentdeck.hub INFO Hub listening on 127.0.0.1:<MagicMock name='HubServer().server_port' id='3000100574544'> (none)
+ok
+test_hub_down_relay_denies_only_risky_operations (__main__.GateIntegrationTests.test_hub_down_relay_denies_only_risky_operations) ... ok
+test_real_relay_http_gate_then_permission_and_timeout (__main__.GateIntegrationTests.test_real_relay_http_gate_then_permission_and_timeout) ... ok
+test_complete_default_gate_rule_categories (__main__.GateRiskTests.test_complete_default_gate_rule_categories) ... ok
+test_production_hosts_protected_branches_and_mcp_write_allowlist (__main__.GateRiskTests.test_production_hosts_protected_branches_and_mcp_write_allowlist) ... ok
+test_audit_failure_never_releases_gate_and_timeout_still_denies (__main__.GateTests.test_audit_failure_never_releases_gate_and_timeout_still_denies) ... ok
+test_confirmation_expires_and_is_bound_to_same_request (__main__.GateTests.test_confirmation_expires_and_is_bound_to_same_request) ... ok
+test_critical_permission_stays_locked_after_gate_confirmation (__main__.GateTests.test_critical_permission_stays_locked_after_gate_confirmation) ... ok
+test_deny_and_interrupt_return_pretooluse_reason_and_audit_gate (__main__.GateTests.test_deny_and_interrupt_return_pretooluse_reason_and_audit_gate) ... ok
+test_gate_banner_uses_existing_firmware_protocol (__main__.GateTests.test_gate_banner_uses_existing_firmware_protocol) ... ok
+test_gate_confirmation_marks_permission_but_still_requires_one_key (__main__.GateTests.test_gate_confirmation_marks_permission_but_still_requires_one_key) ... ok
+test_high_and_critical_both_need_two_presses_and_never_return_allow (__main__.GateTests.test_high_and_critical_both_need_two_presses_and_never_return_allow) ... ok
+test_low_and_off_modes (__main__.GateTests.test_low_and_off_modes) ... ok
+test_low_returns_empty_in_under_50ms_without_wait_or_lcd (__main__.GateTests.test_low_returns_empty_in_under_50ms_without_wait_or_lcd) ... ok
+test_marker_expires_at_30_seconds_and_session_end_clears_it (__main__.GateTests.test_marker_expires_at_30_seconds_and_session_end_clears_it) ... ok
+test_marker_is_scoped_to_agent_session_and_complete_tool_input (__main__.GateTests.test_marker_is_scoped_to_agent_session_and_complete_tool_input) ... ok
+test_real_wait_timeout_denies_instead_of_falling_back (__main__.GateTests.test_real_wait_timeout_denies_instead_of_falling_back) ... ok
+test_repeated_gate_commands_still_require_new_double_confirmation (__main__.GateTests.test_repeated_gate_commands_still_require_new_double_confirmation) ... ok
+test_session_end_stop_interrupt_and_shutdown_deny_waiting_gates (__main__.GateTests.test_session_end_stop_interrupt_and_shutdown_deny_waiting_gates) ... ok
+test_validation_before_pending_creation (__main__.GateTests.test_validation_before_pending_creation) ... ok
+
+----------------------------------------------------------------------
+Ran 20 tests in 3.651s
+
+OK

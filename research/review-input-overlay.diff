@@ -1,0 +1,916 @@
+diff --git a/_rollback/overlay-keys/hub_overlay.py b/pc/hub_overlay.py
+index 86ae80f..aec9aa6 100644
+--- a/_rollback/overlay-keys/hub_overlay.py
++++ b/pc/hub_overlay.py
+@@ -1,7 +1,9 @@
+ """Small Hub desktop display; importing this module never creates a window."""
+ import ctypes
++import json
+ import logging
+ import os
++from pathlib import Path
+ import sys
+ import threading
+ 
+@@ -12,6 +14,8 @@ if sys.platform == "win32":
+ log = logging.getLogger("agentdeck.hub.overlay")
+ POLL_MS = 300
+ WIDTH = 360
++TRANSLUCENT_ALPHA = 0.85
++OPAQUE_ALPHA = 1.0
+ COLORS = {"RUN": "#48b879", "ASK": "#e5ad46", "DONE": "#609ce3",
+           "ERR": "#ed6969", "IDLE": "#9299a5"}
+ STATES = {"think": "RUN", "tool": "RUN", "wait": "ASK", "locked": "ASK",
+@@ -20,6 +24,10 @@ BACKGROUND = "#171c24"
+ FOREGROUND = "#edf1f7"
+ 
+ 
++def overlay_config_file(home=None):
++    return (Path.home() if home is None else Path(home)) / ".agentdeck" / "overlay.json"
++
++
+ def display_model(state):
+     """Convert a /state snapshot to plain display data without mutating it."""
+     sessions = {session["slot"]: session for session in state.get("sessions", ())}
+@@ -33,8 +41,10 @@ def display_model(state):
+                       "label": label, "color": COLORS[label],
+                       "occupied": session is not None,
+                       "selected": state.get("selected_slot") == number})
++    pending_list = list(state.get("pending", ()))
++    locked_list = list(state.get("locked", ()))
+     displayed = state.get("displayed_request_id")
+-    request = next((item for item in list(state.get("pending", ())) + list(state.get("locked", ()))
++    request = next((item for item in pending_list + locked_list
+                     if displayed is not None and item.get("id") == displayed), None)
+     detail = None
+     if request is not None:
+@@ -58,7 +68,16 @@ def display_model(state):
+                   "label": label,
+                   "color": COLORS["ERR"] if risk in ("high", "critical") or locked else COLORS["ASK"],
+                   "can_approve": not locked, "can_deny": not locked}
+-    return {"slots": slots, "request": detail}
++    session_count = len(sessions)
++    pending_count = len(pending_list)
++    return {
++        "slots": slots,
++        "request": detail,
++        "session_count": session_count,
++        "pending_count": pending_count,
++        "summary_text": "%d 个会话 / %d 个待批" % (session_count, pending_count),
++        "expanded": bool(pending_count or detail is not None),
++    }
+ 
+ 
+ class NoActivateWindow:
+@@ -149,22 +168,141 @@ class NoActivateWindow:
+ class Overlay:
+     """Run tkinter on the caller's thread; share Hub's locked state/action path."""
+ 
+-    def __init__(self, hub, on_close=None, *, window=None):
++    def __init__(self, hub, on_close=None, *, window=None, home=None, state_path=None):
+         self.hub = hub
+         self.on_close = on_close
+         self.window = window
++        hub_home = getattr(hub, "home", None)
++        if state_path is not None:
++            self.state_path = Path(state_path)
++        elif home is not None:
++            self.state_path = overlay_config_file(home)
++        elif isinstance(hub_home, (str, os.PathLike)):
++            self.state_path = overlay_config_file(hub_home)
++        else:
++            self.state_path = None
+         self.stopped = threading.Event()
++        self.hidden = False
++        self._interrupted = False
++        self._dismissed_requests = set()
++        self._active_ids = set()
++        self.translucent = True
++        self._pos = None
++        self._runtime_x = None
+         self.root = None
+         self.model = display_model({})
+         self.message = ""
+         self._drag = None
++        self._dragged = False
+         self._height = None
++        self._anchor_bottom = None
+         self._pressed_decisions = {}
++        self.frame = None
++        self.header = None
++        self.status_label = None
++        self.alpha_button = None
++        self.body = None
++        self.rows = []
++        self.detail = None
++        self.risk = None
++        self.summary = None
++        self.decisions = None
++        self.decision_buttons = {}
++        self.note = None
++
++    @staticmethod
++    def _request_ids(state):
++        return {item["id"] for item in list(state.get("pending", ())) + list(state.get("locked", ()))
++                if isinstance(item, dict) and isinstance(item.get("id"), str)}
+ 
+     def stop(self):
+         """May be called by another thread; Tk observes it on the next poll."""
+         self.stopped.set()
+ 
++    def hide(self):
++        """Hide the overlay without stopping Hub or ending the Tk loop."""
++        self._dismissed_requests = set(self._active_ids)
++        request = self.model.get("request")
++        if request and isinstance(request.get("id"), str):
++            self._dismissed_requests.add(request["id"])
++        self.hidden = True
++        if getattr(self.hub, "rendered_source", None) == "overlay":
++            self.hub.record_rendered(None, None, source="overlay")
++        if self.root is not None:
++            self.root.withdraw()
++        if self.window is not None:
++            self.window.restore()
++
++    def show(self):
++        """Re-show a hidden overlay without stealing foreground focus."""
++        self.hidden = False
++        self._dismissed_requests.clear()
++        if self.root is not None:
++            self.root.deiconify()
++            self._apply_alpha()
++        if self.window is not None:
++            self.window.show()
++
++    def _apply_alpha(self):
++        if self.root is not None:
++            try:
++                self.root.attributes(
++                    "-alpha", TRANSLUCENT_ALPHA if self.translucent else OPAQUE_ALPHA)
++            except Exception as error:
++                log.debug("Overlay alpha unavailable: %s", error)
++
++    def toggle_translucent(self):
++        self.translucent = not self.translucent
++        self._apply_alpha()
++        if self.alpha_button is not None:
++            self.alpha_button.configure(
++                bg="#2b394d" if self.translucent else BACKGROUND,
++                fg=FOREGROUND if self.translucent else "#778292")
++        self._save_prefs()
++        if self.window is not None:
++            self.window.restore()
++
++    def _load_prefs(self):
++        if self.state_path is None or not self.state_path.exists():
++            return
++        try:
++            data = json.loads(self.state_path.read_text(encoding="utf-8-sig"))
++        except (OSError, ValueError) as error:
++            log.warning("Could not read overlay config %s: %s", self.state_path, error)
++            return
++        if not isinstance(data, dict):
++            log.warning("Overlay config %s must be a JSON object", self.state_path)
++            return
++        x, y = data.get("x"), data.get("y")
++        if type(x) is int and type(y) is int:
++            self._pos = (x, y)
++        translucent = data.get("translucent")
++        if type(translucent) is bool:
++            self.translucent = translucent
++
++    def _save_prefs(self):
++        if self.state_path is None:
++            return
++        data = {"translucent": self.translucent}
++        if self._pos is not None:
++            data["x"], data["y"] = int(self._pos[0]), int(self._pos[1])
++        try:
++            self.state_path.parent.mkdir(parents=True, exist_ok=True)
++            temp = self.state_path.with_suffix(".json.tmp")
++            temp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
++            temp.replace(self.state_path)
++        except OSError as error:
++            log.warning("Could not save overlay config %s: %s", self.state_path, error)
++
++    def _callback_exception(self, exc_type, exc_value, exc_tb):
++        if issubclass(exc_type, KeyboardInterrupt):
++            self._interrupted = True
++            self.stop()
++            if self.root is not None:
++                self.root.quit()
++            return
++        log.error("Overlay callback failed", exc_info=(exc_type, exc_value, exc_tb))
++
+     def dispatch(self, action, request_id=None, nonce=None):
+         """Label and hotkey controls ultimately call the same Hub.action method."""
+         if self.window is not None:
+@@ -199,14 +337,42 @@ class Overlay:
+         label.bind("<ButtonRelease-1>", lambda event: callback())
+         return label
+ 
++    def _bind_drag(self, widget):
++        widget.bind("<ButtonPress-1>", self._start_drag)
++        widget.bind("<B1-Motion>", self._move)
++        widget.bind("<ButtonRelease-1>", self._end_drag)
++
+     def _start_drag(self, event):
+         self._press(event)
+-        self._drag = (event.x_root - self.root.winfo_x(), event.y_root - self.root.winfo_y())
++        base_x = self._pos[0] if self._pos is not None else self.root.winfo_x()
++        base_y = self._pos[1] if self._pos is not None else self.root.winfo_y()
++        # Prefer live window coordinates when Tk returns concrete integers.
++        live_x, live_y = self.root.winfo_x(), self.root.winfo_y()
++        if type(live_x) is int and type(live_y) is int and not self._dragged:
++            base_x, base_y = live_x, live_y
++        self._drag = (event.x_root - base_x, event.y_root - base_y)
++        self._dragged = False
+ 
+     def _move(self, event):
+         if self._drag is not None:
+-            self.root.geometry("+%d+%d" % (max(0, event.x_root - self._drag[0]),
+-                                          max(0, event.y_root - self._drag[1])))
++            x = max(0, event.x_root - self._drag[0])
++            y = max(0, event.y_root - self._drag[1])
++            self._pos = (x, y)
++            self._runtime_x = x
++            if self._height is not None:
++                self._anchor_bottom = y + self._height
++            self._dragged = True
++            self.root.geometry("+%d+%d" % (x, y))
++
++    def _end_drag(self, event=None):
++        if self._drag is not None:
++            moved = self._dragged
++            self._drag = None
++            self._dragged = False
++            if moved:
++                self._save_prefs()
++        if self.window is not None:
++            self.window.restore()
+ 
+     def _select(self, number):
+         if self.model["slots"][number - 1]["occupied"]:
+@@ -231,22 +397,34 @@ class Overlay:
+         self.root.overrideredirect(True)
+         self.root.attributes("-topmost", True)
+         self.root.configure(bg=BACKGROUND)
+-        frame = tk.Frame(self.root, bg=BACKGROUND, padx=12, pady=10, width=WIDTH)
+-        frame.pack(fill="both", expand=True)
+-        frame.columnconfigure(0, weight=1)
+-        header = tk.Frame(frame, bg=BACKGROUND)
+-        header.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+-        title = tk.Label(header, text="AGENTDECK HUB", bg=BACKGROUND, fg=FOREGROUND,
+-                         anchor="w", font=("Segoe UI", 10, "bold"), takefocus=False)
+-        title.pack(side="left", fill="x", expand=True)
+-        title.bind("<ButtonPress-1>", self._start_drag)
+-        title.bind("<B1-Motion>", self._move)
+-        self._button(header, "×", self.stop, bg=BACKGROUND, fg="#aab3c1",
+-                     font=("Segoe UI", 13)).pack(side="right")
++        self.root.protocol("WM_DELETE_WINDOW", self.hide)
++        self.frame = tk.Frame(self.root, bg=BACKGROUND, padx=12, pady=6, width=WIDTH)
++        self.frame.pack(fill="both", expand=True)
++        self.frame.columnconfigure(0, weight=1)
++        self._bind_drag(self.frame)
++        self.header = tk.Frame(self.frame, bg=BACKGROUND)
++        self.header.grid(row=0, column=0, sticky="ew")
++        self._bind_drag(self.header)
++        self.status_label = tk.Label(self.header, text="0 个会话 / 0 个待批", bg=BACKGROUND,
++                                     fg=FOREGROUND, anchor="w",
++                                     font=("Segoe UI", 9, "bold"), takefocus=False)
++        self.status_label.pack(side="left", fill="x", expand=True)
++        self._bind_drag(self.status_label)
++        self._button(self.header, "×", self.hide, bg=BACKGROUND, fg="#aab3c1",
++                     padx=4, font=("Segoe UI", 12)).pack(side="right")
++        self.alpha_button = self._button(
++            self.header, "半透明", self.toggle_translucent,
++            bg="#2b394d" if self.translucent else BACKGROUND,
++            fg=FOREGROUND if self.translucent else "#778292",
++            padx=6, pady=1, font=("Segoe UI", 8))
++        self.alpha_button.pack(side="right", padx=(0, 4))
++        self.body = tk.Frame(self.frame, bg=BACKGROUND)
++        self.body.grid(row=1, column=0, sticky="ew", pady=(8, 0))
++        self.body.columnconfigure(0, weight=1)
+         self.rows = []
+         for number in range(1, 7):
+-            row = tk.Frame(frame, bg=BACKGROUND, padx=5, pady=5)
+-            row.grid(row=number, column=0, sticky="ew", pady=1)
++            row = tk.Frame(self.body, bg=BACKGROUND, padx=5, pady=5)
++            row.grid(row=number - 1, column=0, sticky="ew", pady=1)
+             row.columnconfigure(1, weight=1)
+             number_label = self._button(row, str(number), lambda n=number: self._select(n),
+                                         bg=BACKGROUND, fg="#9aa6b8", width=2,
+@@ -260,8 +438,8 @@ class Overlay:
+                                  font=("Segoe UI", 8, "bold"))
+             badge.grid(row=0, column=2)
+             self.rows.append((row, number_label, name, badge))
+-        self.detail = tk.Frame(frame, bg=BACKGROUND)
+-        self.detail.grid(row=7, column=0, sticky="ew", pady=(10, 0))
++        self.detail = tk.Frame(self.body, bg=BACKGROUND)
++        self.detail.grid(row=6, column=0, sticky="ew", pady=(10, 0))
+         self.risk = tk.Label(self.detail, bg=BACKGROUND, anchor="w", takefocus=False,
+                              font=("Segoe UI", 9, "bold"))
+         self.risk.pack(fill="x")
+@@ -280,11 +458,24 @@ class Overlay:
+             label.bind("<ButtonRelease-1>", lambda event, a=action: self._decision_release(a))
+             label.pack(side="left", padx=(0, 8))
+             self.decision_buttons[action] = label
+-        self.note = tk.Label(frame, text="", bg=BACKGROUND, fg="#aab3c1", anchor="w",
++        self.note = tk.Label(self.body, text="", bg=BACKGROUND, fg="#aab3c1", anchor="w",
+                              wraplength=WIDTH - 30, takefocus=False, font=("Segoe UI", 8))
+-        self.note.grid(row=8, column=0, sticky="ew", pady=(7, 0))
++        self.note.grid(row=7, column=0, sticky="ew", pady=(7, 0))
+ 
+     def _render(self):
++        if self.status_label is not None:
++            self.status_label.configure(
++                text=self.model["summary_text"],
++                fg=COLORS["ASK"] if self.model["pending_count"] else FOREGROUND)
++        if self.alpha_button is not None:
++            self.alpha_button.configure(
++                bg="#2b394d" if self.translucent else BACKGROUND,
++                fg=FOREGROUND if self.translucent else "#778292")
++        if self.body is not None:
++            if self.model["expanded"]:
++                self.body.grid()
++            else:
++                self.body.grid_remove()
+         for data, (row, number, name, badge) in zip(self.model["slots"], self.rows):
+             background = "#273344" if data["selected"] else BACKGROUND
+             row.configure(bg=background)
+@@ -296,9 +487,11 @@ class Overlay:
+             badge.configure(text=data["label"], bg=data["color"])
+         request = self.model["request"]
+         if request is None:
+-            self.detail.grid_remove()
++            if self.detail is not None:
++                self.detail.grid_remove()
+         else:
+-            self.detail.grid()
++            if self.detail is not None:
++                self.detail.grid()
+             self.risk.configure(text=request["label"], fg=request["color"])
+             self.summary.configure(text=request["summary"])
+             for action, key, color in (("approve", "can_approve", COLORS["RUN"]),
+@@ -306,58 +499,94 @@ class Overlay:
+                 enabled = request[key]
+                 self.decision_buttons[action].configure(bg=color if enabled else "#39414e",
+                                                         cursor="hand2" if enabled else "arrow")
+-        self.note.configure(text=self.message)
++        if self.note is not None:
++            self.note.configure(text=self.message)
+ 
+     def _poll(self):
+         if self.stopped.is_set():
+             self.root.quit()
+             return
+         previous_model = self.model
++        previous_active = set(self._active_ids)
++        previous_dismissed = set(self._dismissed_requests)
+         try:
+-            self.model = display_model(self.hub.state())
++            state = self.hub.state()
++            active_ids = self._request_ids(state)
++            self._active_ids = active_ids
++            self._dismissed_requests &= active_ids
++            reappear = self.hidden and bool(active_ids - self._dismissed_requests)
++            self.model = display_model(state)
+             self._render()
+             self.root.update_idletasks()
+-            request = self.model["request"]
+-            # Startup paints the withdrawn window for layout; acknowledge only visible pixels.
+-            if self.root.state() != "withdrawn":
+-                self.hub.record_rendered(request["id"] if request else None,
+-                                         request.get("nonce") if request else None, source="overlay")
+             if self._height is not None:
+                 height = self.root.winfo_reqheight()
+                 if height != self._height:
+-                    self.root.geometry("%dx%d+%d+%d" % (WIDTH, height, self.root.winfo_x(),
+-                                       max(0, self.root.winfo_y() + self._height - height)))
++                    anchor = (self.root.winfo_y() + self._height
++                              if self._anchor_bottom is None else self._anchor_bottom)
++                    self._anchor_bottom = anchor
++                    x = self._runtime_x if self._runtime_x is not None else self.root.winfo_x()
++                    self.root.geometry("%dx%d+%d+%d" % (
++                        WIDTH, height, x, max(0, anchor - height)))
+                     self._height = height
++            if reappear:
++                self.show()
++            request = self.model["request"]
++            # Startup and hidden states keep the window withdrawn; acknowledge only visible pixels.
++            if not self.hidden and self.root.state() != "withdrawn":
++                self.hub.record_rendered(request["id"] if request else None,
++                                         request.get("nonce") if request else None, source="overlay")
++        except KeyboardInterrupt:
++            self._interrupted = True
++            self.stop()
++            self.root.quit()
++            return
+         except Exception as error:
+             self.model = previous_model
++            self._active_ids = previous_active
++            self._dismissed_requests = previous_dismissed
+             log.warning("Overlay refresh failed: %s", error)
+-            self.note.configure(text="Hub state unavailable")
++            if self.note is not None:
++                self.note.configure(text="Hub state unavailable")
+         self.root.after(POLL_MS, self._poll)
+ 
+     def run(self):
+-        """Own the main-thread Tk loop until stop, close, or startup failure."""
++        """Own the main-thread Tk loop until stop, interrupt, or startup failure."""
+         if self.stopped.is_set():
+             return
++        self._load_prefs()
+         try:
+             import tkinter as tk
+             if self.window is None and os.name == "nt":
+                 self.window = NoActivateWindow()
+             self.root = tk.Tk()
++            self.root.report_callback_exception = self._callback_exception
+             self.root.withdraw()
+             self._build()
+             self._poll()
+             self.root.update_idletasks()
+             height = self.root.winfo_reqheight()
+             self._height = height
+-            self.root.geometry("%dx%d+%d+%d" % (WIDTH, height,
+-                               max(0, self.root.winfo_screenwidth() - WIDTH - 24),
+-                               max(0, self.root.winfo_screenheight() - height - 64)))
++            screen_w = self.root.winfo_screenwidth()
++            screen_h = self.root.winfo_screenheight()
++            if self._pos is not None:
++                x = min(max(0, self._pos[0]), max(0, screen_w - WIDTH))
++                y = min(max(0, self._pos[1]), max(0, screen_h - height))
++            else:
++                x = max(0, screen_w - WIDTH - 24)
++                y = max(0, screen_h - height - 64)
++            self._runtime_x = x
++            self._anchor_bottom = y + height
++            self.root.geometry("%dx%d+%d+%d" % (WIDTH, height, x, y))
++            self._apply_alpha()
+             if self.window is not None:
+                 self.window.apply(self.root.winfo_id())
+             self.root.deiconify()
++            self._apply_alpha()
+             if self.window is not None:
+                 self.window.show()
+             self.root.mainloop()
++            if self._interrupted:
++                raise KeyboardInterrupt
+         finally:
+             self.stopped.set()
+             try:
+diff --git a/_rollback/overlay-keys/hub.py b/pc/hub.py
+index 5746305..f76b7bc 100644
+--- a/_rollback/overlay-keys/hub.py
++++ b/pc/hub.py
+@@ -159,6 +159,7 @@ class Hub:
+         self.critical_rules = CRITICAL_RULES if critical_rules is None else list(critical_rules)
+         for pattern in self.risk_rules + self.critical_rules:
+             re.compile(pattern)
++        self.home = Path.home() if home is None else Path(home)
+         self.audit = AuditLog(token_file(home).with_name("audit.jsonl")) if audit is None else audit
+         self.prompts = load_json(Path(__file__).with_name("hub_prompts.json")) if prompts is None else prompts
+         self.lock = threading.RLock()
+@@ -566,7 +567,7 @@ class Hub:
+             raise HubError("action must not be empty")
+         command = parts[0]
+         argument = parts[1] if len(parts) == 2 else None
+-        if command not in ("slot", "cycle", "approve", "deny", "interrupt", "voice", "voice_down", "voice_up", "screenshot", "prompt"):
++        if command not in ("slot", "cycle", "next_wait", "approve", "deny", "interrupt", "voice", "voice_down", "voice_up", "screenshot", "prompt"):
+             raise HubError("unknown action")
+         if command not in ("slot", "cycle", "prompt") and argument is not None:
+             raise HubError("unexpected action argument")
+@@ -617,25 +618,38 @@ class Hub:
+                     return {"action": command, "request_id": None, "status": "no_request"}
+                 if voice_active:
+                     raise HubError("release voice before sending input", 409)
+-            if command in ("slot", "cycle"):
+-                raw = argument if argument is not None else payload.get("slot" if command == "slot" else "delta")
+-                if isinstance(raw, bool) or not isinstance(raw, (str, int)):
+-                    raise HubError("slot/cycle needs an integer")
+-                try:
+-                    number = int(raw)
+-                except ValueError as error:
+-                    raise HubError("slot/cycle needs an integer") from error
++            if command in ("slot", "cycle", "next_wait"):
+                 sessions = sorted(self.sessions.items(), key=lambda pair: pair[1]["slot"])
+-                if command == "slot":
+-                    selected = next((identity for identity, s in sessions if s["slot"] == number), None)
+-                else:
+-                    if number == 0:
+-                        raise HubError("cycle delta must not be zero")
++                if command == "next_wait":
+                     identities = [identity for identity, _ in sessions]
+-                    index = identities.index(self.selected) if self.selected in identities else (-1 if number > 0 else 0)
+-                    selected = identities[(index + number) % len(identities)] if identities else None
+-                if selected is None:
+-                    raise HubError("no session in that slot", 404)
++                    index = identities.index(self.selected) if self.selected in identities else -1
++                    selected = next(
++                        (sessions[(index + step) % len(sessions)][0]
++                         for step in range(1, len(sessions) + 1)
++                         if sessions[(index + step) % len(sessions)][1]["state"] in ("wait", "locked")),
++                        None,
++                    )
++                    if selected is None:
++                        return {"action": command, "status": "no_waiting_session",
++                                "slot": None, "request_id": self.displayed_request_id}
++                else:
++                    raw = argument if argument is not None else payload.get("slot" if command == "slot" else "delta")
++                    if isinstance(raw, bool) or not isinstance(raw, (str, int)):
++                        raise HubError("slot/cycle needs an integer")
++                    try:
++                        number = int(raw)
++                    except ValueError as error:
++                        raise HubError("slot/cycle needs an integer") from error
++                    if command == "slot":
++                        selected = next((identity for identity, s in sessions if s["slot"] == number), None)
++                    else:
++                        if number == 0:
++                            raise HubError("cycle delta must not be zero")
++                        identities = [identity for identity, _ in sessions]
++                        index = identities.index(self.selected) if self.selected in identities else (-1 if number > 0 else 0)
++                        selected = identities[(index + number) % len(identities)] if identities else None
++                    if selected is None:
++                        raise HubError("no session in that slot", 404)
+                 previous = self.pending.get(self.displayed_request_id)
+                 if previous is not None:
+                     previous.armed_at = None
+diff --git a/_rollback/overlay-keys/hub_keys.json b/pc/hub_keys.json
+index 2a831ad..8bd5a29 100644
+--- a/_rollback/overlay-keys/hub_keys.json
++++ b/pc/hub_keys.json
+@@ -8,7 +8,8 @@
+     "Knob 3 clockwise - -> cycle +1, counterclockwise = -> cycle -1, press V -> prompt summary.",
+     "Knob 4 clockwise ] -> cycle +1, counterclockwise [ -> cycle -1, press Ctrl+0 -> prompt continue.",
+     "Slots 4..6 are available through HTTP or custom bindings. Only fresh single-key presses with exact device modifiers trigger actions. High-risk approvals need two presses within 1.5 seconds.",
+-    "A string binding runs on key down. An object can bind down and up separately; up pairs with the accepted physical press even if modifiers change. Voice guards last at most 60 seconds; approvals and other window/input actions require releasing voice first."
++    "A string binding runs on key down. An object can bind down and up separately; up pairs with the accepted physical press even if modifiers change. Voice guards last at most 60 seconds; approvals and other window/input actions require releasing voice first.",
++    "4x5 measured keypad layout: Row 1: E (slot 1), B (slot 2), Ctrl+Z (slot 3), Space (interrupt); Row 2: G (approve), Ctrl+F (deny), hold H (voice_down/up); Row 3: L (screenshot), M (prompt continue), Ctrl+T (prompt tests), Ctrl+D (prompt summary); Row 4: U (prompt commit), X (cycle +1); Row 5: Tab (next_wait), P (cycle -1)."
+   ],
+   "bindings": {
+     "hid:0x08": "slot 1",
+@@ -22,6 +23,12 @@
+       "up": "voice_up"
+     },
+     "hid:0x0F": "screenshot",
++    "hid:0x10": "prompt continue",
++    "ctrl+hid:0x17": "prompt tests",
++    "ctrl+hid:0x07": "prompt summary",
++    "hid:0x18": "prompt commit",
++    "hid:0x1B": "cycle +1",
++    "hid:0x2B": "next_wait",
+     "hid:0x16": "cycle +1",
+     "hid:0x09": "cycle -1",
+     "hid:0x15": "cycle +1",
+@@ -76,6 +83,12 @@
+         "up": "voice_up"
+       },
+       "hid:0x0F": "screenshot",
++      "hid:0x10": "prompt continue",
++      "ctrl+hid:0x17": "prompt tests",
++      "ctrl+hid:0x07": "prompt summary",
++      "hid:0x18": "prompt commit",
++      "hid:0x1B": "cycle +1",
++      "hid:0x2B": "next_wait",
+       "ctrl+hid:0x27": "interrupt",
+       "hid:0x16": "cycle +1",
+       "hid:0x09": "cycle -1",
+diff --git a/_rollback/overlay-keys/hub_keys.md b/pc/hub_keys.md
+index cbb5e92..003d2b6 100644
+--- a/_rollback/overlay-keys/hub_keys.md
++++ b/pc/hub_keys.md
+@@ -1,33 +1,39 @@
+ # 用 CXT 宏键盘模拟 v2
+ 
+-`hub_keys.json` 的顶层 `bindings` 保留现有默认布局；新增的
+-`v2_emulation` 需要显式选择：
++`hub_keys.json` 的顶层 `bindings` 对应 4×5 宏键盘实测出厂布局与旋钮绑定；`v2_emulation` profile 亦包含这些绑定：
+ 
+ ```text
++D:/conda/miniconda3/python.exe pc/hub.py --backend usb
++# 或使用 v2_emulation 配置
+ D:/conda/miniconda3/python.exe pc/hub.py --backend usb --profile v2_emulation
+ ```
+ 
+-这些绑定只解释现有 USB 报文，不改键、不安装钩子。以下出厂码来自
+-`deck_map.json`；旋钮从左到右编号 1–4。普通键按现有功能标记定位，
+-仓库没有确认它们的行列位置，因此不编造第几行第几列。可以按“建议标签”贴纸。
++这些绑定只解释现有 USB 报文，不改键、不安装钩子。
+ 
+-| 物理键 / 位置描述 | 已确认的出厂码 | v2 动作 | 建议标签 |
+-| --- | --- | --- | --- |
+-| E，原橡皮擦键 | `hid:0x08` | `slot 1` | 会话 1 |
+-| B，原画笔键 | `hid:0x05` | `slot 2` | 会话 2 |
+-| Ctrl+Z，原撤销键 | `ctrl+hid:0x1D` | `slot 3` | 会话 3 |
+-| Space，原平移键 | `hid:0x2C` | `slot 4` | 会话 4 |
+-| 旋钮 2 按下，Q | `hid:0x14` | `slot 5` | 会话 5 |
+-| 旋钮 3 按下，V | `hid:0x19` | `slot 6` | 会话 6 |
+-| G，原渐变 / 油漆桶键 | `hid:0x0A` | `approve` | ✓ |
+-| Ctrl+F，原滤镜快捷键 | `ctrl+hid:0x09` | `deny` | ✗ |
+-| H，原抓手键，按住 / 松开 | `hid:0x0B` | `voice_down` / `voice_up` | 按住说话 |
+-| 旋钮 1（最左）按下，L | `hid:0x0F` | `screenshot` | 截图 |
+-| 旋钮 4（最右）按下，Ctrl+0 | `ctrl+hid:0x27` | `interrupt` | 中断（替代键） |
+-| 旋钮 1 顺时针 / 逆时针，S / F | `hid:0x16` / `hid:0x09` | `cycle +1` / `cycle -1` | 下个 / 上个会话 |
+-| 旋钮 2 顺时针 / 逆时针，R / P | `hid:0x15` / `hid:0x13` | `cycle +1` / `cycle -1` | 下个 / 上个会话 |
+-| 旋钮 3 顺时针 / 逆时针，- / = | `hid:0x2D` / `hid:0x2E` | `cycle +1` / `cycle -1` | 下个 / 上个会话 |
+-| 旋钮 4 顺时针 / 逆时针，] / [ | `hid:0x30` / `hid:0x2F` | `cycle +1` / `cycle -1` | 下个 / 上个会话 |
++## 实测 4 列 × 5 排 宏键盘出厂键位表
++
++实测键位（2026-11-18 用户实测确认，hub 通过 USB 独占读取，映射在 `pc/hub_keys.json`）：
++
++| 排 \ 列 | 第 1 列 | 第 2 列 | 第 3 列 | 第 4 列 |
++| --- | --- | --- | --- | --- |
++| **第 1 排** | E (`hid:0x08`)<br>`slot 1`（会话 1） | B (`hid:0x05`)<br>`slot 2`（会话 2） | Ctrl+Z (`ctrl+hid:0x1D`)<br>`slot 3`（会话 3） | Space (`hid:0x2C`)<br>`interrupt`（打断） |
++| **第 2 排** | G (`hid:0x0A`)<br>`approve`（✓ 批准） | Ctrl+F (`ctrl+hid:0x09`)<br>`deny`（✗ 拒绝） | H (`hid:0x0B`)<br>`voice_down`/`up`（按住说话） | （第 4 颗无信号） |
++| **第 3 排** | L (`hid:0x0F`)<br>`screenshot`（截图） | M (`hid:0x10`)<br>`prompt continue`（继续） | Ctrl+T (`ctrl+hid:0x17`)<br>`prompt tests`（跑测试） | Ctrl+D (`ctrl+hid:0x07`)<br>`prompt summary`（总结进度） |
++| **第 4 排** | U (`hid:0x18`)<br>`prompt commit`（提交） | X (`hid:0x1B`)<br>`cycle +1`（下个会话） | （第 3 颗无信号） | （第 4 颗无信号） |
++| **第 5 排** | Tab (`hid:0x2B`)<br>`next_wait`（跳到等我的会话） | Ctrl+C (`ctrl+hid:0x06`)<br>（留空，防与系统快捷键冲突） | Ctrl+V (`ctrl+hid:0x19`)<br>（留空，防与系统快捷键冲突） | P (`hid:0x13`)<br>`cycle -1`（上个会话） |
++
++### 旋钮绑定（从左到右编号 1–4）
++
++| 旋钮 | 旋转 / 按下 | 出厂码 | 动作 | 功能说明 |
++| --- | --- | --- | --- | --- |
++| 旋钮 1（最左） | 顺时针 S / 逆时针 F | `hid:0x16` / `hid:0x09` | `cycle +1` / `cycle -1` | 下一个 / 上一个会话 |
++| 旋钮 1 按下 | L 键 | `hid:0x0F` | `screenshot` | 截图并粘贴路径 |
++| 旋钮 2 | 顺时针 R / 逆时针 P | `hid:0x15` / `hid:0x13` | `cycle +1` / `cycle -1` | 下一个 / 上一个会话 |
++| 旋钮 2 按下 | Q 键 | `hid:0x14` | `prompt tests` | 跑测试（旧映射保留兼容） |
++| 旋钮 3 | 顺时针 - / 逆时针 = | `hid:0x2D` / `hid:0x2E` | `cycle +1` / `cycle -1` | 下一个 / 上一个会话 |
++| 旋钮 3 按下 | V 键 | `hid:0x19` | `prompt summary` | 总结进度（旧映射保留兼容） |
++| 旋钮 4（最右） | 顺时针 ] / 逆时针 [ | `hid:0x30` / `hid:0x2F` | `cycle +1` / `cycle -1` | 下一个 / 上一个会话 |
++| 旋钮 4 按下 | Ctrl+0 | `ctrl+hid:0x27` | `prompt continue` | 继续（旧映射保留兼容） |
+ 
+ 低风险请求按一次 ✓；高风险请求需在 1.5 秒内松开并再按一次 ✓。
+ 极危请求转回 agent 原生确认，✓ 返回 `locked`。持续按住产生的重复报文
+diff --git a/_rollback/overlay-keys/hub_README.md b/pc/hub_README.md
+index c9f8b4b..2b1e62e 100644
+--- a/_rollback/overlay-keys/hub_README.md
++++ b/pc/hub_README.md
+@@ -212,6 +212,20 @@ the existing WinUSB interface 0 setup; it does not change drivers or keymaps.
+ Run one AgentDeck keyboard reader at a time: use Hub's USB mode in place of
+ `deck.py run` / `daemon.py --deck` when testing Hub controls.
+ 
++### 实测 4 列 × 5 排 宏键盘出厂键位表（USB 模式）
++
++实测出厂键位（4 列 × 5 排，hub 通过 USB 独占读取，映射于 `pc/hub_keys.json`）：
++
++| 排 \ 列 | 第 1 列 | 第 2 列 | 第 3 列 | 第 4 列 |
++| --- | --- | --- | --- | --- |
++| **第 1 排** | E (`hid:0x08`)<br>`slot 1`（会话 1） | B (`hid:0x05`)<br>`slot 2`（会话 2） | Ctrl+Z (`ctrl+hid:0x1D`)<br>`slot 3`（会话 3） | Space (`hid:0x2C`)<br>`interrupt`（打断） |
++| **第 2 排** | G (`hid:0x0A`)<br>`approve`（✓ 批准） | Ctrl+F (`ctrl+hid:0x09`)<br>`deny`（✗ 拒绝） | H (`hid:0x0B`)<br>`voice_down`/`up`（按住说话） | （第 4 颗无信号） |
++| **第 3 排** | L (`hid:0x0F`)<br>`screenshot`（截图） | M (`hid:0x10`)<br>`prompt continue`（继续） | Ctrl+T (`ctrl+hid:0x17`)<br>`prompt tests`（跑测试） | Ctrl+D (`ctrl+hid:0x07`)<br>`prompt summary`（总结进度） |
++| **第 4 排** | U (`hid:0x18`)<br>`prompt commit`（提交） | X (`hid:0x1B`)<br>`cycle +1`（下个会话） | （第 3 颗无信号） | （第 4 颗无信号） |
++| **第 5 排** | Tab (`hid:0x2B`)<br>`next_wait`（跳到等我的会话） | Ctrl+C (`ctrl+hid:0x06`)<br>（留空） | Ctrl+V (`ctrl+hid:0x19`)<br>（留空） | P (`hid:0x13`)<br>`cycle -1`（上个会话） |
++
++旋钮 1–4：顺时针/逆时针均为切换会话（`cycle +1` / `cycle -1`），按下旋钮 1 为截图（L 键），其余旋钮按下保留兼容映射。详情见 `pc/hub_keys.md`。
++
+ ## 没有 AgentDeck 硬件怎么用
+ 
+ Windows 用户可以通过全局热键或鼠标使用 Hub，无需安装驱动或更换 WinUSB。
+@@ -251,7 +265,12 @@ VIA/QMK 键盘或普通宏键盘：在键盘配置工具中把按键改成 F13
+ 因此 60 秒超时结束后，下次按键会重新开始。热键按下触发，持续按住不重复。
+ 若某个组合已被占用，只记录该键的一条警告，其余组合继续工作。
+ 
+-浮窗宽约 360 px，默认位于右下角，始终置顶，可拖动标题栏；× 退出 Hub。
++浮窗宽约 360 px，始终置顶。默认缩成一条细条（只显示“N 个会话 / M 个待批”），不遮挡屏幕视野；
++有待批请求时才自动展开显示会话槽位、命令详情与审批按钮，审批完成自动收回细条。
++点关闭（×）只隐藏浮窗，Hub 进程继续在后台运行；有新的待批请求时浮窗会自动重新展开出现。
++Hub 真正退出只通过 `stop_agentdeck.bat` 或终端 Ctrl+C。
++浮窗可用鼠标左键拖动到屏幕任意位置，坐标自动持久化到 `~/.agentdeck/overlay.json`，下次启动沿用。
++标题栏右侧提供“半透明”开关（窗口透明度 0.85，默认开启），点击可在半透明和完全不透明间切换，状态同步保存。
+ 每 300 ms 从 Hub 的线程安全状态接口刷新 6 个槽位：RUN 绿、ASK 琥珀、
+ DONE 蓝、ERR 红、IDLE 灰。待批请求显示最多 80 字的命令摘要和风险档；
+ high 用红色提示，首次 ✓ 提示再按一次，仍需在 1.5 秒内确认。
+diff --git a/_rollback/overlay-keys/test_hub_overlay.py b/pc/test_hub_overlay.py
+index 3a32613..a26404c 100644
+--- a/_rollback/overlay-keys/test_hub_overlay.py
++++ b/pc/test_hub_overlay.py
+@@ -1,12 +1,16 @@
+ """Offline overlay checks: no Tk instance, Windows focus, or device access."""
+ from copy import deepcopy
+ import ctypes
++import json
++from pathlib import Path
+ import sys
++import tempfile
+ import types
+ import unittest
+ from unittest.mock import Mock, patch
+ 
+-from hub_overlay import COLORS, NoActivateWindow, Overlay, POLL_MS, display_model
++from hub_overlay import (COLORS, FOREGROUND, BACKGROUND, TRANSLUCENT_ALPHA, OPAQUE_ALPHA,
++                         NoActivateWindow, Overlay, POLL_MS, display_model)
+ 
+ 
+ class OverlayModelTests(unittest.TestCase):
+@@ -323,5 +327,208 @@ class NoActivateTests(unittest.TestCase):
+         self.window.close()
+ 
+ 
++class OverlayVisibilityAndReappearTests(unittest.TestCase):
++    def setUp(self):
++        self.hub = Mock()
++        self.hub.action.return_value = {"status": "allowed"}
++        self.window = Mock()
++        self.overlay = Overlay(self.hub, window=self.window)
++
++    def test_hide_withdraws_root_without_stopping_hub(self):
++        root = self.overlay.root = Mock()
++        self.overlay.hide()
++        self.assertTrue(self.overlay.hidden)
++        self.assertFalse(self.overlay.stopped.is_set())
++        root.withdraw.assert_called_once_with()
++        self.window.restore.assert_called_once_with()
++
++    def test_hide_clears_rendered_request_if_overlay_was_source(self):
++        self.hub.rendered_source = "overlay"
++        self.overlay.root = Mock()
++        self.overlay.hide()
++        self.hub.record_rendered.assert_called_once_with(None, None, source="overlay")
++
++    def test_hidden_overlay_reappears_on_new_request(self):
++        root = self.overlay.root = Mock()
++        root.state.return_value = "withdrawn"
++        self.overlay.hidden = True
++        self.overlay._dismissed_requests = {"req-1"}
++        # Same request does not unhide
++        self.hub.state.return_value = {"displayed_request_id": "req-1", "pending": [{"id": "req-1"}]}
++        with patch.object(self.overlay, "_render"):
++            self.overlay._poll()
++        self.assertTrue(self.overlay.hidden)
++        root.deiconify.assert_not_called()
++
++        # New request arrives
++        self.hub.state.return_value = {"displayed_request_id": "req-2",
++                                       "pending": [{"id": "req-1"}, {"id": "req-2"}]}
++        with patch.object(self.overlay, "_render"):
++            self.overlay._poll()
++        self.assertFalse(self.overlay.hidden)
++        root.deiconify.assert_called_once_with()
++        self.window.show.assert_called_once_with()
++
++
++class OverlayViewAndPrefsTests(unittest.TestCase):
++    def setUp(self):
++        self.hub = Mock()
++        self.window = Mock()
++        self.temp_dir = tempfile.TemporaryDirectory()
++        self.state_path = Path(self.temp_dir.name) / "overlay.json"
++        self.overlay = Overlay(self.hub, window=self.window, state_path=self.state_path)
++
++    def tearDown(self):
++        self.temp_dir.cleanup()
++
++    def test_display_model_summary_and_expanded_flag(self):
++        idle_model = display_model({"sessions": [{"slot": 1, "name": "app", "state": "idle"}]})
++        self.assertEqual(idle_model["session_count"], 1)
++        self.assertEqual(idle_model["pending_count"], 0)
++        self.assertEqual(idle_model["summary_text"], "1 个会话 / 0 个待批")
++        self.assertFalse(idle_model["expanded"])
++
++        pending_model = display_model({
++            "sessions": [{"slot": 1, "name": "app", "state": "wait"},
++                         {"slot": 2, "name": "backend", "state": "think"}],
++            "pending": [{"id": "p1", "summary": "rm -rf", "risk": "high"}],
++            "displayed_request_id": "p1",
++        })
++        self.assertEqual(pending_model["session_count"], 2)
++        self.assertEqual(pending_model["pending_count"], 1)
++        self.assertEqual(pending_model["summary_text"], "2 个会话 / 1 个待批")
++        self.assertTrue(pending_model["expanded"])
++
++    def test_render_collapses_body_when_not_expanded(self):
++        self.overlay.body = Mock()
++        self.overlay.status_label = Mock()
++        self.overlay.alpha_button = Mock()
++        self.overlay.rows = []
++        self.overlay.model = display_model({"sessions": [{"slot": 1, "name": "app"}]})
++        self.overlay._render()
++        self.overlay.body.grid_remove.assert_called_once_with()
++        self.overlay.status_label.configure.assert_called_with(text="1 个会话 / 0 个待批", fg=FOREGROUND)
++
++        self.overlay.body.reset_mock()
++        self.overlay.model = display_model({
++            "pending": [{"id": "p1", "summary": "git push", "risk": "low"}],
++            "displayed_request_id": "p1",
++        })
++        self.overlay.detail = Mock()
++        self.overlay.risk = Mock()
++        self.overlay.summary = Mock()
++        self.overlay.decision_buttons = {"approve": Mock(), "deny": Mock()}
++        self.overlay._render()
++        self.overlay.body.grid.assert_called_once_with()
++        self.overlay.status_label.configure.assert_called_with(text="0 个会话 / 1 个待批", fg=COLORS["ASK"])
++
++    def test_prefs_save_and_load_position_and_translucency(self):
++        self.assertTrue(self.overlay.translucent)
++        self.overlay._pos = (210, 320)
++        self.overlay._save_prefs()
++        self.assertTrue(self.state_path.exists())
++        data = json.loads(self.state_path.read_text(encoding="utf-8"))
++        self.assertEqual(data, {"translucent": True, "x": 210, "y": 320})
++
++        another = Overlay(self.hub, state_path=self.state_path)
++        another._load_prefs()
++        self.assertEqual(another._pos, (210, 320))
++        self.assertTrue(another.translucent)
++
++    def test_toggle_translucent_flips_alpha_and_saves_state(self):
++        self.overlay.root = Mock()
++        self.overlay.alpha_button = Mock()
++        self.overlay.toggle_translucent()
++        self.assertFalse(self.overlay.translucent)
++        self.overlay.root.attributes.assert_called_with("-alpha", 1.0)
++        saved = json.loads(self.state_path.read_text(encoding="utf-8"))
++        self.assertFalse(saved["translucent"])
++
++        self.overlay.toggle_translucent()
++        self.assertTrue(self.overlay.translucent)
++        self.overlay.root.attributes.assert_called_with("-alpha", 0.85)
++        saved = json.loads(self.state_path.read_text(encoding="utf-8"))
++        self.assertTrue(saved["translucent"])
++
++    def test_drag_motion_updates_position_and_saves_on_release(self):
++        self.overlay.root = Mock()
++        self.overlay.root.winfo_x.return_value = 100
++        self.overlay.root.winfo_y.return_value = 200
++        self.overlay._height = 40
++        press = Mock(x_root=120, y_root=210)
++        self.overlay._start_drag(press)
++        self.assertEqual(self.overlay._drag, (20, 10))
++
++        move = Mock(x_root=160, y_root=270)
++        self.overlay._move(move)
++        self.overlay.root.geometry.assert_called_with("+140+260")
++        self.assertEqual(self.overlay._pos, (140, 260))
++        self.assertEqual(self.overlay._anchor_bottom, 300)
++
++        self.overlay._end_drag()
++        saved = json.loads(self.state_path.read_text(encoding="utf-8"))
++        self.assertEqual(saved["x"], 140)
++        self.assertEqual(saved["y"], 260)
++
++
++class KeyBindingsAndNextWaitTests(unittest.TestCase):
++    def test_hub_keys_bindings_contain_all_idle_keys(self):
++        keys_path = Path(__file__).resolve().parent / "hub_keys.json"
++        data = json.loads(keys_path.read_text(encoding="utf-8"))
++        bindings = data["bindings"]
++
++        # 6 idle keys from brief
++        self.assertEqual(bindings.get("hid:0x10"), "prompt continue")
++        self.assertEqual(bindings.get("ctrl+hid:0x17"), "prompt tests")
++        self.assertEqual(bindings.get("ctrl+hid:0x07"), "prompt summary")
++        self.assertEqual(bindings.get("hid:0x18"), "prompt commit")
++        self.assertEqual(bindings.get("hid:0x1B"), "cycle +1")
++        self.assertEqual(bindings.get("hid:0x2B"), "next_wait")
++
++        # Ctrl+C and Ctrl+V left empty
++        self.assertNotIn("ctrl+hid:0x06", bindings)
++        self.assertNotIn("ctrl+hid:0x19", bindings)
++
++        # Old bindings preserved
++        self.assertEqual(bindings.get("hid:0x14"), "prompt tests")
++        self.assertEqual(bindings.get("hid:0x19"), "prompt summary")
++        self.assertEqual(bindings.get("ctrl+hid:0x27"), "prompt continue")
++
++    def test_next_wait_action_cycles_waiting_sessions_and_reports_no_wait(self):
++        import hub
++        with tempfile.TemporaryDirectory() as temp_dir:
++            engine = hub.Hub(home=temp_dir, lcd_enabled=False, desktop_enabled=False)
++            try:
++                engine.sessions = {
++                    ("cc", "s1"): {"agent": "cc", "session_id": "s1", "slot": 1, "state": "think", "name": "s1", "key": "cc-s1"},
++                    ("cc", "s2"): {"agent": "cc", "session_id": "s2", "slot": 2, "state": "wait", "name": "s2", "key": "cc-s2"},
++                    ("cc", "s3"): {"agent": "cc", "session_id": "s3", "slot": 3, "state": "wait", "name": "s3", "key": "cc-s3"},
++                }
++                engine.selected = ("cc", "s1")
++
++                res1 = engine.action({"action": "next_wait"})
++                self.assertEqual(res1["status"], "selected")
++                self.assertEqual(res1["slot"], 2)
++                self.assertEqual(engine.selected, ("cc", "s2"))
++
++                res2 = engine.action({"action": "next_wait"})
++                self.assertEqual(res2["status"], "selected")
++                self.assertEqual(res2["slot"], 3)
++                self.assertEqual(engine.selected, ("cc", "s3"))
++
++                res3 = engine.action({"action": "next_wait"})
++                self.assertEqual(res3["status"], "selected")
++                self.assertEqual(res3["slot"], 2)
++                self.assertEqual(engine.selected, ("cc", "s2"))
++
++                engine.sessions[("cc", "s2")]["state"] = "think"
++                engine.sessions[("cc", "s3")]["state"] = "done"
++                res4 = engine.action({"action": "next_wait"})
++                self.assertEqual(res4["status"], "no_waiting_session")
++                self.assertIsNone(res4["slot"])
++            finally:
++                engine.close()
++
++
+ if __name__ == "__main__":
+     unittest.main(verbosity=2)

@@ -1,0 +1,729 @@
+<!doctype html>
+<html lang="zh-CN" data-lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgentDeck（暂名）— 多 AI Coding Agent 桌面状态屏与物理审批控制器</title>
+<meta name="description" content="同时跑 3–10 个 AI 编程 Agent：长条屏一眼看清谁在等，✓/✗ 走官方钩子直接回答对应会话，高危操作物理按两次才放行。">
+<style>
+:root{
+  --bg:#111418; --bg-2:#171B21; --bg-3:#1E232B; --line:#2A3039;
+  --text:#E8EAED; --muted:#9AA3AE; --dim:#6B7380;
+  --amber:#F5A524; --green:#2BC864; --blue:#3B82F6; --red:#E5484D;
+  --radius:14px; --maxw:1120px;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", Roboto, Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, "SFMono-Regular", "Cascadia Mono", Consolas, "JetBrains Mono", Menlo, monospace;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);line-height:1.65;font-size:16px;-webkit-font-smoothing:antialiased}
+img{max-width:100%;height:auto;display:block}
+.hero-grid>*,.grid2>*,.grid3>*,.anatomy>*,.price-grid>*,.row2>*{min-width:0}
+a{color:var(--amber);text-decoration:none}
+a:hover{text-decoration:underline}
+code{font-family:var(--mono);font-size:.9em;background:var(--bg-3);border:1px solid var(--line);padding:1px 6px;border-radius:6px;white-space:nowrap}
+
+/* language switching: zh is default and shown without JS */
+.en{display:none}
+:root[data-lang="en"] .en{display:revert}
+:root[data-lang="en"] .zh{display:none}
+
+.wrap{max-width:var(--maxw);margin:0 auto;padding:0 16px}
+section{padding:72px 0;border-top:1px solid var(--line)}
+h1,h2,h3{line-height:1.25;margin:0 0 12px}
+h2{font-size:clamp(24px,3.4vw,34px)}
+h3{font-size:19px}
+p{margin:0 0 12px}
+.lead{color:var(--muted);font-size:17px;max-width:720px}
+.eyebrow{font-family:var(--mono);font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--amber);margin-bottom:10px}
+.muted{color:var(--muted)}
+.small{font-size:13px;color:var(--dim)}
+
+/* nav */
+nav{position:sticky;top:0;z-index:20;background:rgba(17,20,24,.88);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+nav .wrap{display:flex;align-items:center;gap:16px;height:58px}
+.brand{font-weight:700;color:var(--text);display:flex;align-items:center;gap:10px;white-space:nowrap}
+.brand .dots{display:flex;gap:3px}
+.brand .dots i{width:7px;height:7px;border-radius:2px;display:block}
+.navlinks{display:flex;gap:18px;margin-left:auto;font-size:14px}
+.navlinks a{color:var(--muted)}
+.navlinks a:hover{color:var(--text);text-decoration:none}
+.langbtn{border:1px solid var(--line);background:var(--bg-2);color:var(--text);border-radius:8px;padding:5px 10px;font:600 13px var(--sans);cursor:pointer}
+.langbtn:hover{border-color:var(--amber)}
+@media (max-width:760px){.navlinks{display:none}.langbtn{margin-left:auto}}
+
+/* buttons */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:13px 22px;border-radius:10px;font-weight:700;font-size:16px;border:1px solid transparent;cursor:pointer;text-decoration:none!important}
+.btn-primary{background:var(--amber);color:#1A1205}
+.btn-primary:hover{filter:brightness(1.08)}
+.btn-ghost{background:transparent;color:var(--text);border-color:var(--line)}
+.btn-ghost:hover{border-color:var(--muted)}
+.btn[disabled]{opacity:.55;cursor:not-allowed}
+
+/* hero */
+.hero{padding:56px 0 40px;border-top:none}
+.hero-grid{display:grid;grid-template-columns:1.05fr 1fr;gap:40px;align-items:center}
+.hero h1{font-size:clamp(30px,5vw,52px);letter-spacing:-.01em}
+.hero h1 em{font-style:normal;color:var(--amber)}
+.hero .cta{display:flex;flex-wrap:wrap;gap:12px;margin:22px 0 12px}
+.hero figure{margin:0}
+.hero figure img{border-radius:var(--radius);border:1px solid var(--line)}
+figcaption{font-size:12px;color:var(--dim);margin-top:8px}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+.chip{font-family:var(--mono);font-size:12px;padding:4px 10px;border-radius:999px;border:1px solid var(--line);background:var(--bg-2);color:var(--muted)}
+@media (max-width:900px){.hero-grid{grid-template-columns:1fr}.hero figure{order:-1}}
+
+/* status strip */
+.strip{display:grid;grid-template-columns:repeat(6,1fr);gap:4px;background:#0A0C0F;border:1px solid var(--line);border-radius:10px;padding:6px;margin-top:22px;max-width:520px}
+.strip div{border-radius:6px;padding:6px 4px;text-align:center;font:600 11px var(--mono);background:var(--bg-2)}
+.strip b{display:block;font-size:10px;color:var(--muted);font-weight:500}
+.s-think{color:var(--blue)} .s-tool{color:#22C3D6} .s-ask{color:var(--amber)} .s-done{color:var(--green)} .s-err{color:var(--red)} .s-idle{color:var(--text)}
+.strip .s-ask{animation:pulse 1.6s ease-in-out infinite}
+@keyframes pulse{50%{background:#3A2A0C}}
+@media (prefers-reduced-motion:reduce){.strip .s-ask{animation:none}}
+
+/* cards */
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:28px}
+.grid2{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin-top:28px}
+@media (max-width:900px){.grid3{grid-template-columns:1fr}}
+@media (max-width:760px){.grid2{grid-template-columns:1fr}}
+.card{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius);padding:22px}
+.card .num{font:700 13px var(--mono);color:var(--amber);margin-bottom:8px}
+.card p{color:var(--muted);font-size:15px}
+.src{font-size:12px;color:var(--dim);margin-top:10px;border-top:1px dashed var(--line);padding-top:8px}
+
+.how .card{border-left:3px solid var(--line)}
+.how .k-green{border-left-color:var(--green)}
+.how .k-blue{border-left-color:var(--blue)}
+.how .k-amber{border-left-color:var(--amber)}
+.how .k-red{border-left-color:var(--red)}
+.status{display:inline-block;font:600 11px var(--mono);padding:2px 8px;border-radius:6px;margin-top:6px}
+.st-ok{background:rgba(43,200,100,.12);color:var(--green);border:1px solid rgba(43,200,100,.35)}
+.st-wip{background:rgba(245,165,36,.10);color:var(--amber);border:1px solid rgba(245,165,36,.35)}
+.st-plan{background:rgba(154,163,174,.10);color:var(--muted);border:1px solid var(--line)}
+
+/* anatomy */
+.anatomy{display:grid;grid-template-columns:1.2fr 1fr;gap:32px;align-items:center;margin-top:28px}
+.anatomy img{border-radius:var(--radius);background:#fff}
+.keys{list-style:none;padding:0;margin:0}
+.keys li{display:grid;grid-template-columns:110px 1fr;gap:12px;padding:10px 0;border-bottom:1px solid var(--line);font-size:15px}
+.keys li b{font-family:var(--mono);font-size:13px;color:var(--text)}
+.keys li span{color:var(--muted)}
+@media (max-width:900px){.anatomy{grid-template-columns:1fr}}
+
+/* agents */
+.agents{display:flex;flex-wrap:wrap;gap:10px;margin-top:24px}
+.badge{display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:10px;background:var(--bg-2);border:1px solid var(--line);font-weight:600}
+.badge .lv{font:600 11px var(--mono);padding:2px 7px;border-radius:5px}
+.legend{display:flex;flex-wrap:wrap;gap:16px;margin-top:16px;font-size:13px;color:var(--muted)}
+
+/* table */
+.tablewrap{overflow-x:auto;margin-top:24px;border:1px solid var(--line);border-radius:var(--radius)}
+table{border-collapse:collapse;width:100%;min-width:760px;font-size:14px}
+th,td{padding:12px 14px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+thead th{background:var(--bg-3);font-size:13px;color:var(--muted);font-weight:600}
+thead th.us{color:var(--amber)}
+tbody th{color:var(--muted);font-weight:500;white-space:nowrap;background:var(--bg-2)}
+td.us{background:rgba(245,165,36,.06)}
+tr:last-child th,tr:last-child td{border-bottom:none}
+.y{color:var(--green);font-weight:700}
+.n{color:var(--red);font-weight:700}
+
+/* pricing */
+.price-grid{display:grid;grid-template-columns:1.1fr 1fr;gap:16px;margin-top:28px}
+@media (max-width:900px){.price-grid{grid-template-columns:1fr}}
+.price{font-size:46px;font-weight:800;line-height:1}
+.price s{font-size:20px;color:var(--dim);font-weight:500;margin-left:8px}
+.price-card{border-color:rgba(245,165,36,.45);background:linear-gradient(180deg,rgba(245,165,36,.08),var(--bg-2) 60%)}
+.ticks{list-style:none;padding:0;margin:16px 0}
+.ticks li{padding:6px 0 6px 26px;position:relative;color:var(--muted);font-size:15px}
+.ticks li::before{content:"\2713";position:absolute;left:0;color:var(--green);font-weight:700}
+
+/* deposit */
+.notice{display:flex;gap:12px;align-items:flex-start;background:rgba(245,165,36,.08);border:1px solid rgba(245,165,36,.45);border-radius:12px;padding:14px 16px;margin:16px 0;font-size:15px}
+.notice b{color:var(--amber)}
+form{display:grid;gap:12px;margin-top:8px}
+label{font-size:13px;color:var(--muted);display:block;margin-bottom:4px}
+input,select{width:100%;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:12px 14px;font:16px var(--sans)}
+input:focus,select:focus{outline:2px solid var(--amber);outline-offset:1px;border-color:transparent}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:520px){.row2{grid-template-columns:1fr}}
+.err{color:var(--red);font-size:13px;min-height:1em}
+.thanks{display:none;background:rgba(43,200,100,.10);border:1px solid rgba(43,200,100,.4);border-radius:12px;padding:18px}
+.thanks h3{color:var(--green)}
+
+/* faq */
+details{background:var(--bg-2);border:1px solid var(--line);border-radius:12px;padding:0 18px;margin-top:10px}
+summary{cursor:pointer;padding:16px 0;font-weight:600;list-style:none;display:flex;justify-content:space-between;gap:12px}
+summary::-webkit-details-marker{display:none}
+summary::after{content:"+";color:var(--amber);font-family:var(--mono)}
+details[open] summary::after{content:"\2212"}
+details .a{color:var(--muted);padding-bottom:16px;font-size:15px}
+
+/* shots, progress, spec */
+.shots{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:24px}
+@media (max-width:760px){.shots{grid-template-columns:1fr}}
+.shots figure{margin:0;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius);padding:12px}
+.shots img{border-radius:10px;border:1px solid var(--line);width:100%}
+.shots figcaption{font-size:13px;color:var(--muted);margin-top:10px}
+.tag-real{display:inline-block;font:600 11px var(--mono);padding:2px 8px;border-radius:6px;margin-bottom:8px;background:rgba(43,200,100,.12);color:var(--green);border:1px solid rgba(43,200,100,.35)}
+.prog{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:24px}
+@media (max-width:900px){.prog{grid-template-columns:1fr}}
+.prog>div{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius);padding:18px}
+.prog h3{font-size:16px;margin-bottom:8px}
+.prog ul{margin:0;padding-left:18px;color:var(--muted);font-size:14px}
+.prog li{margin:5px 0}
+.prog .done h3{color:var(--green)} .prog .wip h3{color:var(--amber)} .prog .plan h3{color:var(--muted)}
+.spec{display:grid;grid-template-columns:1.4fr 1fr;gap:16px;margin-top:24px}
+@media (max-width:900px){.spec{grid-template-columns:1fr}}
+.spec>div{background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius);padding:18px}
+.spec h3{font-size:16px}
+.spec ul{margin:0;padding-left:18px;color:var(--muted);font-size:14px}
+.spec li{margin:5px 0}
+.tbd{font:600 11px var(--mono);padding:1px 7px;border-radius:5px;background:rgba(154,163,174,.10);color:var(--muted);border:1px solid var(--line);margin-left:6px;white-space:nowrap}
+.formlive{display:none}
+:root.has-form .formlive{display:block}
+:root.has-form #wl,:root.has-form .demo-note{display:none}
+
+footer{border-top:1px solid var(--line);padding:32px 0 48px;color:var(--dim);font-size:13px}
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="#top">
+      <span class="dots"><i style="background:var(--green)"></i><i style="background:var(--amber)"></i><i style="background:var(--blue)"></i><i style="background:var(--red)"></i></span>
+      <span class="zh">AgentDeck（暂名）</span><span class="en">AgentDeck (working name)</span>
+    </a>
+    <div class="navlinks">
+      <a href="#pain"><span class="zh">痛点</span><span class="en">Why</span></a>
+      <a href="#how"><span class="zh">怎么工作</span><span class="en">How it works</span></a>
+      <a href="#progress"><span class="zh">开发进度</span><span class="en">Progress</span></a>
+      <a href="#compare"><span class="zh">对比</span><span class="en">Compare</span></a>
+      <a href="#pricing"><span class="zh">价格</span><span class="en">Pricing</span></a>
+      <a href="#faq">FAQ</a>
+    </div>
+    <button class="langbtn" id="langbtn" type="button" aria-label="Switch language">EN</button>
+  </div>
+</nav>
+
+<!-- HERO -->
+<header class="hero" id="top">
+  <div class="wrap hero-grid">
+    <div>
+      <div class="eyebrow"><span class="zh">多 Agent 物理指挥与高危闸门</span><span class="en">Multi-agent status strip &amp; hardware safety gate</span></div>
+      <h1>
+        <span class="zh">同时跑 3–10 个 AI 编程 Agent，<br>一眼看清谁在等，<em>一按直批不串窗</em></span>
+        <span class="en">Run 3–10 coding agents at once.<br>See who's waiting. <em>Approve without losing focus.</em></span>
+      </h1>
+      <p class="lead">
+        <span class="zh">专为重度并行开发者打造的桌面副屏控制器。通过官方 Hook 直接向对应会话返回批准 / 拒绝——焦点停在聊天框或 IDE 里也绝不打错回车；日常命令交给 auto mode，遇到 <code>git push --force</code>、生产库变更等不可逆操作自动红屏，必须物理按两次才放行。</span>
+        <span class="en">A dedicated desk controller that answers Claude Code, Codex, and more through official hooks, never simulated keystrokes into the wrong window. Keep auto mode on for the routine 97%; when an agent tries <code>git push --force</code> or a prod DB write, the screen turns red and demands a physical double-press.</span>
+      </p>
+      <div class="cta">
+        <a class="btn btn-primary" id="cta-main" href="#waitlist"><span class="zh">加入早鸟候补 &amp; 申请免费软件内测</span><span class="en">Join Early-Bird Waitlist &amp; Free Software Beta</span></a>
+        <a class="btn btn-ghost" href="#shots"><span class="zh">看真实运行截图</span><span class="en">See real screenshots</span></a>
+      </div>
+      <p class="small"><span class="zh">支付尚未接通（过渡期），本页不收款。原价 ¥499，早鸟 ¥399 · 控制软件永久免费，100% 本机运行（127.0.0.1，零代码上传） · Claude Code / Codex 中枢已用真实进程跑通（真实会话实测中；Windows 率先，macOS 开发中）· AgentDeck 为暂名。</span><span class="en">Payment is not connected yet (transition period); this page takes no money. List price $99, early bird $79 · Control hub is free and 100% local (127.0.0.1, no code leaves your machine) · Claude Code / Codex hub verified with real processes (live sessions being tested; Windows first, macOS in development) · AgentDeck is a working name.</span></p>
+      <div class="strip" aria-hidden="true">
+        <div class="s-think"><b>API</b>THINK</div>
+        <div class="s-tool"><b>UI</b>TOOL</div>
+        <div class="s-ask"><b>TEST</b>ASK</div>
+        <div class="s-done"><b>DOCS</b>DONE</div>
+        <div class="s-err"><b>BUILD</b>ERR</div>
+        <div class="s-idle"><b>OPS</b>READY</div>
+      </div>
+    </div>
+    <figure>
+      <img src="../../concept/v2/hero-v2.png" width="1536" height="1024" alt="AgentDeck 概念渲染：上方 6 格长条状态屏，下方 6 个带灯会话键，✓ ✗ 按住说话、Ctrl、截图键与右侧滚轮" data-alt-en="AgentDeck concept render: a 6-zone strip screen above 6 lit session keys, with ✓, ✗, push-to-talk, Ctrl, screenshot keys and a side scroll wheel">
+      <figcaption><span class="zh">概念渲染图，不是实物照片。外壳材质、尺寸以最终工程样机为准。</span><span class="en">Concept render, not a photo. Enclosure material and size are not final.</span></figcaption>
+    </figure>
+  </div>
+</header>
+
+<!-- REAL SCREENSHOTS -->
+<section id="shots">
+  <div class="wrap">
+    <div class="eyebrow"><span class="zh">真实运行截图</span><span class="en">Real screenshots</span></div>
+    <h2><span class="zh">这两张是真实软件截图，不是渲染图</span><span class="en">These two are real software screenshots, not renders</span></h2>
+    <div class="shots">
+      <figure>
+        <span class="tag-real"><span class="zh">真实截图</span><span class="en">REAL SCREENSHOT</span></span>
+        <img src="../../concept/overlay-demo-真实截图.png" loading="lazy" alt="置顶 6 槽小浮窗的真实运行截图" data-alt-en="Real screenshot of the always-on-top 6-slot overlay">
+        <figcaption><span class="zh">置顶 6 槽浮窗：由真实本地中枢驱动，演示模式用真实系统热键（F13–F24）操作。已验证：真实进程 + 真实系统热键。尚未接入正在运行的 Claude / Codex 真实会话。</span><span class="en">Always-on-top 6-slot overlay driven by the real local hub; the demo is operated with real OS hotkeys (F13–F24). Verified: real processes + real OS hotkeys. Not yet connected to a live Claude / Codex session.</span></figcaption>
+      </figure>
+      <figure>
+        <span class="tag-real"><span class="zh">真实截图</span><span class="en">REAL SCREENSHOT</span></span>
+        <img src="../../concept/virtual-device-真实截图.png" loading="lazy" alt="虚拟 v2 设备窗口的真实运行截图" data-alt-en="Real screenshot of the virtual v2 device window">
+        <figcaption><span class="zh">虚拟 v2 设备窗口：6 区长条屏、灯键、✓ / ✗ 由真实中枢驱动，点击键位走真实的 /action 接口。已验证：真实进程 + 真实系统热键；不是硬件实物，也还不是真实 Claude / Codex 会话。</span><span class="en">Virtual v2 device window: strip zones, lit keys and ✓ / ✗ driven by the real hub; clicks go through the real /action endpoint. Verified: real processes + real OS hotkeys. Not physical hardware, and not yet a live Claude / Codex session.</span></figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<!-- PAIN -->
+<section id="pain">
+  <div class="wrap">
+    <div class="eyebrow"><span class="zh">为什么要它</span><span class="en">The problem</span></div>
+    <h2><span class="zh">同时开 3 到 10 个 agent 之后，慢的是你</span><span class="en">Once you run 3–10 agents at once, you become the bottleneck</span></h2>
+    <div class="grid3">
+      <div class="card">
+        <div class="num">01</div>
+        <h3><span class="zh">不知道谁在等你</span><span class="en">You don't know who is waiting</span></h3>
+        <p><span class="zh">五个终端、两个 IDE，总有一个停在权限提示上没人管。Claude Code 社区有人说得直白：瓶颈已经不是模型的速度，而是人什么时候发现它在等。</span><span class="en">Five terminals and two IDEs, and one of them is always stuck on a permission prompt. As one Claude Code user put it, the bottleneck is no longer the model's speed but how long it takes a human to notice it is waiting.</span></p>
+        <div class="src"><span class="zh">来源：anthropics/claude-code issue #36885；issue #13024（"需要知道什么时候该我输入"）81+ 人反应</span><span class="en">Sources: anthropics/claude-code issue #36885; issue #13024 ("know when input is needed"), 81+ reactions</span></div>
+      </div>
+      <div class="card">
+        <div class="num">02</div>
+        <h3><span class="zh">回车打进了错的窗口</span><span class="en">Enter lands in the wrong window</span></h3>
+        <p><span class="zh">宏键盘和快捷键面板，本质是往当前前台窗口模拟按键。焦点一跑，回车和语音就打进了编辑器、聊天框，或者另一个 agent 的会话。</span><span class="en">Macro pads and shortcut decks simulate keystrokes into whatever window is in front. The moment focus moves, your Enter or dictation goes into the editor, a chat app, or another agent's session.</span></p>
+        <div class="src"><span class="zh">依据：02 竞品分析中普通宏键盘、Ulanzi Vibe Key 的审批方式（罗技 MX Keypad 另有官方 SDK 插件，不是单纯模拟按键）</span><span class="en">Basis: our competitor teardown of generic macro pads and Ulanzi Vibe Key (Logitech MX Keypad also has official SDK plugins, so it is not purely simulated keys)</span></div>
+      </div>
+      <div class="card">
+        <div class="num">03</div>
+        <h3><span class="zh">"一键 YOLO" 太危险</span><span class="en">A one-tap YOLO button is a liability</span></h3>
+        <p><span class="zh">Anthropic 披露，用户原本就会批准 97% 的权限提示。日常命令交给 auto mode 就好；真正要人看一眼的，是 <code>git push --force</code>、生产环境 <code>kubectl</code>、数据库写入这类做了就回不去的操作。</span><span class="en">Anthropic reports that users approved 97% of permission prompts anyway. Let auto mode handle the routine stuff. What still deserves a human look is the irreversible kind: <code>git push --force</code>, production <code>kubectl</code>, database writes.</span></p>
+        <div class="src"><span class="zh">来源：Anthropic，Claude Code auto mode 研究报告（2026-08）</span><span class="en">Source: Anthropic, Claude Code auto mode research (Aug 2026)</span></div>
+      </div>
+    </div>
+    <figure style="margin:28px 0 0">
+      <img src="../../concept/v2/desk-v2.png" width="1536" height="1024" loading="lazy" style="border-radius:var(--radius);border:1px solid var(--line);max-height:520px;width:100%;object-fit:cover" alt="桌面场景概念图：显示器上 4 个 agent 终端，其中一个在等待输入，手指按下 AgentDeck 的 ✓ 键" data-alt-en="Desk scene concept: four agent terminals on a monitor, one waiting for input, a finger pressing the ✓ key on AgentDeck">
+      <figcaption><span class="zh">桌面场景概念图（非实物）</span><span class="en">Desk scene concept render (not a photo)</span></figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- HOW -->
+<section id="how" class="how">
+  <div class="wrap">
+    <div class="eyebrow"><span class="zh">怎么工作</span><span class="en">How it works</span></div>
+    <h2><span class="zh">不是宏，是直接回答 agent</span><span class="en">Not a macro. It answers the agent directly.</span></h2>
+    <p class="lead"><span class="zh">电脑上跑一个本地中枢（hub）。各家 agent 的钩子把事件发给它，它点亮对应的会话格；你按键，它把决定直接还给那一个会话。做到了哪一步，统一写在下面的“开发进度”里。</span><span class="en">A small local hub runs on your computer. Each agent's hooks send it events, it lights up the matching session zone, and when you press a key it sends the decision straight back to that one session. How far along each part is lives in one place: the Progress section below.</span></p>
+    <div class="grid2">
+      <div class="card k-green">
+        <h3><span class="zh">官方钩子直接批准</span><span class="en">Approval through official hooks</span></h3>
+        <p><span class="zh">Claude Code 和 Codex 官方支持 <code>PermissionRequest</code> 钩子。agent 请求权限时，中枢收到请求、在屏上显示原始命令；你按 ✓ 或 ✗，中枢把 <code>allow</code> / <code>deny</code> 直接返回给这个会话。</span><span class="en">Claude Code and Codex officially support a <code>PermissionRequest</code> hook. When an agent asks for permission, the hub shows the raw command on screen; press ✓ or ✗ and the hub returns <code>allow</code> / <code>deny</code> to that session.</span></p>
+      </div>
+      <div class="card k-blue">
+        <h3><span class="zh">不往任何窗口里打字</span><span class="en">Never types into the wrong window</span></h3>
+        <p><span class="zh">批准不经过键盘模拟，焦点停在记事本还是聊天框都无所谓。多条请求同时到达时排队，✓ 只作用于屏上正在显示的那一条；按设计，每条请求还会带编号和随机数，设备回报时对得上才执行（随机数校验尚未实现）。</span><span class="en">Approvals never go through simulated keystrokes, so it doesn't matter whether focus is on a notepad or a chat window. Simultaneous requests are queued and ✓ only applies to the one on screen; by design every request will also carry an id and nonce that the key press must match (the nonce check is not built yet).</span></p>
+      </div>
+      <div class="card k-amber">
+        <h3><span class="zh">高危操作按两次</span><span class="en">Risky commands need a second press</span></h3>
+        <p><span class="zh"><code>git push --force</code>、生产环境 <code>ssh</code> / <code>kubectl</code>、数据库写入、改密钥、合并 PR：屏幕变红并显示原始命令，第一次按只回"再按一次"，第二次才放行。</span><span class="en"><code>git push --force</code>, production <code>ssh</code> / <code>kubectl</code>, database writes, secret changes, merging PRs: the zone turns red with the raw command. The first press only answers "press again"; the second one lets it through.</span></p>
+      </div>
+      <div class="card k-red">
+        <h3><span class="zh">极危命令直接锁死</span><span class="en">Critical commands are locked</span></h3>
+        <p><span class="zh"><code>curl … | sh</code>、<code>-EncodedCommand</code>、删除根目录这类命令，设备上按多少次都不放行，直接退回终端原生确认，由你在终端里亲自决定。</span><span class="en">Commands like <code>curl … | sh</code>, <code>-EncodedCommand</code> or deleting the root directory cannot be approved from the device at all. They fall back to the terminal's own prompt so you decide there, deliberately.</span></p>
+      </div>
+    </div>
+    <div class="notice" style="margin-top:20px">
+      <span><b><span class="zh">出错就退回，永不默认放行。</span><span class="en">Fails safe, never fails open.</span></b>
+      <span class="zh">中枢没跑、设备没插、110 秒没人按，agent 一律回到自己原生的权限提示。设备的 allow 也不会覆盖 agent 自己的 deny 规则。（中枢离线回退：已验证）</span><span class="en">If the hub isn't running, the device is unplugged, or nobody presses within 110 s, the agent goes back to its own native prompt. A device "allow" never overrides the agent's own deny rules. (Hub-offline fallback: verified.)</span></span>
+    </div>
+
+    <div class="anatomy">
+      <figure style="margin:0">
+        <img src="../../concept/v2/topdown-v2.png" width="1536" height="1024" alt="AgentDeck 俯视概念图" data-alt-en="AgentDeck top-down concept render" loading="lazy">
+        <figcaption><span class="zh">俯视概念图（非实物）</span><span class="en">Top-down concept render (not a photo)</span></figcaption>
+      </figure>
+      <ul class="keys">
+        <li><b><span class="zh">长条状态屏</span><span class="en">Strip screen</span></b><span><span class="zh">3.2–3.5 寸，6 等分，对齐下面 6 个键：agent 名、状态、待确认命令</span><span class="en">3.2–3.5", split into 6 zones above the 6 keys: agent, state, pending command</span></span></li>
+        <li><b><span class="zh">6 个会话键</span><span class="en">6 session keys</span></b><span><span class="zh">矮轴机械键 + RGB 状态灯；按一下把那个终端 / IDE 切到前台（Windows 已完成，macOS 开发中）</span><span class="en">Low-profile mechanical, RGB status light; one press brings that terminal / IDE forward (Windows done, macOS in progress)</span></span></li>
+        <li><b>✓ / ✗</b><span><span class="zh">大号机械键，批准 / 拒绝当前显示的请求</span><span class="en">Large mechanical keys: approve / deny the request on screen</span></span></li>
+        <li><b><span class="zh">按住说话</span><span class="en">Push-to-talk</span></b><span><span class="zh">板载麦克风，文字只发进选中的那个会话（开发中）</span><span class="en">Built-in mic; text goes only to the selected session (in development)</span></span></li>
+        <li><b>Ctrl</b><span><span class="zh">Ctrl + 会话键 = "继续""跑测试""提交"等可编辑模板</span><span class="en">Ctrl + session key = editable templates like "continue", "run tests", "commit"</span></span></li>
+        <li><b><span class="zh">截图键</span><span class="en">Screenshot</span></b><span><span class="zh">截屏发进当前会话（规划中）</span><span class="en">Send a screenshot into the current session (planned)</span></span></li>
+        <li><b><span class="zh">金属滚轮</span><span class="en">Metal wheel</span></b><span><span class="zh">在会话间滚动；按住 Ctrl 滚动调 reasoning 档位 / 权限模式</span><span class="en">Scroll between sessions; hold Ctrl to change reasoning effort / permission mode</span></span></li>
+        <li><b>USB-C</b><span><span class="zh">有线连接，第一版不带蓝牙和电池</span><span class="en">Wired; v1 has no Bluetooth and no battery</span></span></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- SPEC -->
+<section id="spec">
+  <div class="wrap">
+    <div class="eyebrow"><span class="zh">硬件规格</span><span class="en">Hardware spec</span></div>
+    <h2><span class="zh">已定的和还没定的，分开写</span><span class="en">What is decided, and what is still open</span></h2>
+    <div class="spec">
+      <div>
+        <h3><span class="zh">已定</span><span class="en">Decided</span></h3>
+        <ul>
+          <li><span class="zh">3.2–3.5 寸长条 IPS 屏，分 6 区，对齐下面 6 个会话键</span><span class="en">3.2–3.5" strip IPS display, split into 6 zones aligned with the 6 session keys</span></li>
+          <li><span class="zh">6 个矮轴机械会话键，带 RGB 状态灯</span><span class="en">6 low-profile mechanical session keys with RGB lighting</span></li>
+          <li><span class="zh">大号 ✓ / ✗ 键和按住说话键</span><span class="en">Large ✓ / ✗ keys and a push-to-talk key</span></li>
+          <li><span class="zh">Ctrl 键和截图键</span><span class="en">Ctrl key and screenshot key</span></li>
+          <li><span class="zh">金属滚轮</span><span class="en">Metal wheel</span></li>
+          <li><span class="zh">USB-C 有线连接（第一版无蓝牙、无电池）</span><span class="en">USB-C wired (no Bluetooth or battery in v1)</span></li>
+          <li><span class="zh">主控 ESP32-S3</span><span class="en">ESP32-S3 controller</span></li>
+        </ul>
+      </div>
+      <div>
+        <h3><span class="zh">待定</span><span class="en">Still to be decided</span></h3>
+        <ul>
+          <li><span class="zh">外壳材质</span><span class="tbd">TBD</span><span class="en">Enclosure material</span></li>
+          <li><span class="zh">键轴是否热插拔</span><span class="tbd">TBD</span><span class="en">Whether switches are hot-swap</span></li>
+        </ul>
+        <p class="small" style="margin-top:12px"><span class="zh">硬件样机还没做出来，以上是设计规格，不是实物参数。</span><span class="en">No hardware sample exists yet. This is the design spec, not measured specs of a built unit.</span></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- AGENTS -->
+<section id="agents">
+  <div class="wrap">
+    <div class="eyebrow"><span class="zh">支持的 agent</span><span class="en">Agents</span></div>
+    <h2><span class="zh">海外和国产 agent，按各家钩子能力逐家接入</span><span class="en">Western and Chinese agents, added one by one by what their hooks allow</span></h2>
+    <p class="lead"><span class="zh">每家 agent 的钩子能力不一样，能做到哪一档就写哪一档。国产 agent 实测录屏之后再更新这里。</span><span class="en">Every agent exposes different hooks, so we label each one honestly. Chinese agents get updated after we test and record them.</span></p>
+    <div class="agents">
+      <div class="badge">Claude Code <span class="lv st-ok"><span class="zh">中枢已接入</span><span class="en">in hub</span></span></div>
+      <div class="badge">Codex <span class="lv st-ok"><span class="zh">中枢已接入</span><span class="en">in hub</span></span></div>
+      <div class="badge">Cursor <span class="lv st-plan"><span class="zh">规划中</span><span class="en">planned</span></span></div>
+      <div class="badge">Gemini / Antigravity <span class="lv st-plan"><span class="zh">规划中</span><span class="en">planned</span></span></div>
+      <div class="badge">Qwen Code <span class="lv st-wip"><span class="zh">待实测</span><span class="en">testing next</span></span></div>
+      <div class="badge">CodeBuddy <span class="lv st-wip"><span class="zh">待实测</span><span class="en">testing next</span></span></div>
+      <div class="badge">Kimi Code <span class="lv st-plan"><span class="zh">只能显示状态</span><span class="en">status only</span></span></div>
+      <div class="badge">Trae <span class="lv st-plan"><span class="zh">调研中</span><span class="en">researching</span></span></div>
+    </div>
+    <div class="legend">
+      <span><span class="zh">中枢已接入 = 直接批准已在本地中枢实现；真实会话正在实测</span><span class="en">In hub = direct approval implemented in the local hub; live-session testing under way</span></span>
+      <span><span class="zh">待实测 = 官方有钩子，能不能直接批准要实测后才知道</span><span class="en">Testing next = official hooks exist; whether they can answer approvals is not yet tested</span></span>
+      <span><span class="zh">只能显示状态 = 官方钩子的权限请求只能通知、不能阻断，没法在设备上直接批准（规划中，未接入）</span><span class="en">Status only = its permission hook can notify but not block, so the device cannot answer approvals (planned, not wired in yet)</span></span>
+      <span><span class="zh">云端 agent（Cursor Cloud Agent、Codex 云任务、GitHub PR/CI）：规划中，只显示状态</span><span class="en">Cloud agents (Cursor Cloud Agent, Codex cloud tasks, GitHub PR/CI): planned, status only</span></span>
+    </div>
+  </div>
+</section>
+
+<!-- PROGRESS -->
+<section id="progress">
+  <div class="wrap">
+    <div class="eyebrow"><span class="zh">开发进度（如实）</span><span class="en">Progress (as it is)</span></div>
+    <h2><span class="zh">做完了什么，在做什么，还没开始什么</span><span class="en">What is done, in progress, and planned</span></h2>
+    <div class="prog">
+      <div class="done">
+        <h3><span class="zh">已完成</span><span class="en">Done</span></h3>
+        <ul>
+          <li><span class="zh">本地中枢 v1.4：批准 / 拒绝、高危按两次、极危锁死、离线回退，已用真实进程和真实系统热键验证</span><span class="en">Local hub v1.4: approve / deny, press-twice for risky, locked for critical, offline fallback; verified with real processes and real OS hotkeys</span></li>
+          <li><span class="zh">Windows 上的会话窗口跳转</span><span class="en">Session window jumping on Windows</span></li>
+        </ul>
+      </div>
+      <div class="wip">
+        <h3><span class="zh">进行中 / 待实测</span><span class="en">In progress / to be tested</span></h3>
+        <ul>
+          <li><span class="zh">真实 Claude Code / Codex 会话测试（含真实 auto mode）：待测</span><span class="en">Live Claude Code / Codex session tests (incl. real auto mode): pending</span></li>
+          <li><span class="zh">macOS 版：开发中</span><span class="en">macOS version: in development</span></li>
+          <li><span class="zh">Qwen Code、CodeBuddy 钩子实测：待测</span><span class="en">Qwen Code and CodeBuddy hook tests: pending</span></li>
+        </ul>
+      </div>
+      <div class="plan">
+        <h3><span class="zh">规划中</span><span class="en">Planned</span></h3>
+        <ul>
+          <li><span class="zh">v2 硬件样机：还没做</span><span class="en">v2 hardware sample: not built yet</span></li>
+          <li><span class="zh">Stream Deck / 优篮子 D200 原生插件：规划中</span><span class="en">Stream Deck / Ulanzi D200 native plugins: planned</span></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- COMPARE -->
+<section id="compare">
+  <div class="wrap">
+    <div class="eyebrow"><span class="zh">对比</span><span class="en">Comparison</span></div>
+    <h2><span class="zh">和你可能在看的几款比一比</span><span class="en">How it stacks up</span></h2>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th></th>
+            <th class="us">AgentDeck</th>
+            <th>Codex Micro</th>
+            <th>Logitech MX Keypad</th>
+            <th>Ulanzi Vibe Key (AU05)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th><span class="zh">价格</span><span class="en">Price</span></th>
+            <td class="us"><b>¥499 / $99</b><br><span class="zh">早鸟 ¥399 / $79</span><span class="en">early bird $79 / ¥399</span></td>
+            <td>$230<br><span class="small"><span class="zh">2026-07 开卖，约 12 小时售罄</span><span class="en">sold out in ~12 h (Jul 2026)</span></span></td>
+            <td>$99.99</td>
+            <td>¥269–299</td>
+          </tr>
+          <tr>
+            <th><span class="zh">屏幕</span><span class="en">Display</span></th>
+            <td class="us"><span class="zh">6 等分长条屏，显示每个会话的状态和待确认命令</span><span class="en">6-zone strip screen: per-session state and pending command</span></td>
+            <td><span class="zh">无屏，6 个键用 RGB 颜色表示状态</span><span class="en">No screen; 6 keys show state by RGB color</span></td>
+            <td><span class="zh">9 个独立 LCD 键</span><span class="en">9 individual LCD keys</span></td>
+            <td><span class="zh">无屏，3 种灯效</span><span class="en">No screen; 3 light modes</span></td>
+          </tr>
+          <tr>
+            <th><span class="zh">按键</span><span class="en">Keys</span></th>
+            <td class="us"><span class="zh">矮轴机械键 + 3 个大号机械键 + 金属滚轮</span><span class="en">Low-profile mechanical + 3 large mechanical keys + metal wheel</span></td>
+            <td><span class="zh">13 个矮轴机械键 + 摇杆 + 旋钮</span><span class="en">13 low-profile mechanical keys + joystick + knob</span></td>
+            <td><span class="zh">硅胶薄膜键，无旋钮 / 滚轮</span><span class="en">Silicone membrane keys, no knob / wheel</span></td>
+            <td><span class="zh">6 个热插拔矮轴 + 旋钮</span><span class="en">6 hot-swap low-profile keys + knob</span></td>
+          </tr>
+          <tr>
+            <th><span class="zh">内置麦克风</span><span class="en">Built-in mic</span></th>
+            <td class="us"><span class="y">✓</span> <span class="zh">板载 MEMS</span><span class="en">onboard MEMS</span></td>
+            <td><span class="n">✗</span> <span class="zh">只调用电脑的麦克风</span><span class="en">uses the computer's mic</span></td>
+            <td><span class="n">✗</span></td>
+            <td><span class="y">✓</span></td>
+          </tr>
+          <tr>
+            <th><span class="zh">支持的 agent</span><span class="en">Agents</span></th>
+            <td class="us"><span class="zh">跨家：Claude Code、Codex 已接入，Cursor / Gemini / 国产 CLI 逐家适配</span><span class="en">Cross-vendor: Claude Code and Codex in the hub; Cursor, Gemini and Chinese CLIs one by one</span></td>
+            <td><span class="zh">只支持 OpenAI Codex</span><span class="en">OpenAI Codex only</span></td>
+            <td><span class="zh">官方宣传支持 Copilot、Claude Code、Codex</span><span class="en">Marketed for Copilot, Claude Code, Codex</span></td>
+            <td><span class="zh">Ulanzi Studio 通用映射，宣传支持 Claude Code、Codex、千问、豆包等</span><span class="en">Generic Ulanzi Studio mapping; marketed for Claude Code, Codex, Qwen, Doubao</span></td>
+          </tr>
+          <tr>
+            <th><span class="zh">批准方式</span><span class="en">How approvals work</span></th>
+            <td class="us"><span class="zh">官方钩子直接回答，不经过前台窗口</span><span class="en">Answers the official hook directly, not through the focused window</span></td>
+            <td><span class="zh">快捷键</span><span class="en">Shortcut keys</span></td>
+            <td><span class="zh">快捷键 / SDK 插件，随前台应用切页</span><span class="en">Shortcuts / SDK plugins, pages follow the foreground app</span></td>
+            <td><span class="zh">模拟快捷键</span><span class="en">Simulated shortcuts</span></td>
+          </tr>
+          <tr>
+            <th><span class="zh">高危命令二次确认</span><span class="en">Second press for risky commands</span></th>
+            <td class="us"><span class="y">✓</span> <span class="zh">高危按两次，极危锁死</span><span class="en">risky: press twice; critical: locked</span></td>
+            <td><span class="n">✗</span></td>
+            <td><span class="n">✗</span></td>
+            <td><span class="n">✗</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="small" style="margin-top:12px"><span class="zh">竞品信息截至 2026-11，来自官网和公开评测（PCMag、CNET、InfoQ、9to5Mac 等）。AgentDeck 一列是设计规格，工程样机还在打样，没有量产实物。</span><span class="en">Competitor info as of Nov 2026, from official pages and public reviews (PCMag, CNET, InfoQ, 9to5Mac and others). The AgentDeck column is a design spec; engineering prototypes are still being built.</span></p>
+  </div>
+</section>
+
+<!-- PRICING -->
+<section id="pricing">
+  <div class="wrap">
+    <div class="eyebrow"><span class="zh">价格</span><span class="en">Pricing</span></div>
+    <h2><span class="zh">一款硬件，一个价格</span><span class="en">One device, one price</span></h2>
+    <div class="price-grid">
+      <div class="card price-card">
+        <div class="eyebrow"><span class="zh">众筹早鸟</span><span class="en">Crowdfunding early bird</span></div>
+        <div class="price"><span class="zh">¥399<s>¥499</s></span><span class="en">$79<s>$99</s></span></div>
+        <ul class="ticks">
+          <li><span class="zh">AgentDeck 设备一台（长条屏 + 6 会话键 + ✓ / ✗ / 按住说话 + Ctrl + 截图键 + 滚轮）</span><span class="en">One AgentDeck (strip screen, 6 session keys, ✓ / ✗ / push-to-talk, Ctrl, screenshot key, wheel)</span></li>
+          <li><span class="zh">控制软件免费、本地运行：中枢、审批、审计日志；Claude Code / Codex 已接入，其他 agent 逐家适配中</span><span class="en">Free control software that runs locally: hub, approvals, audit log; Claude Code and Codex wired in, other agents being added one by one</span></li>
+          <li><span class="zh">Windows 优先，macOS 版开发中</span><span class="en">Windows first; macOS version in development</span></li>
+          <li><span class="zh">不强制订阅。可选个人 Pro（¥19/月）：懂代码的语音纠错、手机只读看板、云端 agent 桥接</span><span class="en">No subscription required. Optional Pro ($3.99/mo): code-aware voice correction, read-only phone dashboard, cloud agent bridge</span></li>
+        </ul>
+        <a class="btn btn-primary cta-form" href="#waitlist" style="width:100%"><span class="zh">加入早鸟候补（订金支付尚未接通）</span><span class="en">Join the early-bird waitlist (deposit not live yet)</span></a>
+      </div>
+      <div class="card">
+        <h3><span class="zh">已经有 Stream Deck、优篮子 D200 或宏键盘？</span><span class="en">Already own a Stream Deck, Ulanzi D200 or macro pad?</span></h3>
+        <p><span class="zh">免费软件现在就能用它们：把按键映射成 F13–F24 热键，就能跳转会话、批准、拒绝；状态先在电脑上的置顶小浮窗里看。往它们按键屏上推状态的原生插件还在开发。它们没有长条屏、板载麦克风和机械大键。先用起来，觉得值再换。</span><span class="en">The free software works with them today: map their keys to F13–F24 to jump to a session, approve or deny, and watch status in a small always-on-top window on your PC. Native plugins that show status on their key screens are still in development. You don't get the strip screen, built-in mic or big mechanical keys. Try it first, upgrade if it earns its place.</span></p>
+        <p class="small"><span class="zh">我们正在招 30–50 位每天同时开 3 个以上 agent 的开发者，用自己手上的设备试用。下面留邮箱时选"已有设备"即可。</span><span class="en">We are recruiting 30–50 developers who run 3+ agents a day to try it on hardware they already own. Pick "I own a device" when you leave your email below.</span></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- DEPOSIT -->
+<section id="deposit">
+  <div class="wrap">
+    <div class="eyebrow"><span class="zh">早鸟候补</span><span class="en">Early-bird waitlist</span></div>
+    <h2><span class="zh">加入候补，申请免费软件内测</span><span class="en">Join the waitlist and apply for the free software beta</span></h2>
+    <div class="notice">
+      <span><b><span class="zh">支付入口待接入。</span><span class="en">Payment is not live yet.</span></b>
+      <span class="zh">本页暂时不收任何款项，也不会跳转到任何支付页面。订金规则（退款方式、如何抵扣）会和支付入口一起公布，开通消息会发在本页上。</span><span class="en">This page does not take any payment and does not redirect to a payment page. Deposit terms (refunds, how it is credited) will be published together with the payment link, and the launch will be announced on this page.</span></span>
+    </div>
+    <div class="grid2" style="margin-top:8px">
+      <div class="card">
+        <h3><span class="zh">订金：暂未开放</span><span class="en">Deposit: not open yet</span></h3>
+        <p class="small" style="margin-top:12px"><span class="zh">预计时间线：2027 年先做软件内测和工程样机，之后众筹。发货时间以众筹页面为准，目前还没有锁定。</span><span class="en">Rough timeline: software beta and engineering prototypes in 2027, then crowdfunding. Ship dates will be set on the campaign page; nothing is locked yet.</span></p>
+      </div>
+      <div class="card" id="waitlist">
+        <div class="formlive">
+          <h3><span class="zh">填写早鸟候补表单</span><span class="en">Fill in the waitlist form</span></h3>
+          <p class="muted"><span class="zh">表单在新页面打开，请选择你的操作系统和主力 Agent。</span><span class="en">The form opens in a new page. Please tell us your OS and main agent.</span></p>
+          <a class="btn btn-primary cta-form" id="cta-live" href="#waitlist" rel="noopener"><span class="zh">打开候补表单</span><span class="en">Open the waitlist form</span></a>
+        </div>
+        <p class="notice demo-note" style="margin:0 0 12px"><span><b><span class="zh">本表单目前只是本地演示。</span><span class="en">This form is a local demo for now.</span></b> <span class="zh">真实表单服务接入之前，你填的内容只存在你自己的浏览器里，不会发给我们，我们也收不到、无法联系你。</span><span class="en">Until a real form service is connected, what you enter stays in your own browser. It is not sent to us, so we cannot see it or contact you.</span></span></p>
+        <form id="wl" novalidate>
+          <div>
+            <label for="email"><span class="zh">邮箱</span><span class="en">Email</span></label>
+            <input id="email" name="email" type="email" autocomplete="email" required placeholder="you@example.com">
+          </div>
+          <div class="row2">
+            <div>
+              <label for="agentcount"><span class="zh">平时同时开几个 agent</span><span class="en">Agents you run at once</span></label>
+              <select id="agentcount" name="agentcount">
+                <option value="1-2">1–2</option>
+                <option value="3-5" selected>3–5</option>
+                <option value="6+">6+</option>
+              </select>
+            </div>
+            <div>
+              <label for="device"><span class="zh">手上的设备</span><span class="en">Device you own</span></label>
+              <select id="device" name="device">
+                <option value="none" data-zh="都没有" data-en="None">都没有</option>
+                <option value="streamdeck">Stream Deck</option>
+                <option value="ulanzi" data-zh="优篮子 D200 / Vibe Key" data-en="Ulanzi D200 / Vibe Key">优篮子 D200 / Vibe Key</option>
+                <option value="macropad" data-zh="普通宏键盘" data-en="Generic macro pad">普通宏键盘</option>
+                <option value="other" data-zh="其他" data-en="Other">其他</option>
+              </select>
+            </div>
+          </div>
+          <div class="err" id="err" role="alert"></div>
+          <button class="btn btn-primary" type="submit"><span class="zh">保存到本机（演示）</span><span class="en">Save in this browser (demo)</span></button>
+          <p class="small"><span class="zh">只保存在你这台浏览器里（localStorage），本页不会把邮箱发到任何服务器。</span><span class="en">Saved only in this browser (localStorage). This page does not send your email to any server.</span></p>
+        </form>
+        <div class="thanks" id="thanks" role="status">
+          <h3><span class="zh">已保存在你的浏览器里</span><span class="en">Saved in your browser</span></h3>
+          <p class="muted"><span class="zh">说明：这是本地演示，邮箱只存在你这台浏览器里，没有发给我们，所以我们收不到、也没法联系你。真实表单接入后本页会更新，请到时再来留一次。</span><span class="en">Note: this is a local demo. Your email is stored only in this browser and was not sent to us, so we cannot see it or contact you. This page will be updated once a real form is connected; please come back and sign up again then.</span></p>
+          <p class="small" id="thanks-email"></p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FAQ -->
+<section id="faq">
+  <div class="wrap">
+    <div class="eyebrow">FAQ</div>
+    <h2><span class="zh">常见问题</span><span class="en">Questions</span></h2>
+
+    <details>
+      <summary><span class="zh">我的代码、命令、录音会上传吗？</span><span class="en">Does my code, commands or audio leave my machine?</span></summary>
+      <div class="a"><span class="zh">不会。中枢只在本机运行、只监听 127.0.0.1，默认不发起任何网络请求（只有你手动检查更新时联网）。命令文本、截图、录音都不出本机。匿名统计和崩溃报告默认关闭。只有你主动开启云端 agent 槽位或个人 Pro 时，才会同步状态元数据；云端语音识别是单独的开关。</span><span class="en">No. The hub runs locally, listens only on 127.0.0.1, and makes no network requests by default (only when you check for updates). Command text, screenshots and audio stay on your machine. Anonymous stats and crash reports are off by default. Only if you turn on cloud agent slots or Pro does it sync status metadata; cloud speech recognition is a separate switch.</span></div>
+    </details>
+
+    <details>
+      <summary><span class="zh">现在支持哪些 agent？</span><span class="en">Which agents work today?</span></summary>
+      <div class="a"><span class="zh">Claude Code 和 Codex 的直接批准已经在本地中枢里实现，真实会话正在实测。Qwen Code、CodeBuddy、Kimi 官方都开放了钩子，能做到哪一档要实测录屏后公布；Cursor、Gemini / Antigravity、Trae 在规划和调研中。我们不会对没测过的 agent 承诺"直接批准"。</span><span class="en">Direct approval for Claude Code and Codex is implemented in the local hub and being tested in live sessions. Qwen Code, CodeBuddy and Kimi expose official hooks; what they can support will be published after we test and record them. Cursor, Gemini / Antigravity and Trae are planned or being researched. We won't promise direct approval for an agent we haven't tested.</span></div>
+    </details>
+
+    <details>
+      <summary><span class="zh">Claude Code 开了 auto mode，还需要它吗？</span><span class="en">Claude Code has auto mode now. Do I still need this?</span></summary>
+      <div class="a"><span class="zh">我们建议你保持 auto mode 开着，日常命令让它自动放行。设备主要做两件事：一是"谁在等我 → 一按直达 → 按住说话派活"，开的 agent 越多越有用；二是在 auto mode 之上给不可逆操作加一道物理确认（只加不减，永远不会替 agent 放行它本来要拒绝的操作）。这道 auto mode 下的高危闸门（中枢 v1.4）已实现，用真实进程和真实系统热键验证过，真实 auto mode 会话还在测。</span><span class="en">Keep auto mode on and let it handle routine commands. The device does two things: "who's waiting → jump there → talk to it", which matters more the more agents you run; and an extra physical check on irreversible actions on top of auto mode (it only adds a check, it never approves anything the agent would have refused). That auto-mode gate (hub v1.4) is built and verified with real processes and real OS hotkeys; testing in live auto-mode sessions is still to come.</span></div>
+    </details>
+
+    <details>
+      <summary><span class="zh">和普通宏键盘、Stream Deck 有什么不一样？</span><span class="en">How is this different from a macro pad or Stream Deck?</span></summary>
+      <div class="a"><span class="zh">宏键盘是往前台窗口模拟按键，焦点在哪就打到哪。AgentDeck 的 ✓ / ✗ 走 agent 的官方钩子，直接回答发出请求的那个会话，焦点在哪个窗口都不影响；还多了每个会话的状态屏、高危二次确认和极危锁死。</span><span class="en">A macro pad simulates keystrokes into whatever window has focus. AgentDeck's ✓ / ✗ go through the agent's official hook straight to the session that asked, regardless of focus. You also get per-session status, a second press for risky commands, and a hard lock on critical ones.</span></div>
+    </details>
+
+    <details>
+      <summary><span class="zh">中枢崩了或设备拔了会怎样？</span><span class="en">What if the hub crashes or the device is unplugged?</span></summary>
+      <div class="a"><span class="zh">agent 会回到它自己原生的权限提示，你照常在终端里操作。任何故障都不会变成"自动放行"。中枢离线时的回退已经验证过。</span><span class="en">The agent falls back to its own native permission prompt and you carry on in the terminal. No failure ever turns into an automatic approval. Hub-offline fallback has been verified.</span></div>
+    </details>
+
+    <details>
+      <summary><span class="zh">我已经有 Stream Deck / 优篮子 D200 / 宏键盘，还要买吗？</span><span class="en">I already own a Stream Deck / Ulanzi D200 / macro pad. Do I need to buy this?</span></summary>
+      <div class="a"><span class="zh">不一定。控制软件免费，会支持这些设备，先用它们试。自有硬件多了 6 等分状态屏、板载麦克风、机械大键和滚轮，觉得值再买。</span><span class="en">Not necessarily. The control software is free and will support those devices, so start there. Our hardware adds the 6-zone strip screen, built-in mic, big mechanical keys and the wheel; buy it if that's worth it to you.</span></div>
+    </details>
+
+    <details>
+      <summary><span class="zh">订金怎么算？什么时候发货？</span><span class="en">How does the deposit work? When does it ship?</span></summary>
+      <div class="a"><span class="zh">¥9.9 / $1 订金用来锁定早鸟价 ¥399 / $79 的名额。支付入口还没接入，退款和抵扣规则会和入口一起公布。硬件还在打样，计划 2027 年先做软件内测和工程样机，再上众筹；发货时间以众筹页面为准。</span><span class="en">The $1 / ¥9.9 deposit reserves an early-bird spot at $79 / ¥399. Payment isn't live yet; refund and credit terms will be published with it. Hardware is in prototyping: the plan is a software beta and engineering prototypes in 2027, then crowdfunding. Ship dates will be on the campaign page.</span></div>
+    </details>
+
+    <details>
+      <summary><span class="zh">支持什么系统？</span><span class="en">Which operating systems?</span></summary>
+      <div class="a"><span class="zh">Windows 和 macOS 优先。目前 Windows 上的窗口跳转已完成，macOS 版正在开发；Linux 在规划里。设备不装软件时就是一个标准 USB 键盘，每个键发可映射的键码。</span><span class="en">Windows and macOS first. Window jumping works on Windows today, macOS is in development, Linux is planned. Without our software the device is a standard USB keyboard that sends remappable key codes.</span></div>
+    </details>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p><span class="zh">AgentDeck 是暂定名，正式名称确定前可能更改。本页产品图为概念渲染，不是实物照片。Claude Code、Codex、Cursor、Gemini、Antigravity、Qwen Code、CodeBuddy、Kimi、Trae、Stream Deck、Ulanzi、Logitech 等为各自所有者的商标，本产品与它们没有隶属或合作关系。</span><span class="en">AgentDeck is a working name and may change. Product images are concept renders, not photos. Claude Code, Codex, Cursor, Gemini, Antigravity, Qwen Code, CodeBuddy, Kimi, Trae, Stream Deck, Ulanzi and Logitech are trademarks of their respective owners; this product is not affiliated with or endorsed by them.</span></p>
+  </div>
+</footer>
+
+<script>
+// Founder: paste the real form link (Feishu questionnaire / Tally / etc.) between the quotes.
+// While empty, the page shows a clearly labelled local demo form and makes no network calls.
+var FORM_URL = '';
+
+(function(){
+  var root = document.documentElement;
+  var KEY_LANG = 'agentdeck_lang';
+  var KEY_WL = 'agentdeck_waitlist';
+
+  function store(k, v){ try{ localStorage.setItem(k, v); return true; }catch(e){ return false; } }
+  function load(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } }
+
+  function setLang(lang){
+    root.setAttribute('data-lang', lang);
+    root.setAttribute('lang', lang === 'en' ? 'en' : 'zh-CN');
+    document.getElementById('langbtn').textContent = lang === 'en' ? '中文' : 'EN';
+    document.title = lang === 'en' ? 'AgentDeck (working name) — Physical Status Strip & Hook-Based Approval Controller for AI Coding Agents' : 'AgentDeck（暂名）— 多 AI Coding Agent 桌面状态屏与物理审批控制器';
+    var imgs = document.querySelectorAll('img[data-alt-en]');
+    for (var i = 0; i < imgs.length; i++){
+      var im = imgs[i];
+      if (!im.getAttribute('data-alt-zh')) im.setAttribute('data-alt-zh', im.alt);
+      im.alt = im.getAttribute(lang === 'en' ? 'data-alt-en' : 'data-alt-zh');
+    }
+    var opts = document.querySelectorAll('option[data-en]');
+    for (var j = 0; j < opts.length; j++){
+      opts[j].textContent = opts[j].getAttribute(lang === 'en' ? 'data-en' : 'data-zh');
+    }
+    store(KEY_LANG, lang);
+  }
+
+  // When FORM_URL is set, every waitlist button opens it in a new tab instead of scrolling.
+  if (FORM_URL){
+    root.classList.add('has-form');
+    var ctas = document.querySelectorAll('#cta-main, .cta-form');
+    for (var c = 0; c < ctas.length; c++){
+      ctas[c].setAttribute('href', FORM_URL);
+      ctas[c].setAttribute('target', '_blank');
+      ctas[c].setAttribute('rel', 'noopener');
+    }
+  }
+
+  var saved = load(KEY_LANG);
+  setLang(saved === 'en' ? 'en' : 'zh');
+  document.getElementById('langbtn').addEventListener('click', function(){
+    setLang(root.getAttribute('data-lang') === 'en' ? 'zh' : 'en');
+  });
+
+  // Waitlist: stores locally only. No fetch / XHR / beacon anywhere on this page.
+  var form = document.getElementById('wl');
+  var err = document.getElementById('err');
+  form.addEventListener('submit', function(ev){
+    ev.preventDefault();
+    var en = root.getAttribute('data-lang') === 'en';
+    var email = document.getElementById('email').value.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)){
+      err.textContent = en ? 'Please enter a valid email address.' : '请填写有效的邮箱地址。';
+      return;
+    }
+    err.textContent = '';
+    var list = [];
+    try { list = JSON.parse(load(KEY_WL) || '[]'); if (!Array.isArray(list)) list = []; } catch(e){ list = []; }
+    var exists = false;
+    for (var i = 0; i < list.length; i++){ if (list[i].email === email){ exists = true; break; } }
+    if (!exists){
+      list.push({
+        email: email,
+        agents: document.getElementById('agentcount').value,
+        device: document.getElementById('device').value,
+        lang: en ? 'en' : 'zh',
+        ts: new Date().toISOString()
+      });
+    }
+    var ok = store(KEY_WL, JSON.stringify(list));
+    form.style.display = 'none';
+    var t = document.getElementById('thanks');
+    t.style.display = 'block';
+    document.getElementById('thanks-email').textContent = ok
+      ? (en ? 'Saved locally: ' : '已保存在本机：') + email
+      : (en ? 'Your browser blocked local storage, so nothing was saved. Please try again later.' : '你的浏览器禁止了本地存储，这次没有保存成功，请稍后再试。');
+  });
+})();
+</script>
+</body>
+</html>

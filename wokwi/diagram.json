@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "author": "desk-h1",
+  "editor": "wokwi",
+  "parts": [
+    { "id": "esp", "type": "board-esp32-devkit-c-v4", "top": 0, "left": 0, "attrs": {} },
+    { "id": "lcd", "type": "wokwi-ili9341", "top": -100, "left": 190, "attrs": {} },
+    { "id": "btnState", "type": "wokwi-pushbutton", "top": 260, "left": 220, "attrs": { "color": "green", "label": "STATE (sim only)", "key": "1" } },
+    { "id": "btnScene", "type": "wokwi-pushbutton", "top": 260, "left": 340, "attrs": { "color": "blue", "label": "SCENE (sim only)", "key": "2" } }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "" ],
+    [ "esp:RX", "$serialMonitor:TX", "" ],
+    [ "lcd:VCC", "esp:3V3", "red", [] ],
+    [ "lcd:GND", "esp:GND.1", "black", [] ],
+    [ "lcd:CS", "esp:5", "orange", [] ],
+    [ "lcd:RST", "esp:4", "gray", [] ],
+    [ "lcd:D/C", "esp:2", "green", [] ],
+    [ "lcd:MOSI", "esp:23", "blue", [] ],
+    [ "lcd:SCK", "esp:18", "purple", [] ],
+    [ "lcd:LED", "esp:3V3", "red", [] ],
+    [ "lcd:MISO", "esp:19", "yellow", [] ],
+    [ "btnState:1.l", "esp:32", "green", [] ],
+    [ "btnState:2.l", "esp:GND.1", "black", [] ],
+    [ "btnScene:1.l", "esp:33", "blue", [] ],
+    [ "btnScene:2.l", "esp:GND.1", "black", [] ]
+  ],
+  "dependencies": {}
+}

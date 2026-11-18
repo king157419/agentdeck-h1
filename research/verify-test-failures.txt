@@ -1,0 +1,88 @@
+test_all_five_scenarios_pass_permission_only_flow (__main__.VerifyRealSessionTests.test_all_five_scenarios_pass_permission_only_flow) ... ok
+test_all_five_scenarios_pass_with_pretooluse_gate_enabled (__main__.VerifyRealSessionTests.test_all_five_scenarios_pass_with_pretooluse_gate_enabled)
+Under PreToolUse gate, faithfully records 2 gate + 1 permission approvals. ... ok
+test_cli_failure_or_invalid_json_fails_scenario (__main__.VerifyRealSessionTests.test_cli_failure_or_invalid_json_fails_scenario)
+Non-zero exit, malformed JSON, empty stdout, is_error=True, or session mismatch fails. ... ok
+test_critical_command_safety_and_lexical_classification (__main__.VerifyRealSessionTests.test_critical_command_safety_and_lexical_classification)
+Verify the critical command uses a safe literal printf pattern and classifies critical. ... ok
+test_critical_fast_stop_race_condition_reported_accurately (__main__.VerifyRealSessionTests.test_critical_fast_stop_race_condition_reported_accurately)
+When fake claude fires Stop immediately, verifier distinguishes audit from missing probe. ... ok
+test_deny_and_locked_are_exempt_from_switch_guard (__main__.VerifyRealSessionTests.test_deny_and_locked_are_exempt_from_switch_guard)
+Deny and locked requests do not wait for switch_guard. ... ok
+test_displayed_request_change_during_wait_aborts_without_blind_approve (__main__.VerifyRealSessionTests.test_displayed_request_change_during_wait_aborts_without_blind_approve)
+If displayed request changes to another ID during wait, verifier aborts immediately. ... ok
+test_dry_run_does_not_call_claude_or_hub (__main__.VerifyRealSessionTests.test_dry_run_does_not_call_claude_or_hub) ... ok
+test_foreign_session_on_same_cwd_is_strictly_ignored_and_untouched (__main__.VerifyRealSessionTests.test_foreign_session_on_same_cwd_is_strictly_ignored_and_untouched)
+A concurrent session in the SAME cwd (agent='cc', foreign session_id) is NOT touched. ... ERROR
+test_foreign_session_wrong_agent_same_cwd_is_strictly_ignored (__main__.VerifyRealSessionTests.test_foreign_session_wrong_agent_same_cwd_is_strictly_ignored)
+A foreign session on same cwd with agent='cx' is strictly ignored. ... Window focus unavailable: desktop output disabled
+Window focus unavailable: desktop output disabled
+Window focus unavailable: desktop output disabled
+Window focus unavailable: desktop output disabled
+ok
+test_hub_unavailable_exits_3_with_start_bat_hint (__main__.VerifyRealSessionTests.test_hub_unavailable_exits_3_with_start_bat_hint) ... ok
+test_judgment_logic_catches_failures_in_each_scenario (__main__.VerifyRealSessionTests.test_judgment_logic_catches_failures_in_each_scenario) ... ok
+test_other_concurrent_session_on_hub_is_not_touched (__main__.VerifyRealSessionTests.test_other_concurrent_session_on_hub_is_not_touched) ... Window focus unavailable: desktop output disabled
+Window focus unavailable: desktop output disabled
+Window focus unavailable: desktop output disabled
+Window focus unavailable: desktop output disabled
+FAIL
+test_preexisting_files_and_directories_are_strictly_preserved (__main__.VerifyRealSessionTests.test_preexisting_files_and_directories_are_strictly_preserved)
+Pre-existing files in test directory are never deleted before or after runs. ... ok
+test_require_nonce_mode_succeeds_with_correct_nonce (__main__.VerifyRealSessionTests.test_require_nonce_mode_succeeds_with_correct_nonce)
+When Hub enforces require_nonce=True, verifier supplies 32-bit nonce and passes. ... ERROR
+test_risk_rules_match_chosen_commands (__main__.VerifyRealSessionTests.test_risk_rules_match_chosen_commands) ... ok
+test_scenario_exception_preserves_five_row_report_and_evidence (__main__.VerifyRealSessionTests.test_scenario_exception_preserves_five_row_report_and_evidence)
+If spawner raises an unexpected exception in scenario 2, 5-row results.md is written. ... FAIL
+test_switch_guard_retry_and_reverification_on_conflict (__main__.VerifyRealSessionTests.test_switch_guard_retry_and_reverification_on_conflict)
+Simulate 409 switch_guard on first approve; verifier retries after bounded wait. ... ok
+test_unauthenticated_exits_2_without_login_attempt (__main__.VerifyRealSessionTests.test_unauthenticated_exits_2_without_login_attempt) ... ok
+test_unexpected_request_aborts_immediately_without_approval (__main__.VerifyRealSessionTests.test_unexpected_request_aborts_immediately_without_approval)
+If the target session emits an unexpected tool, verifier aborts and never approves. ... ok
+
+======================================================================
+ERROR: test_foreign_session_on_same_cwd_is_strictly_ignored_and_untouched (__main__.VerifyRealSessionTests.test_foreign_session_on_same_cwd_is_strictly_ignored_and_untouched)
+A concurrent session in the SAME cwd (agent='cc', foreign session_id) is NOT touched.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\desk\hardware\h1\pc\test_verify_real_session.py", line 729, in test_foreign_session_on_same_cwd_is_strictly_ignored_and_untouched
+    self.assertEqual(foreign_req["command"], "rm -rf /dangerous/foreign/path")
+                     ~~~~~~~~~~~^^^^^^^^^^^
+KeyError: 'command'
+
+======================================================================
+ERROR: test_require_nonce_mode_succeeds_with_correct_nonce (__main__.VerifyRealSessionTests.test_require_nonce_mode_succeeds_with_correct_nonce)
+When Hub enforces require_nonce=True, verifier supplies 32-bit nonce and passes.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\desk\hardware\h1\pc\test_verify_real_session.py", line 623, in test_require_nonce_mode_succeeds_with_correct_nonce
+    audits = engine.audit.read(limit=50)
+             ^^^^^^^^^^^^^^^^^
+AttributeError: 'AuditLog' object has no attribute 'read'
+
+======================================================================
+FAIL: test_other_concurrent_session_on_hub_is_not_touched (__main__.VerifyRealSessionTests.test_other_concurrent_session_on_hub_is_not_touched)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\desk\hardware\h1\pc\test_verify_real_session.py", line 578, in test_other_concurrent_session_on_hub_is_not_touched
+    self.assertEqual(code, 0)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^
+AssertionError: 1 != 0
+
+======================================================================
+FAIL: test_scenario_exception_preserves_five_row_report_and_evidence (__main__.VerifyRealSessionTests.test_scenario_exception_preserves_five_row_report_and_evidence)
+If spawner raises an unexpected exception in scenario 2, 5-row results.md is written.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\desk\hardware\h1\pc\test_verify_real_session.py", line 898, in test_scenario_exception_preserves_five_row_report_and_evidence
+    self.assertEqual(s3_ev["status"], "\u8df3\u8fc7")
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: '\u901a\u8fc7' != '\u8df3\u8fc7'
+- \u901a\u8fc7
++ \u8df3\u8fc7
+
+
+----------------------------------------------------------------------
+Ran 20 tests in 73.075s
+
+FAILED (failures=2, errors=2)

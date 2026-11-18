@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "_instructions": [
+    "目标为前 8 个普通键 F13-F18、F21、F22；第一旋钮顺时针 F19、逆时针 F20。运行 python pc/deck.py learn 验证实际输入。",
+    "pc/deck_keymap.py 提供 backup/show/apply/restore 命令入口；当前 FF00/0001 协议、矩阵和四旋钮地址尚未确认，所有硬件命令均安全拒绝，不会打开 HID 或改键。详见 lcd1602/README.md 和 research/via-c-protocol.md。",
+    "bindings 的键直接复制 learn 输出的 vk:0xXX、scan:0xXXXX:flags、wheel:+1/-1 或 consumer:0xXXXX。扫描码 flags 是 E0/E1 的 0、2、4、6。",
+    "同一次按键优先匹配 vk，再匹配 scan，只执行一次。动作支持 slot 1-8、next_wait、approve、deny、cycle +1/-1、auto。",
+    "前六键 F13-F18 为 slot 1-4、approve、deny。F19/F20 轮换，F21 跳等待，F22 恢复自动；F23/F24 可自行添加。",
+    "滚轮和音量加减也轮换。原按键仍到达前台；音量键还会改变系统音量，可在确认支持该设备的厂商软件中改成 F 键。"
+  ],
+  "bindings": {
+    "vk:0x7C": "slot 1",
+    "vk:0x7D": "slot 2",
+    "vk:0x7E": "slot 3",
+    "vk:0x7F": "slot 4",
+    "vk:0x80": "approve",
+    "vk:0x81": "deny",
+    "vk:0x82": "cycle +1",
+    "vk:0x83": "cycle -1",
+    "vk:0x84": "next_wait",
+    "vk:0x85": "auto",
+    "wheel:+1": "cycle +1",
+    "wheel:-1": "cycle -1",
+    "consumer:0x00E9": "cycle +1",
+    "consumer:0x00EA": "cycle -1",
+    "vk:0xAF": "cycle +1",
+    "vk:0xAE": "cycle -1"
+  }
+}

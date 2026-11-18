@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "_instructions": [
+    "run defaults to exclusive mode for VID_4132&PID_2107. Use --no-exclusive to observe without suppressing keys; learn is always observation only. Never write the keyboard or access its unknown FF00 vendor interface.",
+    "bindings uses the measured factory shortcuts: E, B, Ctrl+Z, Space, G, Ctrl+F, H, L, ], [. Other keyboard keys are suppressed without an action and logged as unbound.",
+    "Keys accept vk:0xXX, scan:0xXXXX:flags, ctrl+vk:0x5A, or alt+vk:0x4C. Combine ctrl/shift/alt/win in any order; modifiers are tracked per deck device. Scan flags are E0/E1: 0, 2, 4, 6.",
+    "Exact modifier combinations take priority over bare vk, then scan. A modifier alone triggers only an explicit bare binding. Only the first key-down triggers; release and auto-repeat do not.",
+    "Actions: slot 1-8, next_wait, approve, deny, cycle +1/-1, auto. Copy learn output to customize bindings.",
+    "The optional _f13_f22_bindings object preserves the previous map, including wheel/volume examples. To use it, replace bindings with that object; it is not loaded automatically and does not reprogram the keyboard."
+  ],
+  "bindings": {
+    "vk:0x45": "slot 1",
+    "vk:0x42": "slot 2",
+    "ctrl+vk:0x5A": "slot 3",
+    "vk:0x20": "slot 4",
+    "vk:0x47": "approve",
+    "ctrl+vk:0x46": "deny",
+    "vk:0x48": "next_wait",
+    "vk:0x4C": "auto",
+    "vk:0xDD": "cycle +1",
+    "vk:0xDB": "cycle -1"
+  },
+  "_f13_f22_bindings": {
+    "vk:0x7C": "slot 1",
+    "vk:0x7D": "slot 2",
+    "vk:0x7E": "slot 3",
+    "vk:0x7F": "slot 4",
+    "vk:0x80": "approve",
+    "vk:0x81": "deny",
+    "vk:0x82": "cycle +1",
+    "vk:0x83": "cycle -1",
+    "vk:0x84": "next_wait",
+    "vk:0x85": "auto",
+    "wheel:+1": "cycle +1",
+    "wheel:-1": "cycle -1",
+    "consumer:0x00E9": "cycle +1",
+    "consumer:0x00EA": "cycle -1",
+    "vk:0xAF": "cycle +1",
+    "vk:0xAE": "cycle -1"
+  }
+}

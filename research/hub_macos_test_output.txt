@@ -1,0 +1,699 @@
+Python: D:\conda\miniconda3\python.exe
+
+COMMAND: D:\conda\miniconda3\python.exe pc/test_daemon.py
+test_mapping: PASS
+test_focus: PASS
+test_hold_rechecked_before_focus_send: PASS
+test_focus_mutex_serializes_delayed_daemon_send_and_manual_hold: PASS
+test_focus_mutex_rechecks_hold_after_waiting_for_manual_owner: PASS
+test_focus_mutex_timeout_skips_send_and_retries_next_tick: PASS
+test_state_machine: PASS
+test_log_tick: PASS
+test_main_schedule_and_lock: PASS
+test_process_snapshot: PASS
+daemon offline tests: 10 groups passed
+
+EXIT: 0
+
+COMMAND: D:\conda\miniconda3\python.exe pc/test_deck.py
+Raw Input 只观察输入，不隔离系统键盘事件：宏键盘按键会漏到窗口
+--exclusive is experimental: the low-level hook precedes WM_INPUT; suppression is ineffective
+Raw Input 只观察输入，不隔离系统键盘事件：宏键盘按键会漏到窗口
+Raw Input 只观察输入，不隔离系统键盘事件：宏键盘按键会漏到窗口
+--exclusive is experimental: the low-level hook precedes WM_INPUT; suppression is ineffective
+test_mapping: PASS
+test_list_and_selection: PASS
+test_tool_selection_count_prefix_and_rotation: PASS
+test_tool_priority_and_newest_tie: PASS
+test_tool_actions_hold_and_cycle_origin: PASS
+test_tool_focus_resists_daemon_follow: PASS
+test_live_selftest_dump_parsing: PASS
+test_live_selftest_offline_success_and_failure_cleanup: PASS
+test_actions_and_logging: PASS
+test_approval_guards: PASS
+test_window_matching_and_input: PASS
+test_foreground_fallback_cleanup: PASS
+test_single_instance_and_daemon_launch: PASS
+test_cli_and_learn: PASS
+test_run_event_dispatch_and_cleanup: PASS
+test_action_queue_combo_priority_and_isolation: PASS
+test_run_action_thread_and_error_cleanup: PASS
+test_review_project_and_tool_must_both_match: PASS
+test_review_approval_uses_press_context_and_expires_during_query: PASS
+test_review_usb_queue_blocks_navigation_and_approval_in_same_report: PASS
+test_review_usb_modifier_overlap_and_sensitive_exact_binding: PASS
+test_review2_focus_lock_wraps_hold_touch_and_single_send: PASS
+test_review2_focus_lock_timeout_skips_without_touching_hold: PASS
+test_review2_deck_is_final_sender_after_delayed_daemon_send: PASS
+test_review5_focus_send_failure_restores_hold_and_selection: PASS
+test_review1_approval_binds_hwnd_process_and_title: PASS
+test_review3_tool_identity_ignores_project_name_words: PASS
+test_review4_backlog_merges_cycles_and_keeps_last_navigation: PASS
+test_review4_backlog_cannot_expire_approval_and_navigation_is_fast: PASS
+test_review4_exit_cancels_unexecuted_events: PASS
+test_review_hold_clears_disappeared_selection_and_ignores_partial_list: PASS
+test_review_hold_heartbeat_preserves_firmware_ttl_until_handoff: PASS
+test_review_window_matching_rejects_ambiguous_candidates: PASS
+test_review_hold_thread_serializes_io_and_joins: PASS
+test_review_rawinput_approval_sees_all_device_main_keys: PASS
+test_deck_input_transitions: PASS
+test_deck_input_device_filter: PASS
+test_deck_input_packets: PASS
+test_deck_input_lifecycle: PASS
+test_probe_unknown_interfaces_never_open: PASS
+test_probe_readonly_keymap: PASS
+test_probe_standard_qmk_usage: PASS
+test_probe_transport_rejects_writes_and_bad_responses: PASS
+test_probe_failures_close_and_exit_cleanly: PASS
+test_probe_matrix_definition_and_missing_dimensions: PASS
+test_probe_old_protocol_and_invalid_definition: PASS
+test_hook_raw_before_and_after_both_directions: PASS
+test_hook_other_unknown_injected_and_timeout_pass: PASS
+test_hook_matches_direction_scan_timestamp_and_exact_device: PASS
+test_hook_recent_expiry_one_use_ambiguity_and_late_raw: PASS
+test_hook_device_change_invalidates_cached_handle_and_recent_evidence: PASS
+test_hook_sided_modifiers_and_repeat_suppression: PASS
+test_modifiers_per_device_sides_release_and_explicit_binding: PASS
+test_hook_fail_open_callback_error_and_reentrancy: PASS
+test_hook_lifecycle_install_failure_and_observer: PASS
+AgentDeck offline tests: 55 groups passed
+
+EXIT: 0
+
+COMMAND: D:\conda\miniconda3\python.exe pc/test_deck_exclusive.py
+test_hook_raw_before_and_after_both_directions: PASS
+test_hook_other_unknown_injected_and_timeout_pass: PASS
+test_hook_matches_direction_scan_timestamp_and_exact_device: PASS
+test_hook_recent_expiry_one_use_ambiguity_and_late_raw: PASS
+test_hook_device_change_invalidates_cached_handle_and_recent_evidence: PASS
+test_hook_sided_modifiers_and_repeat_suppression: PASS
+test_modifiers_per_device_sides_release_and_explicit_binding: PASS
+test_hook_fail_open_callback_error_and_reentrancy: PASS
+test_hook_lifecycle_install_failure_and_observer: PASS
+deck exclusive offline tests: 9 groups passed
+
+EXIT: 0
+
+COMMAND: D:\conda\miniconda3\python.exe pc/test_deck_input.py
+test_deck_input_transitions: PASS
+test_deck_input_device_filter: PASS
+test_deck_input_packets: PASS
+test_deck_input_lifecycle: PASS
+deck Raw Input offline tests: 4 groups passed
+
+EXIT: 0
+
+COMMAND: D:\conda\miniconda3\python.exe pc/test_deck_keymap.py
+test_vendor_report_encoding: PASS
+test_vendor_response_decoding: PASS
+test_vendor_transport_read_only_and_errors: PASS
+test_plan_changes_exactly_eight_keys_and_first_encoder: PASS
+test_snapshot_validation_rejects_incomplete_or_guessed_geometry: PASS
+test_backup_complete_exclusive_original_and_no_overwrite: PASS
+test_apply_backs_up_before_any_write_and_verifies_every_layer: PASS
+test_apply_readback_mismatch_and_partial_failures_restore_backup: PASS
+test_rollback_failure_is_reported_with_backup: PASS
+test_second_interrupt_during_rollback_preparation_still_restores: PASS
+test_restore_uses_complete_backup_and_rejects_geometry_mismatch: PASS
+test_show_layer_zero_names_and_encoder_directions: PASS
+test_real_cli_gate_never_opens_or_sends_even_with_fake_supported_usage: PASS
+Keymap offline tests: 13 groups passed
+
+EXIT: 0
+
+COMMAND: D:\conda\miniconda3\python.exe pc/test_deck_probe.py
+test_probe_failures_close_and_exit_cleanly: PASS
+test_probe_matrix_definition_and_missing_dimensions: PASS
+test_probe_old_protocol_and_invalid_definition: PASS
+test_probe_readonly_keymap: PASS
+test_probe_standard_qmk_usage: PASS
+test_probe_transport_rejects_writes_and_bad_responses: PASS
+test_probe_unknown_interfaces_never_open: PASS
+deck probe offline tests: 7 groups passed
+
+EXIT: 0
+
+COMMAND: D:\conda\miniconda3\python.exe pc/test_deck_usb.py
+USB unavailable: pyusb unavailable
+USB unavailable: not found
+USB unavailable: temporarily unavailable
+USB unavailable: backend unavailable
+USB unavailable: pyusb unavailable
+USB unavailable: not found
+USB unavailable: temporarily unavailable
+USB unavailable: backend unavailable
+USB unavailable: pyusb unavailable
+USB unavailable: not found
+USB unavailable: temporarily unavailable
+USB unavailable: backend unavailable
+请先用 Zadig 把 4132:2107 接口0 换成 WinUSB (USB 4132:2107 not found)
+USB unavailable: USB 4132:2107 not found
+请先用 Zadig 把 4132:2107 接口0 换成 WinUSB (USB 4132:2107 not found)
+请先用 Zadig 把 4132:2107 接口0 换成 WinUSB (busy WinUSB)
+USB unavailable: busy WinUSB
+请先用 Zadig 把 4132:2107 接口0 换成 WinUSB (USB 4132:2107 not found)
+test_usb_report_diff_multi_key_and_repeat: PASS
+test_usb_modifier_combinations_sides_and_device_isolation: PASS
+test_usb_overlapping_modifiers_use_bare_key_and_full_pressed_set: PASS
+test_usb_report_metadata_is_captured_on_receipt_including_probe_packet: PASS
+test_usb_unknown_lengths_and_rollover_preserve_state: PASS
+test_usb_action_dispatch_ignores_release_repeat_and_prefers_combo: PASS
+test_usb_open_selects_only_interface_zero_interrupt_in: PASS
+test_usb_auto_rejects_claimed_but_unreadable_interface_with_zadig_hint: PASS
+test_usb_probe_timeout_proves_readable_idle_interface: PASS
+test_usb_probe_first_report_is_dispatched_once_without_losing_key: PASS
+test_usb_boot_protocol_failure_still_reads_real_length: PASS
+test_usb_timeouts_keep_connection_and_stop_releases_resources: PASS
+test_usb_disconnect_reconnects_after_two_seconds_and_resets_keys: PASS
+test_usb_initial_open_failure_retries_and_zadig_hint: PASS
+test_usb_open_failures_dispose_and_close_is_idempotent: PASS
+test_usb_callback_error_and_interrupt_cleanup: PASS
+test_usb_auto_backend_selection_success_and_observer_fallback: PASS
+test_usb_interface_zero_driver_only_uses_present_device_service: PASS
+test_usb_auto_failed_open_keeps_usb_unless_hidusb_confirmed: PASS
+test_usb_auto_missing_or_busy_winusb_startup_recovers_without_restart: PASS
+test_usb_explicit_backends_and_experimental_hook_opt_in: PASS
+test_usb_mapping_normalization_and_old_rawinput_bindings: PASS
+test_usb_run_uses_selected_backend_mapping_and_cleans_up: PASS
+test_usb_learn_prints_hid_key_once_and_cli_selects_usb: PASS
+deck USB offline tests: 24 groups passed
+
+EXIT: 0
+
+COMMAND: D:\conda\miniconda3\python.exe pc/test_focus_lock.py
+test_acquired_and_abandoned_mutex_release_and_close: PASS
+test_timeout_and_failed_wait_never_enter_or_release: PASS
+test_invalid_timeout_and_non_windows_fallback: PASS
+test_windows_named_mutex_excludes_other_process: PASS
+focus lock offline tests: 4 groups passed
+
+EXIT: 0
+
+COMMAND: D:\conda\miniconda3\python.exe pc/test_hub.py
+test_chain_uses_previous_line_sha256_and_survives_restart (__main__.AuditTests.test_chain_uses_previous_line_sha256_and_survives_restart) ... ok
+test_concurrent_decisions_form_one_chain (__main__.AuditTests.test_concurrent_decisions_form_one_chain) ... ok
+test_doctor_cli_dispatch_does_not_create_server_or_token (__main__.AuditTests.test_doctor_cli_dispatch_does_not_create_server_or_token) ... ok
+test_headless_cli_disables_lcd_and_desktop_outputs (__main__.AuditTests.test_headless_cli_disables_lcd_and_desktop_outputs) ... 2026-11-17 21:24:10,374 agentdeck.hub INFO Hub listening on 127.0.0.1:<MagicMock name='HubServer().server_port' id='1882858504272'> (none)
+ok
+test_invalid_or_incomplete_log_is_never_overwritten (__main__.AuditTests.test_invalid_or_incomplete_log_is_never_overwritten) ... ok
+test_tampering_first_middle_and_last_line_is_detected (__main__.AuditTests.test_tampering_first_middle_and_last_line_is_detected) ... ok
+test_combo_presses_in_order_releases_in_reverse (test_hub_desktop.ComboTests.test_combo_presses_in_order_releases_in_reverse) ... ok
+test_held_modifiers_and_changed_foreground_prevent_input (test_hub_desktop.ComboTests.test_held_modifiers_and_changed_foreground_prevent_input) ... ok
+test_native_window_existence_uses_handle_even_when_not_visible (test_hub_desktop.ComboTests.test_native_window_existence_uses_handle_even_when_not_visible) ... ok
+test_partial_input_releases_only_inserted_down_keys (test_hub_desktop.ComboTests.test_partial_input_releases_only_inserted_down_keys) ... ok
+test_default_capture_requests_all_screens (test_hub_desktop.DesktopTests.test_default_capture_requests_all_screens) ... ok
+test_failed_paste_never_sends_enter (test_hub_desktop.DesktopTests.test_failed_paste_never_sends_enter) ... ok
+test_focus_change_after_paste_never_sends_enter (test_hub_desktop.DesktopTests.test_focus_change_after_paste_never_sends_enter) ... ok
+test_focus_rejects_ambiguity_and_activation_failure (test_hub_desktop.DesktopTests.test_focus_rejects_ambiguity_and_activation_failure) ... ok
+test_focus_uses_project_and_tool_matching (test_hub_desktop.DesktopTests.test_focus_uses_project_and_tool_matching) ... ok
+test_foreground_change_after_clipboard_never_pastes (test_hub_desktop.DesktopTests.test_foreground_change_after_clipboard_never_pastes) ... ok
+test_interrupt_sends_one_escape (test_hub_desktop.DesktopTests.test_interrupt_sends_one_escape) ... ok
+test_native_adapter_is_lazy (test_hub_desktop.DesktopTests.test_native_adapter_is_lazy) ... ok
+test_prompt_pastes_unicode_then_enter (test_hub_desktop.DesktopTests.test_prompt_pastes_unicode_then_enter) ... ok
+test_screenshot_saves_path_and_never_sends_enter (test_hub_desktop.DesktopTests.test_screenshot_saves_path_and_never_sends_enter) ... ok
+test_voice_sends_win_h (test_hub_desktop.DesktopTests.test_voice_sends_win_h) ... 2026-11-17 21:24:10,429 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-17 21:24:10,429 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=released restores=0 closed=True
+ok
+test_all_checks_pass_and_state_is_authenticated (test_hub_doctor.DoctorTests.test_all_checks_pass_and_state_is_authenticated) ... ok
+test_auth_timeout_missing_login_unknown_and_text_status (test_hub_doctor.DoctorTests.test_auth_timeout_missing_login_unknown_and_text_status) ... ok
+test_empty_home_advice_without_creating_files_or_logging_in (test_hub_doctor.DoctorTests.test_empty_home_advice_without_creating_files_or_logging_in) ... ok
+test_health_and_protected_state_failures_print_guidance (test_hub_doctor.DoctorTests.test_health_and_protected_state_failures_print_guidance) ... ok
+test_hook_detection_requires_executed_relay_and_correct_agent (test_hub_doctor.DoctorTests.test_hook_detection_requires_executed_relay_and_correct_agent) ... ok
+test_macos_accessibility_denied_or_timeout_has_permission_guidance (test_hub_doctor.DoctorTests.test_macos_accessibility_denied_or_timeout_has_permission_guidance) ... ok
+test_macos_adds_two_harmless_bounded_probes (test_hub_doctor.DoctorTests.test_macos_adds_two_harmless_bounded_probes) ... ok
+test_macos_missing_osascript_logs_and_reports_without_raising (test_hub_doctor.DoctorTests.test_macos_missing_osascript_logs_and_reports_without_raising) ... ok
+test_macos_relay_detection_understands_posix_quoted_paths (test_hub_doctor.DoctorTests.test_macos_relay_detection_understands_posix_quoted_paths) ... ok
+test_stale_missing_future_and_invalid_agent_timestamps (test_hub_doctor.DoctorTests.test_stale_missing_future_and_invalid_agent_timestamps) ... ok
+test_token_empty_or_unreadable_does_not_make_protected_request (test_hub_doctor.DoctorTests.test_token_empty_or_unreadable_does_not_make_protected_request) ... ok
+test_binds_only_loopback_and_authenticates_every_protected_route (__main__.HTTPTests.test_binds_only_loopback_and_authenticates_every_protected_route) ... ok
+test_critical_http_fallback_and_authenticated_audit_tail (__main__.HTTPTests.test_critical_http_fallback_and_authenticated_audit_tail) ... ok
+test_empty_audit_does_not_create_file (__main__.HTTPTests.test_empty_audit_does_not_create_file) ... ok
+test_http_timeout_and_deny (__main__.HTTPTests.test_http_timeout_and_deny) ... ok
+test_http_voice_press_release_and_compatibility (__main__.HTTPTests.test_http_voice_press_release_and_compatibility) ... ok
+test_permission_does_not_block_http_state_action_or_another_event (__main__.HTTPTests.test_permission_does_not_block_http_state_action_or_another_event) ... ok
+test_rejects_bad_requests (__main__.HTTPTests.test_rejects_bad_requests) ... ok
+test_relay_to_real_loopback_server_preserves_decision (__main__.HTTPTests.test_relay_to_real_loopback_server_preserves_decision) ... ok
+test_token_created_once_and_reused (__main__.HTTPTests.test_token_created_once_and_reused) ... ok
+test_agents_seen_keeps_last_event_time_after_session_end (__main__.HubTests.test_agents_seen_keeps_last_event_time_after_session_end) ... ok
+test_audit_failure_blocks_device_decision_but_releases_native_fallback (__main__.HubTests.test_audit_failure_blocks_device_decision_but_releases_native_fallback) ... ok
+test_critical_classification_precedes_high_and_is_configurable (__main__.HubTests.test_critical_classification_precedes_high_and_is_configurable) ... ok
+test_critical_returns_immediately_and_device_cannot_decide_locked_record (__main__.HubTests.test_critical_returns_immediately_and_device_cannot_decide_locked_record) ... ok
+test_decisions_audit_original_command_fields_and_sources_once (__main__.HubTests.test_decisions_audit_original_command_fields_and_sources_once) ... 2026-11-17 21:24:11,118 agentdeck.hub INFO USB hid:0x0A -> {'action': 'approve', 'request_id': '5a0595035f08416abaead81b51f825c8', 'status': 'confirm', 'message': 'HOLD! press again'}
+2026-11-17 21:24:11,119 agentdeck.hub INFO USB hid:0x0A -> {'action': 'approve', 'request_id': '5a0595035f08416abaead81b51f825c8', 'status': 'allowed'}
+ok
+test_deny_and_interrupt_return_deny_with_message (__main__.HubTests.test_deny_and_interrupt_return_deny_with_message) ... ok
+test_desktop_actions_use_selected_session_and_bilingual_templates (__main__.HubTests.test_desktop_actions_use_selected_session_and_bilingual_templates) ... ok
+test_disabled_outputs_preserve_decisions_without_native_effects (__main__.HubTests.test_disabled_outputs_preserve_decisions_without_native_effects) ... 2026-11-17 21:24:11,153 agentdeck.hub WARNING Window focus unavailable: desktop output disabled
+ok
+test_expired_request_does_not_consume_confirmation_for_next (__main__.HubTests.test_expired_request_does_not_consume_confirmation_for_next) ... ok
+test_failed_voice_stop_blocks_other_actions_until_retry_succeeds (__main__.HubTests.test_failed_voice_stop_blocks_other_actions_until_retry_succeeds) ... 2026-11-17 21:24:11,166 agentdeck.hub.voice INFO Voice started: target=cc-abc123 hwnd=12
+2026-11-17 21:24:11,167 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abc123 hwnd=12 reason=released restores=0 closed=False
+2026-11-17 21:24:11,167 agentdeck.hub.voice WARNING Voice stop error: foreground changed or key combination failed
+2026-11-17 21:24:11,167 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abc123 hwnd=12 reason=released restores=0 closed=True
+ok
+test_high_risk_classification_and_configurable_rules (__main__.HubTests.test_high_risk_classification_and_configurable_rules) ... ok
+test_high_risk_confirmation_is_bound_to_request_and_expires (__main__.HubTests.test_high_risk_confirmation_is_bound_to_request_and_expires) ... ok
+test_high_risk_warning_survives_later_same_session_event (__main__.HubTests.test_high_risk_warning_survives_later_same_session_event) ... ok
+test_interrupt_denies_pending_even_after_selecting_nonwaiting_session (__main__.HubTests.test_interrupt_denies_pending_even_after_selecting_nonwaiting_session) ... ok
+test_invalid_events_do_not_create_sessions_or_consume_slots (__main__.HubTests.test_invalid_events_do_not_create_sessions_or_consume_slots) ... ok
+test_keys_match_existing_hook_for_both_agents (__main__.HubTests.test_keys_match_existing_hook_for_both_agents) ... ok
+test_lcd_failure_does_not_break_approval_or_hold_heartbeat (__main__.HubTests.test_lcd_failure_does_not_break_approval_or_hold_heartbeat) ... ok
+test_locked_arrival_preserves_waiter_and_stale_ids_do_not_retarget (__main__.HubTests.test_locked_arrival_preserves_waiter_and_stale_ids_do_not_retarget) ... ok
+test_locked_banner_renders_through_existing_firmware_protocol (__main__.HubTests.test_locked_banner_renders_through_existing_firmware_protocol) ... ok
+test_locked_record_survives_notification_and_clears_on_native_progress (__main__.HubTests.test_locked_record_survives_notification_and_clears_on_native_progress) ... ok
+test_new_waiter_displays_after_locked_native_fallback (__main__.HubTests.test_new_waiter_displays_after_locked_native_fallback) ... ok
+test_old_guard_completion_cannot_clear_a_new_target (__main__.HubTests.test_old_guard_completion_cannot_clear_a_new_target) ... ok
+test_permission_blocks_until_approve (__main__.HubTests.test_permission_blocks_until_approve) ... ok
+test_real_guard_callback_reaches_lcd_while_hub_lock_is_held (__main__.HubTests.test_real_guard_callback_reaches_lcd_while_hub_lock_is_held) ... 2026-11-17 21:24:11,230 agentdeck.hub.voice INFO Voice started: target=cc-abc123 hwnd=12
+2026-11-17 21:24:11,230 agentdeck.hub.voice INFO Voice kept target: target=cc-abc123 hwnd=12 restores=1
+2026-11-17 21:24:11,249 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abc123 hwnd=12 reason=released restores=1 closed=True
+ok
+test_requests_fifo_and_stale_id_cannot_approve_next_session (__main__.HubTests.test_requests_fifo_and_stale_id_cannot_approve_next_session) ... ok
+test_session_end_and_shutdown_release_waiters_without_deciding (__main__.HubTests.test_session_end_and_shutdown_release_waiters_without_deciding) ... ok
+test_shutdown_and_session_end_are_audited_as_native_fallbacks (__main__.HubTests.test_shutdown_and_session_end_are_audited_as_native_fallbacks) ... ok
+test_slot_numbers_stay_stable_and_released_slot_is_reused (__main__.HubTests.test_slot_numbers_stay_stable_and_released_slot_is_reused) ... ok
+test_slot_selection_selects_that_sessions_pending_request (__main__.HubTests.test_slot_selection_selects_that_sessions_pending_request) ... ok
+test_state_events_and_pending_are_not_lost (__main__.HubTests.test_state_events_and_pending_are_not_lost) ... ok
+test_timeout_falls_back_and_cannot_be_approved_later (__main__.HubTests.test_timeout_falls_back_and_cannot_be_approved_later) ... ok
+test_two_requests_in_one_session_still_need_separate_decisions (__main__.HubTests.test_two_requests_in_one_session_still_need_separate_decisions) ... ok
+test_usb_legacy_string_binding_still_dispatches_one_shot_voice (__main__.HubTests.test_usb_legacy_string_binding_still_dispatches_one_shot_voice) ... 2026-11-17 21:24:11,425 agent_deck.usb INFO USB keyboard report length=8 (boot keyboard)
+2026-11-17 21:24:11,425 agentdeck.hub INFO USB hid:0x0B -> {'action': 'voice', 'status': 'sent'}
+ok
+test_usb_pairs_release_even_after_modifiers_and_pressed_keys_change (__main__.HubTests.test_usb_pairs_release_even_after_modifiers_and_pressed_keys_change) ... 2026-11-17 21:24:11,427 agent_deck.usb INFO USB keyboard report length=8 (boot keyboard)
+2026-11-17 21:24:11,427 agentdeck.hub INFO USB ctrl+hid:0x0B -> {'action': 'voice_down', 'status': 'sent'}
+2026-11-17 21:24:11,428 agentdeck.hub INFO USB ctrl+hid:0x0B -> {'action': 'voice_up', 'status': 'sent'}
+ok
+test_usb_rejects_malformed_transition_bindings (__main__.HubTests.test_usb_rejects_malformed_transition_bindings) ... ok
+test_usb_selects_named_profile_and_keeps_default_bindings (__main__.HubTests.test_usb_selects_named_profile_and_keeps_default_bindings) ... 2026-11-17 21:24:11,430 agentdeck.hub INFO USB hid:0x08 -> {'action': 'slot', 'status': 'selected', 'slot': 2, 'request_id': None, 'window': 'focused'}
+2026-11-17 21:24:11,430 agentdeck.hub INFO USB hid:0x08 -> {'action': 'slot', 'status': 'selected', 'slot': 1, 'request_id': None, 'window': 'focused'}
+ok
+test_usb_unaccepted_press_has_no_release_action (__main__.HubTests.test_usb_unaccepted_press_has_no_release_action) ... ok
+test_usb_uses_same_actions_and_ignores_releases_modifiers_and_stale_reports (__main__.HubTests.test_usb_uses_same_actions_and_ignores_releases_modifiers_and_stale_reports) ... 2026-11-17 21:24:11,434 agent_deck.usb INFO USB keyboard report length=8 (boot keyboard)
+2026-11-17 21:24:11,435 agentdeck.hub INFO USB hid:0x0A -> {'action': 'approve', 'request_id': 'b46f9c6c0b044673a2e456077bf8dba0', 'status': 'allowed'}
+2026-11-17 21:24:11,436 agentdeck.hub INFO USB hid:0x0B -> {'action': 'voice_down', 'status': 'sent'}
+ok
+test_usb_voice_release_cannot_be_lost_to_a_stale_timestamp (__main__.HubTests.test_usb_voice_release_cannot_be_lost_to_a_stale_timestamp) ... 2026-11-17 21:24:11,438 agentdeck.hub INFO USB hid:0x0B -> {'action': 'voice_down', 'status': 'sent'}
+2026-11-17 21:24:11,438 agentdeck.hub INFO USB hid:0x0B -> {'action': 'voice_up', 'status': 'sent'}
+ok
+test_voice_blocks_window_changes_and_text_input (__main__.HubTests.test_voice_blocks_window_changes_and_text_input) ... ok
+test_voice_failures_are_reported_and_do_not_resolve_hooks (__main__.HubTests.test_voice_failures_are_reported_and_do_not_resolve_hooks) ... 2026-11-17 21:24:11,441 agentdeck.hub WARNING Desktop action failed: could not activate
+ok
+test_voice_keeps_original_session_when_another_request_arrives (__main__.HubTests.test_voice_keeps_original_session_when_another_request_arrives) ... ok
+test_voice_kept_target_notice_is_transient_and_preserves_session (__main__.HubTests.test_voice_kept_target_notice_is_transient_and_preserves_session) ... ok
+test_voice_release_is_safe_without_a_session_and_idempotent (__main__.HubTests.test_voice_release_is_safe_without_a_session_and_idempotent) ... ok
+test_voice_stop_warnings_reach_lcd (__main__.HubTests.test_voice_stop_warnings_reach_lcd) ... ok
+test_voice_stops_on_target_session_end_and_shutdown (__main__.HubTests.test_voice_stops_on_target_session_end_and_shutdown) ... ok
+test_all_files_are_validated_before_any_write (test_hub_install.InstallTests.test_all_files_are_validated_before_any_write) ... ok
+test_cli_with_default_targets (test_hub_install.InstallTests.test_cli_with_default_targets) ... ok
+test_default_python_is_the_running_interpreter (test_hub_install.InstallTests.test_default_python_is_the_running_interpreter) ... ok
+test_dry_run_never_creates_home_or_backups (test_hub_install.InstallTests.test_dry_run_never_creates_home_or_backups) ... ok
+test_gate_cli_dry_run_and_temp_home_round_trip (test_hub_install.InstallTests.test_gate_cli_dry_run_and_temp_home_round_trip) ... ok
+test_gate_opt_in_separate_hooks_idempotent_and_clean_uninstall (test_hub_install.InstallTests.test_gate_opt_in_separate_hooks_idempotent_and_clean_uninstall) ... ok
+test_invalid_options_are_rejected_without_writes (test_hub_install.InstallTests.test_invalid_options_are_rejected_without_writes) ... ok
+test_invalid_python_override_is_rejected_before_writing (test_hub_install.InstallTests.test_invalid_python_override_is_rejected_before_writing) ... ok
+test_macos_cli_python_override_reaches_all_hook_commands (test_hub_install.InstallTests.test_macos_cli_python_override_reaches_all_hook_commands) ... ok
+test_macos_command_quotes_paths_and_options_for_a_posix_shell (test_hub_install.InstallTests.test_macos_command_quotes_paths_and_options_for_a_posix_shell) ... ok
+test_mixed_group_only_removes_own_handler (test_hub_install.InstallTests.test_mixed_group_only_removes_own_handler) ... ok
+test_ownership_is_executed_script_not_substring (test_hub_install.InstallTests.test_ownership_is_executed_script_not_substring) ... ok
+test_reinstall_preserves_gate_and_reconciles_gate_and_telemetry_options (test_hub_install.InstallTests.test_reinstall_preserves_gate_and_reconciles_gate_and_telemetry_options) ... ok
+test_reinstall_reconciles_options_without_duplicate_or_foreign_changes (test_hub_install.InstallTests.test_reinstall_reconciles_options_without_duplicate_or_foreign_changes) ... ok
+test_round_trip_and_idempotence (test_hub_install.InstallTests.test_round_trip_and_idempotence) ... ok
+test_uninstall_noop_preserves_empty_foreign_configuration (test_hub_install.InstallTests.test_uninstall_noop_preserves_empty_foreign_configuration) ... ok
+test_windows_command_keeps_list2cmdline_quoting (test_hub_install.InstallTests.test_windows_command_keeps_list2cmdline_quoting) ... ok
+test_exact_bytes_auth_and_timeouts (test_hub_relay.RelayTests.test_exact_bytes_auth_and_timeouts) ... ok
+test_failure_diagnostics_stay_in_supplied_home (test_hub_relay.RelayTests.test_failure_diagnostics_stay_in_supplied_home) ... ok
+test_gate_accepts_only_empty_response_or_pretooluse_deny (test_hub_relay.RelayTests.test_gate_accepts_only_empty_response_or_pretooluse_deny) ... ok
+test_gate_cli_passes_option_and_does_not_block_malformed_input_or_exception (test_hub_relay.RelayTests.test_gate_cli_passes_option_and_does_not_block_malformed_input_or_exception) ... ok
+test_gate_failure_denies_only_risky_operations (test_hub_relay.RelayTests.test_gate_failure_denies_only_risky_operations) ... ok
+test_gate_failure_path_is_fast_and_light (test_hub_relay.RelayTests.test_gate_failure_path_is_fast_and_light) ... ok
+test_gate_failure_uses_config_and_defaults (test_hub_relay.RelayTests.test_gate_failure_uses_config_and_defaults) ... ok
+test_gate_query_long_timeout_and_unmodified_empty_response (test_hub_relay.RelayTests.test_gate_query_long_timeout_and_unmodified_empty_response) ... ok
+test_gate_unclassifiable_events_do_not_block_and_are_logged (test_hub_relay.RelayTests.test_gate_unclassifiable_events_do_not_block_and_are_logged) ... ok
+test_main_preserves_text_and_silences_failures (test_hub_relay.RelayTests.test_main_preserves_text_and_silences_failures) ... ok
+test_missing_hub_process_gate_denies_risky_and_passes_the_rest (test_hub_relay.RelayTests.test_missing_hub_process_gate_denies_risky_and_passes_the_rest) ... ok
+test_missing_hub_process_silent_exit_zero (test_hub_relay.RelayTests.test_missing_hub_process_silent_exit_zero) ... ok
+test_60_second_limit_closes_without_waiting_for_release (test_hub_desktop.VoiceTests.test_60_second_limit_closes_without_waiting_for_release) ... 2026-11-17 21:24:12,294 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-17 21:24:12,294 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=timeout restores=0 closed=True
+ok
+test_changing_target_title_preserves_handle_and_closes_successfully (test_hub_desktop.VoiceTests.test_changing_target_title_preserves_handle_and_closes_successfully) ... 2026-11-17 21:24:12,295 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-17 21:24:12,311 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=released restores=0 closed=True
+ok
+test_close_stops_active_voice_before_returning (test_hub_desktop.VoiceTests.test_close_stops_active_voice_before_returning) ... 2026-11-17 21:24:12,312 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-17 21:24:12,326 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=shutdown restores=0 closed=True
+ok
+test_concurrent_releases_close_once_and_callback_once (test_hub_desktop.VoiceTests.test_concurrent_releases_close_once_and_callback_once) ... 2026-11-17 21:24:12,328 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-17 21:24:12,342 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=released restores=0 closed=True
+ok
+test_duplicate_down_keeps_original_session_and_handle (test_hub_desktop.VoiceTests.test_duplicate_down_keeps_original_session_and_handle) ... 2026-11-17 21:24:12,343 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-17 21:24:12,343 agentdeck.hub.voice INFO Voice kept target: target=cc-abcdef hwnd=12 restores=1
+2026-11-17 21:24:12,358 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=released restores=1 closed=True
+ok
+test_existing_handle_is_kept_when_window_is_hidden_or_titleless (test_hub_desktop.VoiceTests.test_existing_handle_is_kept_when_window_is_hidden_or_titleless) ... 2026-11-17 21:24:12,358 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-17 21:24:12,373 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=released restores=0 closed=True
+ok
+test_failed_close_retains_ownership_until_explicit_retry_succeeds (test_hub_desktop.VoiceTests.test_failed_close_retains_ownership_until_explicit_retry_succeeds) ... 2026-11-17 21:24:12,374 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-17 21:24:12,390 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=released restores=0 closed=True
+ok
+test_failed_open_never_starts_guard_or_closes_unowned_dictation (test_hub_desktop.VoiceTests.test_failed_open_never_starts_guard_or_closes_unowned_dictation) ... ok
+test_failed_restore_ends_guard_without_typing_or_approval (test_hub_desktop.VoiceTests.test_failed_restore_ends_guard_without_typing_or_approval) ... 2026-11-17 21:24:12,390 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-17 21:24:12,390 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=focus_failed restores=0 closed=True
+ok
+test_failed_thread_start_and_failed_close_keep_ownership_for_retry (test_hub_desktop.VoiceTests.test_failed_thread_start_and_failed_close_keep_ownership_for_retry) ... ok
+test_first_100ms_tick_restores_target_and_release_joins_guard (test_hub_desktop.VoiceTests.test_first_100ms_tick_restores_target_and_release_joins_guard) ... 2026-11-17 21:24:12,391 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-17 21:24:12,404 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=released restores=1 closed=True
+ok
+test_missing_window_stops_on_next_tick_and_only_sends_global_close (test_hub_desktop.VoiceTests.test_missing_window_stops_on_next_tick_and_only_sends_global_close) ... 2026-11-17 21:24:12,405 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-17 21:24:12,405 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=window_lost restores=0 closed=True
+ok
+test_release_notices_window_loss_before_next_tick (test_hub_desktop.VoiceTests.test_release_notices_window_loss_before_next_tick) ... 2026-11-17 21:24:12,406 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-17 21:24:12,421 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=window_lost restores=0 closed=True
+ok
+test_timeout_ends_thread_even_if_owned_dictation_cannot_close (test_hub_desktop.VoiceTests.test_timeout_ends_thread_even_if_owned_dictation_cannot_close) ... 2026-11-17 21:24:12,421 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+2026-11-17 21:24:12,422 agentdeck.hub.voice INFO Voice guard stopped: target=cc-abcdef hwnd=12 reason=timeout restores=0 closed=True
+ok
+test_window_query_error_still_attempts_owned_dictation_close (test_hub_desktop.VoiceTests.test_window_query_error_still_attempts_owned_dictation_close) ... 2026-11-17 21:24:12,422 agentdeck.hub.voice INFO Voice started: target=cc-abcdef hwnd=12
+ok
+
+----------------------------------------------------------------------
+Ran 131 tests in 2.144s
+
+OK
+
+EXIT: 0
+
+COMMAND: D:\conda\miniconda3\python.exe pc/test_hub_demo.py
+..........
+----------------------------------------------------------------------
+Ran 10 tests in 0.519s
+
+OK
+
+EXIT: 0
+
+COMMAND: D:\conda\miniconda3\python.exe pc/test_hub_desktop.py
+test_combo_presses_in_order_releases_in_reverse (__main__.ComboTests.test_combo_presses_in_order_releases_in_reverse) ... ok
+test_held_modifiers_and_changed_foreground_prevent_input (__main__.ComboTests.test_held_modifiers_and_changed_foreground_prevent_input) ... ok
+test_native_window_existence_uses_handle_even_when_not_visible (__main__.ComboTests.test_native_window_existence_uses_handle_even_when_not_visible) ... ok
+test_partial_input_releases_only_inserted_down_keys (__main__.ComboTests.test_partial_input_releases_only_inserted_down_keys) ... ok
+test_default_capture_requests_all_screens (__main__.DesktopTests.test_default_capture_requests_all_screens) ... ok
+test_failed_paste_never_sends_enter (__main__.DesktopTests.test_failed_paste_never_sends_enter) ... ok
+test_focus_change_after_paste_never_sends_enter (__main__.DesktopTests.test_focus_change_after_paste_never_sends_enter) ... ok
+test_focus_rejects_ambiguity_and_activation_failure (__main__.DesktopTests.test_focus_rejects_ambiguity_and_activation_failure) ... ok
+test_focus_uses_project_and_tool_matching (__main__.DesktopTests.test_focus_uses_project_and_tool_matching) ... ok
+test_foreground_change_after_clipboard_never_pastes (__main__.DesktopTests.test_foreground_change_after_clipboard_never_pastes) ... ok
+test_interrupt_sends_one_escape (__main__.DesktopTests.test_interrupt_sends_one_escape) ... ok
+test_native_adapter_is_lazy (__main__.DesktopTests.test_native_adapter_is_lazy) ... ok
+test_prompt_pastes_unicode_then_enter (__main__.DesktopTests.test_prompt_pastes_unicode_then_enter) ... ok
+test_screenshot_saves_path_and_never_sends_enter (__main__.DesktopTests.test_screenshot_saves_path_and_never_sends_enter) ... ok
+test_voice_sends_win_h (__main__.DesktopTests.test_voice_sends_win_h) ... ok
+test_60_second_limit_closes_without_waiting_for_release (__main__.VoiceTests.test_60_second_limit_closes_without_waiting_for_release) ... ok
+test_changing_target_title_preserves_handle_and_closes_successfully (__main__.VoiceTests.test_changing_target_title_preserves_handle_and_closes_successfully) ... ok
+test_close_stops_active_voice_before_returning (__main__.VoiceTests.test_close_stops_active_voice_before_returning) ... ok
+test_concurrent_releases_close_once_and_callback_once (__main__.VoiceTests.test_concurrent_releases_close_once_and_callback_once) ... ok
+test_duplicate_down_keeps_original_session_and_handle (__main__.VoiceTests.test_duplicate_down_keeps_original_session_and_handle) ... ok
+test_existing_handle_is_kept_when_window_is_hidden_or_titleless (__main__.VoiceTests.test_existing_handle_is_kept_when_window_is_hidden_or_titleless) ... ok
+test_failed_close_retains_ownership_until_explicit_retry_succeeds (__main__.VoiceTests.test_failed_close_retains_ownership_until_explicit_retry_succeeds) ... ok
+test_failed_open_never_starts_guard_or_closes_unowned_dictation (__main__.VoiceTests.test_failed_open_never_starts_guard_or_closes_unowned_dictation) ... ok
+test_failed_restore_ends_guard_without_typing_or_approval (__main__.VoiceTests.test_failed_restore_ends_guard_without_typing_or_approval) ... ok
+test_failed_thread_start_and_failed_close_keep_ownership_for_retry (__main__.VoiceTests.test_failed_thread_start_and_failed_close_keep_ownership_for_retry) ... ok
+test_first_100ms_tick_restores_target_and_release_joins_guard (__main__.VoiceTests.test_first_100ms_tick_restores_target_and_release_joins_guard) ... ok
+test_missing_window_stops_on_next_tick_and_only_sends_global_close (__main__.VoiceTests.test_missing_window_stops_on_next_tick_and_only_sends_global_close) ... ok
+test_release_notices_window_loss_before_next_tick (__main__.VoiceTests.test_release_notices_window_loss_before_next_tick) ... ok
+test_timeout_ends_thread_even_if_owned_dictation_cannot_close (__main__.VoiceTests.test_timeout_ends_thread_even_if_owned_dictation_cannot_close) ... ok
+test_window_query_error_still_attempts_owned_dictation_close (__main__.VoiceTests.test_window_query_error_still_attempts_owned_dictation_close) ... ok
+
+----------------------------------------------------------------------
+Ran 30 tests in 0.164s
+
+OK
+
+EXIT: 0
+
+COMMAND: D:\conda\miniconda3\python.exe pc/test_hub_desktop_mac.py
+test_all_six_apps_and_actual_process_aliases_use_title_matching (__main__.MacDesktopTests.test_all_six_apps_and_actual_process_aliases_use_title_matching) ... ok
+test_boundary_tool_and_ambiguity_rules_are_preserved (__main__.MacDesktopTests.test_boundary_tool_and_ambiguity_rules_are_preserved) ... ok
+test_copy_capture_and_return_failures_do_not_continue (__main__.MacDesktopTests.test_copy_capture_and_return_failures_do_not_continue) ... ok
+test_default_and_configurable_dictation_scripts (__main__.MacDesktopTests.test_default_and_configurable_dictation_scripts) ... ok
+test_failed_activation_never_types (__main__.MacDesktopTests.test_failed_activation_never_types) ... ok
+test_focus_change_after_copy_or_paste_blocks_following_input (__main__.MacDesktopTests.test_focus_change_after_copy_or_paste_blocks_following_input) ... ok
+test_hub_cli_reads_mac_shortcut_from_relocated_config_before_any_startup (__main__.MacDesktopTests.test_hub_cli_reads_mac_shortcut_from_relocated_config_before_any_startup) ... ok
+test_hub_reports_unavailable_when_native_action_returns_false (__main__.MacDesktopTests.test_hub_reports_unavailable_when_native_action_returns_false) ... ok
+test_interrupt_sends_only_escape_keycode_53 (__main__.MacDesktopTests.test_interrupt_sends_only_escape_keycode_53) ... ok
+test_invalid_window_output_does_not_escape (__main__.MacDesktopTests.test_invalid_window_output_does_not_escape) ... ok
+test_platform_dispatch_and_lazy_import (__main__.MacDesktopTests.test_platform_dispatch_and_lazy_import) ... ok
+test_process_failures_and_timeouts_only_log_with_one_permission_hint (__main__.MacDesktopTests.test_process_failures_and_timeouts_only_log_with_one_permission_hint) ... ok
+test_prompt_copies_unicode_as_stdin_then_command_v_then_return (__main__.MacDesktopTests.test_prompt_copies_unicode_as_stdin_then_command_v_then_return) ... ok
+test_same_project_sessions_and_unsupported_apps_are_not_guessed (__main__.MacDesktopTests.test_same_project_sessions_and_unsupported_apps_are_not_guessed) ... ok
+test_screenshot_is_unique_png_and_pastes_path_without_return (__main__.MacDesktopTests.test_screenshot_is_unique_png_and_pastes_path_without_return) ... ok
+test_title_fallback_rechecks_uniqueness_for_exists_and_input (__main__.MacDesktopTests.test_title_fallback_rechecks_uniqueness_for_exists_and_input) ... ok
+test_trailing_newlines_in_window_titles_are_preserved (__main__.MacDesktopTests.test_trailing_newlines_in_window_titles_are_preserved) ... ok
+test_window_serialization_handles_unicode_quotes_and_title_changes (__main__.MacDesktopTests.test_window_serialization_handles_unicode_quotes_and_title_changes) ... ok
+test_duplicate_down_never_starts_a_second_interval (__main__.MacVoiceTests.test_duplicate_down_never_starts_a_second_interval) ... ok
+test_failed_close_logs_and_retains_ownership_until_retry (__main__.MacVoiceTests.test_failed_close_logs_and_retains_ownership_until_retry) ... ok
+test_timeout_and_missing_window_stop_guard (__main__.MacVoiceTests.test_timeout_and_missing_window_stop_guard) ... ok
+test_title_change_with_native_id_does_not_retarget (__main__.MacVoiceTests.test_title_change_with_native_id_does_not_retarget) ... ok
+test_voice_refocuses_pinned_window_and_closes_only_dictation (__main__.MacVoiceTests.test_voice_refocuses_pinned_window_and_closes_only_dictation) ... ok
+
+----------------------------------------------------------------------
+Ran 23 tests in 0.089s
+
+OK
+
+EXIT: 0
+
+COMMAND: D:\conda\miniconda3\python.exe pc/test_hub_doctor.py
+test_all_checks_pass_and_state_is_authenticated (__main__.DoctorTests.test_all_checks_pass_and_state_is_authenticated) ... ok
+test_auth_timeout_missing_login_unknown_and_text_status (__main__.DoctorTests.test_auth_timeout_missing_login_unknown_and_text_status) ... ok
+test_empty_home_advice_without_creating_files_or_logging_in (__main__.DoctorTests.test_empty_home_advice_without_creating_files_or_logging_in) ... ok
+test_health_and_protected_state_failures_print_guidance (__main__.DoctorTests.test_health_and_protected_state_failures_print_guidance) ... ok
+test_hook_detection_requires_executed_relay_and_correct_agent (__main__.DoctorTests.test_hook_detection_requires_executed_relay_and_correct_agent) ... ok
+test_macos_accessibility_denied_or_timeout_has_permission_guidance (__main__.DoctorTests.test_macos_accessibility_denied_or_timeout_has_permission_guidance) ... ok
+test_macos_adds_two_harmless_bounded_probes (__main__.DoctorTests.test_macos_adds_two_harmless_bounded_probes) ... ok
+test_macos_missing_osascript_logs_and_reports_without_raising (__main__.DoctorTests.test_macos_missing_osascript_logs_and_reports_without_raising) ... ok
+test_macos_relay_detection_understands_posix_quoted_paths (__main__.DoctorTests.test_macos_relay_detection_understands_posix_quoted_paths) ... ok
+test_stale_missing_future_and_invalid_agent_timestamps (__main__.DoctorTests.test_stale_missing_future_and_invalid_agent_timestamps) ... ok
+test_token_empty_or_unreadable_does_not_make_protected_request (__main__.DoctorTests.test_token_empty_or_unreadable_does_not_make_protected_request) ... ok
+
+----------------------------------------------------------------------
+Ran 11 tests in 0.094s
+
+OK
+
+EXIT: 0
+
+COMMAND: D:\conda\miniconda3\python.exe pc/test_hub_gate.py
+test_config_file_defaults_and_cli_override (__main__.GateIntegrationTests.test_config_file_defaults_and_cli_override) ... 2026-11-17 21:24:14,387 agentdeck.hub INFO Hub listening on 127.0.0.1:<MagicMock name='HubServer().server_port' id='2503335826768'> (none)
+2026-11-17 21:24:14,389 agentdeck.hub INFO Hub listening on 127.0.0.1:<MagicMock name='HubServer().server_port' id='2503335826768'> (none)
+ok
+test_hub_down_relay_denies_only_risky_operations (__main__.GateIntegrationTests.test_hub_down_relay_denies_only_risky_operations) ... ok
+test_real_relay_http_gate_then_permission_and_timeout (__main__.GateIntegrationTests.test_real_relay_http_gate_then_permission_and_timeout) ... ok
+test_complete_default_gate_rule_categories (__main__.GateRiskTests.test_complete_default_gate_rule_categories) ... ok
+test_production_hosts_protected_branches_and_mcp_write_allowlist (__main__.GateRiskTests.test_production_hosts_protected_branches_and_mcp_write_allowlist) ... ok
+test_audit_failure_never_releases_gate_and_timeout_still_denies (__main__.GateTests.test_audit_failure_never_releases_gate_and_timeout_still_denies) ... ok
+test_confirmation_expires_and_is_bound_to_same_request (__main__.GateTests.test_confirmation_expires_and_is_bound_to_same_request) ... ok
+test_critical_permission_stays_locked_after_gate_confirmation (__main__.GateTests.test_critical_permission_stays_locked_after_gate_confirmation) ... ok
+test_deny_and_interrupt_return_pretooluse_reason_and_audit_gate (__main__.GateTests.test_deny_and_interrupt_return_pretooluse_reason_and_audit_gate) ... ok
+test_gate_banner_uses_existing_firmware_protocol (__main__.GateTests.test_gate_banner_uses_existing_firmware_protocol) ... ok
+test_gate_confirmation_marks_permission_but_still_requires_one_key (__main__.GateTests.test_gate_confirmation_marks_permission_but_still_requires_one_key) ... ok
+test_high_and_critical_both_need_two_presses_and_never_return_allow (__main__.GateTests.test_high_and_critical_both_need_two_presses_and_never_return_allow) ... ok
+test_low_and_off_modes (__main__.GateTests.test_low_and_off_modes) ... ok
+test_low_returns_empty_in_under_50ms_without_wait_or_lcd (__main__.GateTests.test_low_returns_empty_in_under_50ms_without_wait_or_lcd) ... ok
+test_marker_expires_at_30_seconds_and_session_end_clears_it (__main__.GateTests.test_marker_expires_at_30_seconds_and_session_end_clears_it) ... ok
+test_marker_is_scoped_to_agent_session_and_complete_tool_input (__main__.GateTests.test_marker_is_scoped_to_agent_session_and_complete_tool_input) ... ok
+test_real_wait_timeout_denies_instead_of_falling_back (__main__.GateTests.test_real_wait_timeout_denies_instead_of_falling_back) ... ok
+test_repeated_gate_commands_still_require_new_double_confirmation (__main__.GateTests.test_repeated_gate_commands_still_require_new_double_confirmation) ... ok
+test_session_end_stop_interrupt_and_shutdown_deny_waiting_gates (__main__.GateTests.test_session_end_stop_interrupt_and_shutdown_deny_waiting_gates) ... ok
+test_validation_before_pending_creation (__main__.GateTests.test_validation_before_pending_creation) ... ok
+
+----------------------------------------------------------------------
+Ran 20 tests in 2.399s
+
+OK
+
+EXIT: 0
+
+COMMAND: D:\conda\miniconda3\python.exe pc/test_hub_hotkey.py
+test_cleanup_continues_after_message_and_unregister_failures (__main__.HotkeyTests.test_cleanup_continues_after_message_and_unregister_failures) ... ok
+test_decision_cannot_retarget_during_modifier_wait (__main__.HotkeyTests.test_decision_cannot_retarget_during_modifier_wait) ... ok
+test_decision_queued_before_previous_action_finished_is_dropped (__main__.HotkeyTests.test_decision_queued_before_previous_action_finished_is_dropped) ... ok
+test_default_mapping (__main__.HotkeyTests.test_default_mapping) ... ok
+test_dispatch_uses_shared_action_and_observed_request (__main__.HotkeyTests.test_dispatch_uses_shared_action_and_observed_request) ... ok
+test_modifier_release_precedes_prompt_dispatch (__main__.HotkeyTests.test_modifier_release_precedes_prompt_dispatch) ... ok
+test_modifier_wait_is_bounded_and_stale_action_dropped (__main__.HotkeyTests.test_modifier_wait_is_bounded_and_stale_action_dropped) ... ok
+test_native_register_uses_no_repeat_and_pointer_safe_queue (__main__.HotkeyTests.test_native_register_uses_no_repeat_and_pointer_safe_queue) ... ok
+test_parser_normalizes_modifiers_and_vkeys (__main__.HotkeyTests.test_parser_normalizes_modifiers_and_vkeys) ... ok
+test_parser_rejects_unsupported_and_duplicate_keys (__main__.HotkeyTests.test_parser_rejects_unsupported_and_duplicate_keys) ... ok
+test_registration_conflict_warns_once_other_keys_dispatch_and_cleanup (__main__.HotkeyTests.test_registration_conflict_warns_once_other_keys_dispatch_and_cleanup) ... ok
+test_stale_events_never_dispatch (__main__.HotkeyTests.test_stale_events_never_dispatch) ... ok
+test_stop_before_run_has_no_native_effects (__main__.HotkeyTests.test_stop_before_run_has_no_native_effects) ... ok
+test_stop_wakes_running_message_thread_and_releases_all_keys (__main__.HotkeyTests.test_stop_wakes_running_message_thread_and_releases_all_keys) ... ok
+test_voice_toggle_tracks_actual_voice_after_timeout_and_failure (__main__.HotkeyTests.test_voice_toggle_tracks_actual_voice_after_timeout_and_failure) ... ok
+test_adapter_is_lazy_and_preserves_f13_to_f20_mapping (__main__.MacHotkeyTests.test_adapter_is_lazy_and_preserves_f13_to_f20_mapping) ... ok
+test_all_unsupported_bindings_do_not_start_listener (__main__.MacHotkeyTests.test_all_unsupported_bindings_do_not_start_listener) ... ok
+test_callbacks_queue_events_without_dispatching_and_ignore_repeat (__main__.MacHotkeyTests.test_callbacks_queue_events_without_dispatching_and_ignore_repeat) ... ok
+test_left_and_right_modifier_release_do_not_clear_other_side (__main__.MacHotkeyTests.test_left_and_right_modifier_release_do_not_clear_other_side) ... ok
+test_listener_callbacks_feed_shared_dispatch_after_modifier_release (__main__.MacHotkeyTests.test_listener_callbacks_feed_shared_dispatch_after_modifier_release) ... ok
+test_listener_permissions_fail_without_actions_or_exception (__main__.MacHotkeyTests.test_listener_permissions_fail_without_actions_or_exception) ... ok
+test_listener_start_failure_is_logged_and_cleaned_up (__main__.MacHotkeyTests.test_listener_start_failure_is_logged_and_cleaned_up) ... ok
+test_missing_pynput_disables_hotkeys_with_install_hint (__main__.MacHotkeyTests.test_missing_pynput_disables_hotkeys_with_install_hint) ... ok
+test_modifiers_must_match_exactly_including_command (__main__.MacHotkeyTests.test_modifiers_must_match_exactly_including_command) ... ok
+test_platform_dispatch_uses_pynput_only_on_mac (__main__.MacHotkeyTests.test_platform_dispatch_uses_pynput_only_on_mac) ... ok
+test_pynput_import_os_error_also_disables_hotkeys (__main__.MacHotkeyTests.test_pynput_import_os_error_also_disables_hotkeys) ... ok
+test_queue_age_uses_press_timestamp (__main__.MacHotkeyTests.test_queue_age_uses_press_timestamp) ... ok
+test_stop_wakes_queue_and_stops_listener (__main__.MacHotkeyTests.test_stop_wakes_queue_and_stops_listener) ... ok
+test_unknown_keys_and_stopped_callbacks_have_no_effect (__main__.MacHotkeyTests.test_unknown_keys_and_stopped_callbacks_have_no_effect) ... ok
+test_unsupported_function_keys_warn_and_other_bindings_continue (__main__.MacHotkeyTests.test_unsupported_function_keys_warn_and_other_bindings_continue) ... ok
+
+----------------------------------------------------------------------
+Ran 30 tests in 0.029s
+
+OK
+
+EXIT: 0
+
+COMMAND: D:\conda\miniconda3\python.exe pc/test_hub_install.py
+test_all_files_are_validated_before_any_write (__main__.InstallTests.test_all_files_are_validated_before_any_write) ... ok
+test_cli_with_default_targets (__main__.InstallTests.test_cli_with_default_targets) ... ok
+test_default_python_is_the_running_interpreter (__main__.InstallTests.test_default_python_is_the_running_interpreter) ... ok
+test_dry_run_never_creates_home_or_backups (__main__.InstallTests.test_dry_run_never_creates_home_or_backups) ... ok
+test_gate_cli_dry_run_and_temp_home_round_trip (__main__.InstallTests.test_gate_cli_dry_run_and_temp_home_round_trip) ... ok
+test_gate_opt_in_separate_hooks_idempotent_and_clean_uninstall (__main__.InstallTests.test_gate_opt_in_separate_hooks_idempotent_and_clean_uninstall) ... ok
+test_invalid_options_are_rejected_without_writes (__main__.InstallTests.test_invalid_options_are_rejected_without_writes) ... ok
+test_invalid_python_override_is_rejected_before_writing (__main__.InstallTests.test_invalid_python_override_is_rejected_before_writing) ... ok
+test_macos_cli_python_override_reaches_all_hook_commands (__main__.InstallTests.test_macos_cli_python_override_reaches_all_hook_commands) ... ok
+test_macos_command_quotes_paths_and_options_for_a_posix_shell (__main__.InstallTests.test_macos_command_quotes_paths_and_options_for_a_posix_shell) ... ok
+test_mixed_group_only_removes_own_handler (__main__.InstallTests.test_mixed_group_only_removes_own_handler) ... ok
+test_ownership_is_executed_script_not_substring (__main__.InstallTests.test_ownership_is_executed_script_not_substring) ... ok
+test_reinstall_preserves_gate_and_reconciles_gate_and_telemetry_options (__main__.InstallTests.test_reinstall_preserves_gate_and_reconciles_gate_and_telemetry_options) ... ok
+test_reinstall_reconciles_options_without_duplicate_or_foreign_changes (__main__.InstallTests.test_reinstall_reconciles_options_without_duplicate_or_foreign_changes) ... ok
+test_round_trip_and_idempotence (__main__.InstallTests.test_round_trip_and_idempotence) ... ok
+test_uninstall_noop_preserves_empty_foreign_configuration (__main__.InstallTests.test_uninstall_noop_preserves_empty_foreign_configuration) ... ok
+test_windows_command_keeps_list2cmdline_quoting (__main__.InstallTests.test_windows_command_keeps_list2cmdline_quoting) ... ok
+
+----------------------------------------------------------------------
+Ran 17 tests in 0.113s
+
+OK
+
+EXIT: 0
+
+COMMAND: D:\conda\miniconda3\python.exe pc/test_hub_overlay.py
+test_pointer_safe_style_and_mouseactivate_handling (__main__.NoActivateTests.test_pointer_safe_style_and_mouseactivate_handling) ... ok
+test_restore_only_when_overlay_owns_foreground (__main__.NoActivateTests.test_restore_only_when_overlay_owns_foreground) ... ok
+test_callbacks_share_action_path_and_capture_stale_id (__main__.OverlayActionsTests.test_callbacks_share_action_path_and_capture_stale_id) ... ok
+test_critical_gate_buttons_dispatch_the_displayed_request (__main__.OverlayActionsTests.test_critical_gate_buttons_dispatch_the_displayed_request) ... ok
+test_empty_or_locked_display_cannot_decide (__main__.OverlayActionsTests.test_empty_or_locked_display_cannot_decide) ... ok
+test_gate_render_shows_title_and_keeps_both_buttons_enabled (__main__.OverlayActionsTests.test_gate_render_shows_title_and_keeps_both_buttons_enabled) ... ok
+test_poll_grows_for_a_new_request_without_moving_the_bottom_edge (__main__.OverlayActionsTests.test_poll_grows_for_a_new_request_without_moving_the_bottom_edge) ... ok
+test_poll_uses_safe_hub_snapshot_every_300_ms (__main__.OverlayActionsTests.test_poll_uses_safe_hub_snapshot_every_300_ms) ... ok
+test_render_keeps_decision_labels_during_refresh (__main__.OverlayActionsTests.test_render_keeps_decision_labels_during_refresh) ... ok
+test_run_applies_noactivate_before_show_and_cleans_up (__main__.OverlayActionsTests.test_run_applies_noactivate_before_show_and_cleans_up) ... ok
+test_slot_clicks_work_without_keyboard (__main__.OverlayActionsTests.test_slot_clicks_work_without_keyboard) ... ok
+test_stale_error_is_reported_and_focus_restored (__main__.OverlayActionsTests.test_stale_error_is_reported_and_focus_restored) ... ok
+test_stop_is_only_a_signal_and_poll_quits_on_tk_thread (__main__.OverlayActionsTests.test_stop_is_only_a_signal_and_poll_quits_on_tk_thread) ... ok
+test_gate_confirmation_marker_preserves_permission_button_policy (__main__.OverlayModelTests.test_gate_confirmation_marker_preserves_permission_button_policy) ... ok
+test_gate_labels_and_buttons_include_critical_without_native_lock (__main__.OverlayModelTests.test_gate_labels_and_buttons_include_critical_without_native_lock) ... ok
+test_only_displayed_request_appears_and_summary_is_at_most_80 (__main__.OverlayModelTests.test_only_displayed_request_appears_and_summary_is_at_most_80) ... ok
+test_six_slots_preserve_numbers_selection_and_source (__main__.OverlayModelTests.test_six_slots_preserve_numbers_selection_and_source) ... ok
+test_state_labels_and_colors (__main__.OverlayModelTests.test_state_labels_and_colors) ... ok
+test_summary_whitespace_armed_high_and_critical_lock (__main__.OverlayModelTests.test_summary_whitespace_armed_high_and_critical_lock) ... ok
+
+----------------------------------------------------------------------
+Ran 19 tests in 0.010s
+
+OK
+
+EXIT: 0
+
+COMMAND: D:\conda\miniconda3\python.exe pc/test_hub_relay.py
+test_exact_bytes_auth_and_timeouts (__main__.RelayTests.test_exact_bytes_auth_and_timeouts) ... ok
+test_failure_diagnostics_stay_in_supplied_home (__main__.RelayTests.test_failure_diagnostics_stay_in_supplied_home) ... ok
+test_gate_accepts_only_empty_response_or_pretooluse_deny (__main__.RelayTests.test_gate_accepts_only_empty_response_or_pretooluse_deny) ... ok
+test_gate_cli_passes_option_and_does_not_block_malformed_input_or_exception (__main__.RelayTests.test_gate_cli_passes_option_and_does_not_block_malformed_input_or_exception) ... ok
+test_gate_failure_denies_only_risky_operations (__main__.RelayTests.test_gate_failure_denies_only_risky_operations) ... ok
+test_gate_failure_path_is_fast_and_light (__main__.RelayTests.test_gate_failure_path_is_fast_and_light) ... ok
+test_gate_failure_uses_config_and_defaults (__main__.RelayTests.test_gate_failure_uses_config_and_defaults) ... ok
+test_gate_query_long_timeout_and_unmodified_empty_response (__main__.RelayTests.test_gate_query_long_timeout_and_unmodified_empty_response) ... ok
+test_gate_unclassifiable_events_do_not_block_and_are_logged (__main__.RelayTests.test_gate_unclassifiable_events_do_not_block_and_are_logged) ... ok
+test_main_preserves_text_and_silences_failures (__main__.RelayTests.test_main_preserves_text_and_silences_failures) ... ok
+test_missing_hub_process_gate_denies_risky_and_passes_the_rest (__main__.RelayTests.test_missing_hub_process_gate_denies_risky_and_passes_the_rest) ... ok
+test_missing_hub_process_silent_exit_zero (__main__.RelayTests.test_missing_hub_process_silent_exit_zero) ... ok
+
+----------------------------------------------------------------------
+Ran 12 tests in 0.795s
+
+OK
+
+EXIT: 0
+
+COMMAND: D:\conda\miniconda3\python.exe pc/test_hub_runtime.py
+test_backend_combinations_and_rejections (__main__.RuntimeTests.test_backend_combinations_and_rejections) ... ok
+test_combined_readers_without_overlay_stop_on_interrupt (__main__.RuntimeTests.test_combined_readers_without_overlay_stop_on_interrupt) ... 2026-11-17 21:24:18,655 agentdeck.hub INFO Hub listening on 127.0.0.1:12345 (usb,hotkey)
+ok
+test_invalid_backend_exits_before_any_effect (__main__.RuntimeTests.test_invalid_backend_exits_before_any_effect) ... ok
+test_overlay_alone_and_with_each_backend (__main__.RuntimeTests.test_overlay_alone_and_with_each_backend) ... 2026-11-17 21:24:18,671 agentdeck.hub INFO Hub listening on 127.0.0.1:12345 (none)
+2026-11-17 21:24:18,689 agentdeck.hub INFO Hub listening on 127.0.0.1:12345 (usb)
+2026-11-17 21:24:18,705 agentdeck.hub INFO Hub listening on 127.0.0.1:12345 (hotkey)
+2026-11-17 21:24:18,723 agentdeck.hub INFO Hub listening on 127.0.0.1:12345 (usb,hotkey)
+ok
+test_overlay_startup_failure_stops_http_and_all_readers (__main__.RuntimeTests.test_overlay_startup_failure_stops_http_and_all_readers) ... 2026-11-17 21:24:18,742 agentdeck.hub INFO Hub listening on 127.0.0.1:12345 (usb,hotkey)
+ok
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.110s
+
+OK
+
+EXIT: 0
+
+COMMAND: D:\conda\miniconda3\python.exe pc/test_hub_virtual_device.py
+............
+----------------------------------------------------------------------
+Ran 12 tests in 0.001s
+
+OK
+
+EXIT: 0
+
+COMMAND: D:\conda\miniconda3\python.exe pc/test_pc.py
+test_names_hooks: PASS
+test_ensure_daemon: PASS
+test_demo: PASS
+test_firmware_loop: PASS
+PC and firmware loop: 4 groups passed
+
+EXIT: 0
+
+COMMAND: D:\conda\miniconda3\python.exe pc/test_ui.py
+test_layout_states: PASS
+test_marquee: PASS
+test_focus: PASS
+test_compatibility: PASS
+test_priority_rotation: PASS
+test_bad_commands_glyphs: PASS
+test_dance: PASS
+UI: 7 groups passed
+
+EXIT: 0
+
+COMMAND: D:\conda\miniconda3\python.exe research/selftest_hub_replay.py
+
+Hub replay self-test (local HTTP; LCD/USB/desktop disabled)
+Result | Check
+-------|------
+PASS | Voice/screenshot and synthetic prompt chords (decode only)
+PASS | Temporary process, random port, token and six sessions
+PASS | Low risk: approve key returns Codex allow
+PASS | High risk: two distinct approve presses required
+PASS | Critical: immediate native fallback; approve stays locked
+PASS | Deny: factory Ctrl then F returns Codex deny
+PASS | Session keys select all six corresponding slots
+PASS | All four knobs cycle both ways with wraparound
+PASS | Factory Ctrl-first macro, repeat and consumed Ctrl
+PASS | Confirmed Ctrl+0 alternate interrupt denies pending
+PASS | Decisions persisted in the temporary audit chain
+PASS | Temporary Hub startup and cleanup
+12 PASS / 0 FAIL
+Physical Ctrl+session chords remain pending user confirmation; see pc/hub_keys.md.
+
+EXIT: 0

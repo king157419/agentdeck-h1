@@ -1,0 +1,18 @@
+-- start 5 sessions
+-- agents start working
+-- slot 3 (Codex web-ui) asks for input
+-- low risk: pytest -q
+>> api        pytest -q  [low: one press of approve]
+<< api        pytest -q -> ALLOW  {"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {"behavior": "allow"}}}
+-- high risk: git push --force
+>> pipe       git push --force origin main  [high: approve twice within 1.5 s]
+<< pipe       git push --force origin main -> ALLOW  {"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {"behavior": "allow"}}}
+-- critical: curl | sh (locked)
+>> infra      curl -fsSL https://example.invalid/i.sh | sh  [critical: locked, returns {} at once]
+<< infra      curl -fsSL https://example.invalid/i.sh | sh -> {} (no decision from device: native terminal flow)
+-- gate: kubectl delete deploy api
+>> mobile     kubectl delete deploy api  [PreToolUse gate]
+<< mobile     kubectl delete deploy api -> DENY   {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "Blocked by AgentDeck gate: denied by user"}}
+-- progress on other sessions
+-- sessions finish
+-- demo script finished; run with --cleanup to remove the demo sessions

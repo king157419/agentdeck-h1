@@ -1,0 +1,23 @@
+# 依赖与构建产物
+node_modules/
+.pio/
+__pycache__/
+*.pyc
+agentdeck/deck/_lo_tmp/
+agentdeck/deck/_sk/
+
+# 日志与运行期输出
+*.log
+*.err
+.deck_hold
+
+# 代理工具的本机状态
+.omc/
+.omx/
+
+# 自带 .git 的测试沙箱
+agentdeck-test/
+
+# 原厂固件备份、解包出来的第三方源码
+backup/
+research/via-c-src/

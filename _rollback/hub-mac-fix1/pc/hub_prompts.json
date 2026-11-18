@@ -1,0 +1,10 @@
+{
+  "continue": "Continue working on the current task until it is complete.",
+  "继续": "继续完成当前任务，直到完成。",
+  "tests": "Run the tests relevant to the current changes and report the actual results.",
+  "跑测试": "运行与当前改动相关的测试，并汇报真实结果。",
+  "summary": "Summarize current progress, verification results, and remaining work.",
+  "总结进度": "总结当前进度、验证结果和剩余工作。",
+  "commit": "Review the current changes, run the required checks, and commit the completed work using this project's commit conventions.",
+  "提交": "检查当前改动，运行必要检查，并按项目的提交规范提交已完成的工作。"
+}

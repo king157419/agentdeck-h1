@@ -1,0 +1,18 @@
+{
+  "command": [
+    "D:\\conda\\miniconda3\\python.exe",
+    "D:\\desk\\hardware\\h1\\pc\\deck.py",
+    "run",
+    "--backend",
+    "usb",
+    "-v"
+  ],
+  "normal_exit": true,
+  "passed": true,
+  "duration_seconds": 3.006,
+  "exit_code": 0,
+  "zadig_hint": true,
+  "started": true,
+  "action_thread_joined": true,
+  "lock_released": true
+}
