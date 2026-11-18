@@ -296,10 +296,193 @@ class HubTests(unittest.TestCase):
         self.assertEqual(self.engine.action({"action": "cycle", "delta": 2})["slot"], 2)
         for sid in ("five", "six", "seven"):
             self.event("SessionStart", sid)
-        with self.assertRaises(hub.HubError):
-            self.event("SessionStart", "eight")
         self.assertEqual({s["session_id"]: s["slot"] for s in self.engine.state()["sessions"]
                           if s["session_id"] in slots}, slots)
+
+    def test_full_slots_evict_least_recently_updated_session_and_reuse_its_slot(self):
+        wall = Clock()
+        self.engine.wall_time = wall
+        for sid in ("one", "two", "three", "four", "five", "six"):
+            self.event("SessionStart", sid)
+            wall.value += 10
+        self.event("UserPromptSubmit", "one")  # Oldest insertion is now newest.
+        self.engine.gate_passed[(("cc", "two"), "old-command")] = self.clock()
+        self.engine.gate_passed[(("cc", "one"), "kept-command")] = self.clock()
+        self.calls.clear()
+
+        self.assertEqual(self.event("SessionStart", "seven"), {})
+        slots = {s["session_id"]: s["slot"] for s in self.engine.state()["sessions"]}
+        self.assertEqual(slots, {"one": 1, "seven": 2, "three": 3, "four": 4, "five": 5, "six": 6})
+        self.assertEqual(self.engine.selected, ("cc", "one"))
+        self.assertEqual(self.calls.count("end cc-two"), 1)
+        self.assertLess(self.calls.index("end cc-two"), self.calls.index("set cc-seven idle project"))
+        self.assertEqual(self.engine.gate_passed, {(("cc", "one"), "kept-command"): self.clock()})
+
+        thread, result = self.permission("seven")
+        self.assertEqual(self.engine.action({"action": "approve"})["status"], "allowed")
+        thread.join(1)
+        self.decision(result, "allow")
+
+    def test_full_slots_preserve_pending_and_locked_sessions(self):
+        wall = Clock()
+        self.engine.wall_time = wall
+        thread, result = self.permission("pending")
+        wall.value += 10
+        self.event("PermissionRequest", "locked", tool_name="Bash", tool_input={"command": "rm -rf /"})
+        for sid in ("three", "four", "five", "six"):
+            wall.value += 10
+            self.event("SessionStart", sid)
+        before = self.engine.state()
+        self.calls.clear()
+
+        self.event("SessionStart", "seven")
+        state = self.engine.state()
+        self.assertEqual(state["pending"], before["pending"])
+        self.assertEqual(state["locked"], before["locked"])
+        self.assertEqual(state["displayed_request_id"], before["displayed_request_id"])
+        self.assertTrue(thread.is_alive())
+        self.assertEqual(result, [])
+        self.assertEqual([line for line in self.calls if line.startswith("end ")], ["end cc-three"])
+        self.assertEqual(next(s["slot"] for s in state["sessions"] if s["session_id"] == "seven"), 3)
+
+    def test_full_slots_with_pending_requests_still_return_409(self):
+        self.engine.wall_time = lambda: 100.0
+        waiters = [self.permission(sid) for sid in ("one", "two", "three", "four", "five", "six")]
+        before = self.engine.state()
+        self.calls.clear()
+        with self.assertRaisesRegex(hub.HubError, "all six session slots are occupied") as caught:
+            self.event("SessionStart", "seven")
+        self.assertEqual(caught.exception.status, 409)
+        self.assertEqual(self.engine.state(), before)
+        self.assertTrue(all(thread.is_alive() and result == [] for thread, result in waiters))
+        self.assertEqual(self.calls, [])
+
+    def test_full_slots_with_locked_requests_still_return_409(self):
+        self.engine.wall_time = lambda: 100.0
+        for sid in ("one", "two", "three", "four", "five", "six"):
+            self.event("PermissionRequest", sid, tool_name="Bash", tool_input={"command": "rm -rf /"})
+        before = self.engine.state()
+        self.calls.clear()
+        with self.assertRaises(hub.HubError) as caught:
+            self.event("SessionStart", "seven")
+        self.assertEqual(caught.exception.status, 409)
+        self.assertEqual(self.engine.state(), before)
+        self.assertEqual(self.calls, [])
+
+    def test_full_slots_preserve_current_voice_target(self):
+        wall = Clock()
+        self.engine.wall_time = wall
+        self.event("SessionStart", "voice")
+        self.engine.action({"action": "voice_down"})
+        for sid in ("two", "three", "four", "five", "six"):
+            wall.value += 10
+            self.event("SessionStart", sid)
+        self.calls.clear()
+
+        self.event("SessionStart", "seven")
+        self.assertIn(("cc", "voice"), self.engine.sessions)
+        self.assertEqual(self.engine.voice_target, ("cc", "voice"))
+        self.assertTrue(self.desktop.voice_active)
+        self.assertEqual(self.desktop.calls, [("voice_down", "voice")])
+        self.assertEqual([line for line in self.calls if line.startswith("end ")], ["end cc-two"])
+
+    def test_evicted_selected_session_transfers_selection_like_session_end(self):
+        for sid in ("one", "two", "three", "four", "five", "six"):
+            self.event("SessionStart", sid)
+        self.calls.clear()
+        self.event("SessionStart", "seven")
+        state = self.engine.state()
+        self.assertEqual(self.engine.selected, ("cc", "two"))
+        self.assertEqual(state["selected_slot"], 2)
+        self.assertIsNone(state["displayed_request_id"])
+        self.assertIsNone(state["input_request"]["request_id"])
+        self.assertEqual([line for line in self.calls if line.startswith("focus ")], ["focus cc-two"])
+        self.assertEqual(next(s["slot"] for s in state["sessions"] if s["session_id"] == "seven"), 1)
+
+    def test_evicted_selection_transfers_to_pending_request(self):
+        for sid in ("one", "two", "three", "four", "five", "six"):
+            self.event("SessionStart", sid)
+        thread, result = self.permission("six")
+        request = self.engine.state()["pending"][0]
+        self.engine.action({"action": "slot 1"})
+        self.assertIsNone(self.engine.state()["displayed_request_id"])
+        self.calls.clear()
+        self.event("SessionStart", "seven")
+
+        state = self.engine.state()
+        self.assertEqual(self.engine.selected, ("cc", "six"))
+        self.assertEqual(state["selected_slot"], 6)
+        self.assertEqual(state["displayed_request_id"], request["id"])
+        self.assertEqual(state["input_request"], {"request_id": request["id"], "nonce": request["nonce"]})
+        self.assertEqual(self.calls, ["end cc-one", "set cc-six wait project",
+                                     "focus cc-six", "set cc-seven idle project"])
+        self.assertTrue(thread.is_alive())
+        self.assertEqual(result, [])
+
+    def test_idle_sessions_expire_only_after_six_hours_and_clear_lcd_selection(self):
+        wall = Clock()
+        self.engine.wall_time = wall
+        self.event("SessionStart", "stale")
+        self.engine.gate_passed[(("cc", "stale"), "old-command")] = self.clock()
+        wall.value += 6 * 60 * 60
+        self.engine.maintain()
+        self.assertIn(("cc", "stale"), self.engine.sessions)
+        self.calls.clear()
+
+        wall.value += 1
+        self.engine.maintain()
+        state = self.engine.state()
+        self.assertEqual(state["sessions"], [])
+        self.assertIsNone(self.engine.selected)
+        self.assertIsNone(state["selected_slot"])
+        self.assertIsNone(state["displayed_request_id"])
+        self.assertEqual(self.engine.gate_passed, {})
+        self.assertEqual(self.calls, ["end cc-stale", "focus -"])
+
+    def test_six_hour_expiry_preserves_pending_locked_and_voice_sessions(self):
+        wall = Clock()
+        self.engine.wall_time = wall
+        thread, result = self.permission("pending")
+        self.event("PermissionRequest", "locked", tool_name="Bash", tool_input={"command": "rm -rf /"})
+        self.event("SessionStart", "voice")
+        self.engine.action({"action": "slot 3"})
+        self.engine.action({"action": "voice_down"})
+        self.event("SessionStart", "idle")
+        before = self.engine.state()
+        self.calls.clear()
+        wall.value += 6 * 60 * 60 + 1
+
+        self.engine.maintain()
+        state = self.engine.state()
+        self.assertEqual({s["session_id"] for s in state["sessions"]}, {"pending", "locked", "voice"})
+        self.assertEqual(state["pending"], before["pending"])
+        self.assertEqual(state["locked"], before["locked"])
+        self.assertEqual(self.engine.voice_target, ("cc", "voice"))
+        self.assertTrue(self.desktop.voice_active)
+        self.assertTrue(thread.is_alive())
+        self.assertEqual(result, [])
+        self.assertEqual([line for line in self.calls if line.startswith("end ")], ["end cc-idle"])
+
+        self.engine.action({"action": "voice_up"})
+        self.engine.maintain()
+        self.assertNotIn(("cc", "voice"), self.engine.sessions)
+        self.assertEqual(self.engine.selected, ("cc", "pending"))
+
+    def test_six_hour_expiry_uses_last_update_and_runs_during_state_poll(self):
+        wall = Clock()
+        self.engine.wall_time = wall
+        self.event("SessionStart", "stale")
+        self.event("SessionStart", "fresh")
+        wall.value += 6 * 60 * 60 - 1
+        self.event("UserPromptSubmit", "fresh")
+        wall.value += 2
+
+        state = self.engine.state()
+        self.assertEqual([s["session_id"] for s in state["sessions"]], ["fresh"])
+        self.assertEqual(self.engine.selected, ("cc", "fresh"))
+        self.assertEqual(state["selected_slot"], 2)
+        self.assertIn("end cc-stale", self.calls)
+        self.assertNotIn("end cc-fresh", self.calls)
 
     def test_keys_match_existing_hook_for_both_agents(self):
         for agent in ("cc", "cx"):

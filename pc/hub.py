@@ -38,6 +38,7 @@ CONFIRM_SECONDS = 1.5
 SWITCH_GUARD_SECONDS = 0.3
 GATE_CONFIRMED_SECONDS = 30.0
 VOICE_NOTICE_SECONDS = 5.0
+SESSION_IDLE_SECONDS = 6 * 60 * 60
 MAX_BODY = 1024 * 1024
 EVENT_STATES = {
     "SessionStart": "idle", "UserPromptSubmit": "think", "PreToolUse": "tool",
@@ -453,6 +454,40 @@ class Hub:
         if self.displayed_request_id == request.id:
             self._next_request()
 
+    def _remove_session(self, identity):
+        """Share SessionEnd cleanup with slot eviction and idle expiry."""
+        cleared_display = False
+        for request in list(self.locked.values()):
+            if request.session == identity:
+                self.locked.pop(request.id)
+                if self.displayed_request_id == request.id:
+                    self._set_displayed(None)
+                    cleared_display = True
+        self.gate_passed = {key: passed for key, passed in self.gate_passed.items() if key[0] != identity}
+        if self.voice_target == identity:
+            try:
+                self._desktop().voice_up()
+            except Exception as error:
+                log.warning("Voice session end failed: %s", error)
+            finally:
+                self._update_voice()
+        removed = self.sessions.pop(identity, None)
+        for request in list(self.pending.values()):
+            if request.session == identity:
+                self._resolve(request)
+        if removed is not None:
+            self._send(["end " + removed["key"]])
+        if self.selected == identity:
+            self.selected = next(iter(self.sessions), None)
+            self._next_request()
+        elif cleared_display:
+            self._next_request()
+
+    def _reclaimable_sessions(self):
+        busy = {request.session for requests in (self.pending, self.locked) for request in requests.values()}
+        return [(identity, session) for identity, session in self.sessions.items()
+                if identity not in busy and identity != self.voice_target]
+
     def _expire(self):
         now = self.monotonic()
         self.gate_passed = {key: passed for key, passed in self.gate_passed.items()
@@ -464,6 +499,10 @@ class Hub:
                 request.armed_at = None
                 if self.displayed_request_id == request.id:
                     self._show()
+        wall_now = self.wall_time()
+        for identity, session in self._reclaimable_sessions():
+            if wall_now - session["last_updated"] > SESSION_IDLE_SECONDS:
+                self._remove_session(identity)
 
     def event(self, agent, event, *, gate=False):
         """Handle a hook; permission and intercepted gate requests wait outside the lock."""
@@ -498,6 +537,9 @@ class Hub:
             self._update_voice()
             self.agents_seen[agent] = self.wall_time()
             self._expire()
+            if name == "SessionEnd":
+                self._remove_session(identity)
+                return {}
             cleared_display = False
             if name not in ("PermissionRequest", "Notification"):
                 for request in list(self.locked.values()):
@@ -506,30 +548,16 @@ class Hub:
                         if self.displayed_request_id == request.id:
                             self._set_displayed(None)
                             cleared_display = True
-            if name == "SessionEnd":
-                self.gate_passed = {key: passed for key, passed in self.gate_passed.items() if key[0] != identity}
-                if self.voice_target == identity:
-                    try:
-                        self._desktop().voice_up()
-                    except Exception as error:
-                        log.warning("Voice session end failed: %s", error)
-                    finally:
-                        self._update_voice()
-                removed = self.sessions.pop(identity, None)
-                for request in list(self.pending.values()):
-                    if request.session == identity:
-                        self._resolve(request)
-                if removed is not None:
-                    self._send(["end " + removed["key"]])
-                if self.selected == identity:
-                    self.selected = next(iter(self.sessions), None)
-                    self._next_request()
-                return {}
             if identity not in self.sessions:
                 used = {s["slot"] for s in self.sessions.values()}
                 slot = next((i for i in range(1, 7) if i not in used), None)
                 if slot is None:
-                    raise HubError("all six session slots are occupied", 409)
+                    candidates = self._reclaimable_sessions()
+                    if not candidates:
+                        raise HubError("all six session slots are occupied", 409)
+                    oldest, removed = min(candidates, key=lambda item: item[1]["last_updated"])
+                    slot = removed["slot"]
+                    self._remove_session(oldest)
                 self.sessions[identity] = {"agent": agent, "session_id": sid, "key": key,
                                            "cwd": "", "name": "agent", "project": "agent",
                                            "state": "idle", "slot": slot}

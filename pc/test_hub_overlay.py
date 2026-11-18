@@ -506,6 +506,8 @@ class KeyBindingsAndNextWaitTests(unittest.TestCase):
                     ("cc", "s2"): {"agent": "cc", "session_id": "s2", "slot": 2, "state": "wait", "name": "s2", "key": "cc-s2"},
                     ("cc", "s3"): {"agent": "cc", "session_id": "s3", "slot": 3, "state": "wait", "name": "s3", "key": "cc-s3"},
                 }
+                for session in engine.sessions.values():
+                    session["last_updated"] = engine.wall_time()
                 engine.selected = ("cc", "s1")
 
                 res1 = engine.action({"action": "next_wait"})
