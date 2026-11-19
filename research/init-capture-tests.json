@@ -1,0 +1,203 @@
+{
+  "python": "D:\\conda\\miniconda3\\python.exe",
+  "home": "temporary per script",
+  "registry": "guarded; tests use doubles",
+  "serial": "guarded",
+  "results": [
+    {
+      "script": "pc/test_agentdeck_app.py",
+      "exit_code": 0,
+      "unittest_count": 73,
+      "seconds": 1.73
+    },
+    {
+      "script": "pc/test_capture_etl.py",
+      "exit_code": 0,
+      "unittest_count": 18,
+      "seconds": 3.34,
+      "verification": "rerun after review fixes and failure-path coverage"
+    },
+    {
+      "script": "pc/test_daemon.py",
+      "exit_code": 0,
+      "unittest_count": null,
+      "seconds": 0.58
+    },
+    {
+      "script": "pc/test_deck.py",
+      "exit_code": 0,
+      "unittest_count": null,
+      "seconds": 2.01
+    },
+    {
+      "script": "pc/test_deck_exclusive.py",
+      "exit_code": 0,
+      "unittest_count": null,
+      "seconds": 0.43
+    },
+    {
+      "script": "pc/test_deck_input.py",
+      "exit_code": 0,
+      "unittest_count": null,
+      "seconds": 0.4
+    },
+    {
+      "script": "pc/test_deck_keymap.py",
+      "exit_code": 0,
+      "unittest_count": null,
+      "seconds": 0.66
+    },
+    {
+      "script": "pc/test_deck_probe.py",
+      "exit_code": 0,
+      "unittest_count": null,
+      "seconds": 0.38
+    },
+    {
+      "script": "pc/test_deck_usb.py",
+      "exit_code": 0,
+      "unittest_count": null,
+      "seconds": 0.56
+    },
+    {
+      "script": "pc/test_focus_lock.py",
+      "exit_code": 0,
+      "unittest_count": null,
+      "seconds": 0.68
+    },
+    {
+      "script": "pc/test_hub.py",
+      "exit_code": 0,
+      "unittest_count": 144,
+      "seconds": 6.0
+    },
+    {
+      "script": "pc/test_hub_app_support.py",
+      "exit_code": 0,
+      "unittest_count": 24,
+      "seconds": 1.14
+    },
+    {
+      "script": "pc/test_hub_demo.py",
+      "exit_code": 0,
+      "unittest_count": 10,
+      "seconds": 0.98
+    },
+    {
+      "script": "pc/test_hub_desktop.py",
+      "exit_code": 0,
+      "unittest_count": 30,
+      "seconds": 0.67
+    },
+    {
+      "script": "pc/test_hub_desktop_mac.py",
+      "exit_code": 0,
+      "unittest_count": 35,
+      "seconds": 0.71
+    },
+    {
+      "script": "pc/test_hub_doctor.py",
+      "exit_code": 0,
+      "unittest_count": 14,
+      "seconds": 0.81
+    },
+    {
+      "script": "pc/test_hub_gate.py",
+      "exit_code": 0,
+      "unittest_count": 20,
+      "seconds": 4.42
+    },
+    {
+      "script": "pc/test_hub_hotkey.py",
+      "exit_code": 0,
+      "unittest_count": 36,
+      "seconds": 0.43
+    },
+    {
+      "script": "pc/test_hub_input_capture.py",
+      "exit_code": 0,
+      "unittest_count": 5,
+      "seconds": 0.52
+    },
+    {
+      "script": "pc/test_hub_install.py",
+      "exit_code": 0,
+      "unittest_count": 35,
+      "seconds": 2.32
+    },
+    {
+      "script": "pc/test_hub_macos_fix.py",
+      "exit_code": 0,
+      "unittest_count": 3,
+      "seconds": 0.66
+    },
+    {
+      "script": "pc/test_hub_nonce.py",
+      "exit_code": 0,
+      "unittest_count": 33,
+      "seconds": 2.11
+    },
+    {
+      "script": "pc/test_hub_nonce_integration.py",
+      "exit_code": 0,
+      "unittest_count": 16,
+      "seconds": 1.53
+    },
+    {
+      "script": "pc/test_hub_overlay.py",
+      "exit_code": 0,
+      "unittest_count": 32,
+      "seconds": 0.66
+    },
+    {
+      "script": "pc/test_hub_overlay_position.py",
+      "exit_code": 0,
+      "unittest_count": 10,
+      "seconds": 0.48
+    },
+    {
+      "script": "pc/test_hub_relay.py",
+      "exit_code": 0,
+      "unittest_count": 12,
+      "seconds": 2.42
+    },
+    {
+      "script": "pc/test_hub_runtime.py",
+      "exit_code": 0,
+      "unittest_count": 6,
+      "seconds": 1.18
+    },
+    {
+      "script": "pc/test_hub_virtual_device.py",
+      "exit_code": 0,
+      "unittest_count": 15,
+      "seconds": 0.43
+    },
+    {
+      "script": "pc/test_hub_virtual_nonce_integration.py",
+      "exit_code": 0,
+      "unittest_count": 7,
+      "seconds": 5.76
+    },
+    {
+      "script": "pc/test_pc.py",
+      "exit_code": 0,
+      "unittest_count": null,
+      "seconds": 0.44
+    },
+    {
+      "script": "pc/test_ui.py",
+      "exit_code": 0,
+      "unittest_count": null,
+      "seconds": 0.18
+    },
+    {
+      "script": "pc/test_verify_real_session.py",
+      "exit_code": 0,
+      "unittest_count": 20,
+      "seconds": 86.43
+    }
+  ],
+  "scripts": 32,
+  "failed": 0
+}

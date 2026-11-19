@@ -168,6 +168,26 @@ class AutoStart:
                     pass
 
 
+def set_global_hooks(home, enabled):
+    if enabled:
+        hub_install.remove_legacy_hooks(home=home, confirmed=True)
+    return hub_install.apply("install" if enabled else "uninstall", home=home, output=io.StringIO())
+
+
+def init_all(home, *, autostart=None):
+    """Enable hooks and startup; persist success only after every step completes."""
+    home = Path(home)
+    prefs = Preferences(home)
+    startup = AutoStart() if autostart is None else autostart
+    set_global_hooks(home, True)
+    if not startup.enabled():
+        startup.set_enabled(True)
+    if not prefs.values.get("initialized"):
+        prefs.values["initialized"] = True
+        prefs.save()
+    return {"hooks": "enabled", "autostart": True, "initialized": True}
+
+
 class SingleInstance:
     """Loopback ownership plus an acknowledged SHOW message; no second Hub."""
     def __init__(self, commands, *, socket_factory=socket.socket, connector=socket.create_connection):
@@ -391,8 +411,7 @@ class TrayApplication:
                                  "备份两份全局配置，替换旧版 1602 钩子。\nAgentDeck 未运行时，agent 在终端确认。",
                                  ok="启用"):
                 return False
-            hub_install.remove_legacy_hooks(home=self.hub.home, confirmed=True)
-        hub_install.apply("install" if enabled else "uninstall", home=self.hub.home, output=io.StringIO())
+        set_global_hooks(self.hub.home, enabled)
         log.info("全局钩子：%s", "已启用" if enabled else "已停用")
         return True
 
@@ -491,42 +510,37 @@ class TrayApplication:
         self.diagnostics()
 
     def onboarding(self):
-        import hub_doctor
-        if (self.prefs.values.get("onboarding_dismissed")
-                or hub_install.global_status(home=self.hub.home)["enabled"] or any(
-                project["agents"] for project in hub_doctor.installed_projects(self.prefs.projects))):
+        if self.prefs.values.get("initialized"):
             return
         import tkinter as tk
+        # Installing global hooks also creates .codex on machines without Codex.
+        codex_installed = (self.hub.home / ".codex").exists()
         window = theme.style_window(tk.Toplevel(self.overlay.root), "AgentDeck")
-        body = tk.Frame(window, bg=theme.BG, padx=theme.S5 + theme.S3, pady=theme.S5 + theme.S3)
+        body = tk.Frame(window, bg=theme.BG, padx=theme.S5, pady=theme.S5)
         body.pack()
-        steps = tk.Frame(body, bg=theme.BG)
-        steps.pack(anchor="w")
-        for number, step in enumerate(("所有项目启用", "在 Codex 输入 /hooks，信任钩子", "开始干活"), 1):
-            theme.label(steps, str(number), color=theme.FAINT, size=16, bold=True, latin=True,
-                        width=2).grid(row=number - 1, column=0, pady=theme.S2)
-            theme.label(steps, step, size=11).grid(row=number - 1, column=1, sticky="w", pady=theme.S2)
-        dismissed = tk.BooleanVar(window, value=False)
-
-        def close():
-            self.prefs.values["onboarding_dismissed"] = dismissed.get()
-            self.prefs.save()
-            window.destroy()
+        caption = theme.label(body, "点击开始，自动启用钩子和开机自启。")
+        caption.pack(anchor="w")
 
         def enable():
+            if self.prefs.values.get("initialized"):
+                return
             try:
-                if self.global_action(True):
-                    close()
+                init_all(self.hub.home, autostart=self.autostart)
+                self.prefs.values["initialized"] = True
+                self.autostart_enabled = self.autostart.enabled()
+                if codex_installed:
+                    caption.configure(text="在 Codex 里输入 /hooks，信任一次", fg=theme.TEXT)
+                    start.destroy()
+                    theme.center(window)
+                else:
+                    window.destroy()
             except Exception as error:
-                log.exception("全局钩子启用失败")
-                self.message("AgentDeck 操作失败", str(error), error=True)
+                log.exception("初始化失败")
+                caption.configure(text="初始化失败：%s" % error, fg=theme.STATUS["ERR"])
 
-        actions = tk.Frame(body, bg=theme.BG)
-        actions.pack(fill="x", pady=(theme.S5, 0))
-        theme.checkbox(actions, "不再提示", dismissed).pack(side="left")
-        theme.button(actions, "稍后", close, "plain").pack(side="right", padx=(theme.S2, 0))
-        theme.button(actions, "所有项目启用", enable).pack(side="right")
-        window.protocol("WM_DELETE_WINDOW", close)
+        start = theme.button(body, "开始使用", enable)
+        start.pack(anchor="e", pady=(theme.S5, 0))
+        window.protocol("WM_DELETE_WINDOW", window.destroy)
         theme.center(window)
 
 
@@ -554,12 +568,51 @@ def configure_logging(home=None):
     return handler
 
 
+def restore_cli_output():
+    """Windowed builds reuse a pipe or the parent console, without opening a window."""
+    if sys.platform != "win32" or sys.stdout is not None:
+        return
+    import ctypes
+    import msvcrt
+    kernel = ctypes.windll.kernel32
+    kernel.GetStdHandle.restype = ctypes.c_void_p
+    invalid = (None, 0, ctypes.c_void_p(-1).value)
+    if kernel.GetStdHandle(-11) in invalid:
+        kernel.AttachConsole(ctypes.c_uint(-1))  # ATTACH_PARENT_PROCESS
+    for name, number in (("stdout", -11), ("stderr", -12)):
+        handle = kernel.GetStdHandle(number)
+        if getattr(sys, name) is None and handle not in invalid:
+            descriptor = msvcrt.open_osfhandle(handle, os.O_WRONLY)
+            setattr(sys, name, os.fdopen(descriptor, "w", encoding="utf-8", buffering=1))
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--home", type=Path)
     parser.add_argument("--profile")
+    action = parser.add_mutually_exclusive_group()
+    action.add_argument("--init", action="store_true", help="enable global hooks and startup, then exit")
+    action.add_argument("--uninstall", action="store_true", help="remove global hooks and startup, then exit")
     args = parser.parse_args(argv)
     home = Path.home() if args.home is None else args.home.resolve()
+    if args.init or args.uninstall:
+        restore_cli_output()
+        try:
+            if args.init:
+                result = init_all(home)
+            else:
+                prefs = Preferences(home)
+                set_global_hooks(home, False)
+                AutoStart().set_enabled(False)
+                if "initialized" in prefs.values:
+                    del prefs.values["initialized"]
+                    prefs.save()
+                result = {"hooks": "disabled", "autostart": False, "initialized": False}
+            print(json.dumps(result, ensure_ascii=False))
+            return 0
+        except Exception as error:
+            print("AgentDeck: %s" % error, file=sys.stderr)
+            return 1
     commands = SimpleQueue()
     instance = SingleInstance(commands)
     handler = None

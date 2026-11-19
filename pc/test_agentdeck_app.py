@@ -214,6 +214,161 @@ class AutostartTests(unittest.TestCase):
                 ["D:\\Conda folder\\pythonw.exe", str(Path(app.__file__).resolve())]))
 
 
+class InitializationTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.home = Path(self.temp.name)
+        self.registry = FakeRegistry()
+        self.start = app.AutoStart(self.registry, "AgentDeck.exe")
+        guard = patch.object(Path, "home", side_effect=AssertionError("real home access"))
+        guard.start()
+        self.addCleanup(guard.stop)
+
+    def test_initialization_backs_up_migrates_preserves_settings_and_is_idempotent(self):
+        before = {}
+        foreign = {"type": "command", "command": "echo keep"}
+        for agent, folders in hub_install.TARGETS.items():
+            path = self.home.joinpath(*folders)
+            path.parent.mkdir()
+            data = {"custom": True, "hooks": {"Stop": [{"hooks": [foreign,
+                    {"type": "command", "command": "python old/agent_lcd.py hook " + agent}]}]}}
+            path.write_text(json.dumps(data), encoding="utf-8")
+            before[path] = data
+        trust = self.home / ".codex" / "requirements.toml"
+        trust.write_text("# leave trust to Codex\n", encoding="utf-8")
+        prefs = app.Preferences(self.home)
+        prefs.values["projects"] = ["remember this project"]
+        prefs.save()
+        result = app.init_all(self.home, autostart=self.start)
+        self.assertTrue(self.start.enabled())
+        self.assertTrue(hub_install.global_status(home=self.home)["enabled"])
+        self.assertTrue(app.Preferences(self.home).values["initialized"])
+        self.assertEqual(app.Preferences(self.home).projects, ["remember this project"])
+        for path, original in before.items():
+            self.assertIn(original, [json.loads(backup.read_text(encoding="utf-8"))
+                          for backup in path.parent.glob(path.name + ".bak-agentdeck-*")])
+            data = json.loads(path.read_text(encoding="utf-8"))
+            self.assertTrue(data["custom"])
+            entries = [entry for groups in data["hooks"].values() for group in groups for entry in group["hooks"]]
+            self.assertIn(foreign, entries)
+            self.assertFalse(any(hub_install.is_legacy(entry) for entry in entries))
+        snapshot = {p.relative_to(self.home): p.read_bytes() for p in self.home.rglob("*") if p.is_file()}
+        self.assertEqual(app.init_all(self.home, autostart=self.start), result)
+        self.assertEqual({p.relative_to(self.home): p.read_bytes() for p in self.home.rglob("*") if p.is_file()}, snapshot)
+        self.assertEqual(len(self.registry.writes), 1)
+        self.assertEqual(trust.read_text(encoding="utf-8"), "# leave trust to Codex\n")
+        self.assertEqual(self.registry.values["OtherApp"], "other.exe")
+
+    def test_backup_failure_stops_install_and_startup_and_does_not_mark_initialized(self):
+        with patch.object(hub_install, "remove_legacy_hooks", side_effect=OSError("backup failed")), patch.object(
+                hub_install, "apply") as install:
+            with self.assertRaisesRegex(OSError, "backup failed"):
+                app.init_all(self.home, autostart=self.start)
+        install.assert_not_called()
+        self.assertEqual(self.registry.writes, [])
+        self.assertNotIn("initialized", app.Preferences(self.home).values)
+
+    def test_startup_failure_can_be_retried_without_duplicate_hooks(self):
+        failing = Mock()
+        failing.enabled.return_value = False
+        failing.set_enabled.side_effect = OSError("registry denied")
+        with self.assertRaisesRegex(OSError, "registry denied"):
+            app.init_all(self.home, autostart=failing)
+        self.assertNotIn("initialized", app.Preferences(self.home).values)
+        before = {self.home.joinpath(*folders): self.home.joinpath(*folders).read_bytes()
+                  for folders in hub_install.TARGETS.values()}
+        app.init_all(self.home, autostart=self.start)
+        for path, content in before.items():
+            self.assertEqual(path.read_bytes(), content)
+            self.assertEqual(list(path.parent.glob(path.name + ".bak-agentdeck-*")), [])
+
+    def test_hook_install_failure_does_not_enable_startup_or_mark_initialized(self):
+        with patch.object(hub_install, "apply", side_effect=OSError("write denied")):
+            with self.assertRaisesRegex(OSError, "write denied"):
+                app.init_all(self.home, autostart=self.start)
+        self.assertEqual(self.registry.writes, [])
+        self.assertNotIn("initialized", app.Preferences(self.home).values)
+
+    def test_cli_init_and_uninstall_bypass_all_runtime_and_gui_startup(self):
+        for frozen in (False, True):
+            with self.subTest(frozen=frozen), patch.object(sys, "frozen", frozen, create=True), patch.object(
+                    app, "AutoStart", return_value=self.start), patch.object(app, "SingleInstance") as instance, patch.object(
+                    app, "configure_logging") as logging_setup, patch.object(app.hub, "main") as hub_main, patch.object(
+                    app, "prepare_configs") as configs, patch("tkinter.Toplevel") as window, patch(
+                    "tkinter.messagebox.showerror") as error, patch.object(sys, "stdout", io.StringIO()) as output:
+                self.assertEqual(app.main(["--home", str(self.home), "--init"]), 0)
+                self.assertTrue(json.loads(output.getvalue())["initialized"])
+                self.assertTrue(self.start.enabled())
+                output.seek(0)
+                output.truncate()
+                self.assertEqual(app.main(["--home", str(self.home), "--uninstall"]), 0)
+                self.assertFalse(json.loads(output.getvalue())["autostart"])
+                self.assertFalse(self.start.enabled())
+                self.assertFalse(hub_install.global_status(home=self.home)["enabled"])
+                self.assertNotIn("initialized", app.Preferences(self.home).values)
+            for forbidden in (instance, logging_setup, hub_main, configs, window, error):
+                forbidden.assert_not_called()
+
+    def test_cli_failure_reports_to_stderr_without_a_dialog(self):
+        with patch.object(app, "AutoStart", return_value=self.start), patch.object(
+                hub_install, "remove_legacy_hooks", side_effect=OSError("backup denied")), patch.object(
+                sys, "stderr", io.StringIO()) as errors, patch("tkinter.messagebox.showerror") as dialog:
+            self.assertEqual(app.main(["--home", str(self.home), "--init"]), 1)
+        self.assertIn("backup denied", errors.getvalue())
+        dialog.assert_not_called()
+        self.assertEqual(self.registry.writes, [])
+
+    def test_cli_init_and_uninstall_are_mutually_exclusive(self):
+        with patch.object(sys, "stderr", io.StringIO()), self.assertRaises(SystemExit) as raised:
+            app.main(["--home", str(self.home), "--init", "--uninstall"])
+        self.assertEqual(raised.exception.code, 2)
+
+    def test_cli_uninstall_failure_keeps_completion_marker_and_startup(self):
+        app.init_all(self.home, autostart=self.start)
+        with patch.object(app, "AutoStart", return_value=self.start), patch.object(
+                hub_install, "apply", side_effect=OSError("write denied")), patch.object(
+                sys, "stderr", io.StringIO()) as errors, patch("tkinter.messagebox.showerror") as dialog:
+            self.assertEqual(app.main(["--home", str(self.home), "--uninstall"]), 1)
+        self.assertIn("write denied", errors.getvalue())
+        dialog.assert_not_called()
+        self.assertTrue(self.start.enabled())
+        self.assertTrue(app.Preferences(self.home).values["initialized"])
+
+
+class CliOutputTests(unittest.TestCase):
+    def test_source_console_streams_are_retained_without_native_calls(self):
+        with patch.object(sys, "stdout", io.StringIO()) as output, patch("ctypes.windll", create=True) as native:
+            app.restore_cli_output()
+            self.assertIs(sys.stdout, output)
+        native.kernel32.GetStdHandle.assert_not_called()
+
+    def check_missing_streams(self, handles):
+        kernel = MagicMock()
+        kernel.GetStdHandle.side_effect = handles
+        output, errors = io.StringIO(), io.StringIO()
+        with patch.object(sys, "platform", "win32"), patch.object(sys, "stdout", None), patch.object(
+                sys, "stderr", None), patch("ctypes.windll", SimpleNamespace(kernel32=kernel), create=True), patch(
+                "msvcrt.open_osfhandle", side_effect=[21, 22]) as descriptor, patch.object(
+                app.os, "fdopen", side_effect=[output, errors]) as fdopen:
+            app.restore_cli_output()
+            self.assertIs(sys.stdout, output)
+            self.assertIs(sys.stderr, errors)
+        self.assertEqual([call.args for call in descriptor.call_args_list], [(101, app.os.O_WRONLY), (102, app.os.O_WRONLY)])
+        self.assertEqual([call.args for call in fdopen.call_args_list], [(21, "w"), (22, "w")])
+        return kernel
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows console API")
+    def test_windowed_build_reuses_inherited_pipe_without_attaching_console(self):
+        kernel = self.check_missing_streams([101, 101, 102])
+        kernel.AttachConsole.assert_not_called()
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows console API")
+    def test_windowed_build_attaches_existing_parent_console_when_handles_absent(self):
+        kernel = self.check_missing_streams([None, 101, 102])
+        kernel.AttachConsole.assert_called_once()
+
+
 class InstanceTests(unittest.TestCase):
     def setUp(self):
         self.queue = SimpleQueue()
@@ -564,51 +719,73 @@ class ApplicationTests(unittest.TestCase):
         window.destroy.assert_called_once()
         diagnostics.assert_called_once()
 
-    def test_onboarding_skips_dismissed_or_installed_projects(self):
-        self.prefs.values["onboarding_dismissed"] = True
-        with patch("hub_doctor.installed_projects") as installed, patch("tkinter.Toplevel") as window:
-            self.application.onboarding()
-        installed.assert_not_called()
-        window.assert_not_called()
-        self.prefs.values["onboarding_dismissed"] = False
-        with patch("hub_doctor.installed_projects", return_value=[{"path": "project", "agents": ["cc"]}]), patch("tkinter.Toplevel") as window:
-            self.application.onboarding()
-        window.assert_not_called()
-
-    def test_registered_project_with_no_hooks_still_gets_onboarding(self):
+    def build_onboarding(self):
         tk = MagicMock()
-        with patch.dict(sys.modules, {"tkinter": tk}), patch("hub_doctor.installed_projects", return_value=[{"path": "removed", "agents": []}]):
-            self.application.onboarding()
-        tk.Toplevel.assert_called_once()
+        commands = {}
+        caption = Mock()
+        button = Mock()
 
-    def test_global_installation_skips_onboarding_without_registered_projects(self):
-        hub_install.apply("install", home=self.home, output=io.StringIO())
+        def make_button(parent, text, command, kind="primary", **kwargs):
+            commands[text] = command
+            return button
+
+        with patch.dict(sys.modules, {"tkinter": tk}), patch.object(app.theme, "label", return_value=caption) as label, patch.object(
+                app.theme, "button", side_effect=make_button), patch.object(
+                app.theme, "style_window", side_effect=lambda window, title: window), patch.object(app.theme, "center"):
+            self.application.onboarding()
+        return tk, commands, caption, label, button
+
+    def test_onboarding_skips_only_completed_initialization(self):
+        self.prefs.values["initialized"] = True
         with patch("tkinter.Toplevel") as window, patch("hub_doctor.installed_projects") as installed:
             self.application.onboarding()
         window.assert_not_called()
         installed.assert_not_called()
 
-    def test_onboarding_global_button_closes_only_after_enable_succeeds(self):
-        tk = MagicMock()
-        tk.BooleanVar.return_value.get.return_value = False
-        commands = {}
-        with patch.dict(sys.modules, {"tkinter": tk}), patch.object(
-                app.theme, "button", side_effect=lambda parent, text, command, kind="primary", **kw:
-                commands.setdefault(text, command) and MagicMock()):
-            self.application.onboarding()
-        button = {"command": commands["所有项目启用"]}
-        with patch.object(self.application, "global_action", return_value=False) as enable:
-            button["command"]()
-        enable.assert_called_once_with(True)
+    def test_onboarding_is_one_line_and_one_button_even_with_legacy_dismissal_or_hooks(self):
+        self.prefs.values["onboarding_dismissed"] = True
+        hub_install.apply("install", home=self.home, output=io.StringIO())
+        tk, commands, caption, label, button = self.build_onboarding()
+        tk.Toplevel.assert_called_once_with(self.overlay.root)
+        label.assert_called_once()
+        self.assertNotIn("\n", label.call_args.args[1])
+        self.assertEqual(list(commands), ["开始使用"])
+        self.assertNotIn("initialized", self.prefs.values)
+        self.assertEqual(self.registry.writes, [])
+
+    def test_onboarding_initializes_and_closes_without_preexisting_codex(self):
+        tk, commands, caption, label, button = self.build_onboarding()
+        commands["开始使用"]()
+        self.assertTrue(hub_install.global_status(home=self.home)["enabled"])
+        self.assertTrue(self.application.autostart_enabled)
+        self.assertTrue(app.Preferences(self.home).values["initialized"])
+        tk.Toplevel.return_value.destroy.assert_called_once()
+        self.application.message.assert_not_called()
+
+    def test_onboarding_displays_codex_trust_in_same_window_and_removes_button(self):
+        (self.home / ".codex").mkdir()
+        tk, commands, caption, label, button = self.build_onboarding()
+        commands["开始使用"]()
+        caption.configure.assert_called_with(text="在 Codex 里输入 /hooks，信任一次", fg=app.theme.TEXT)
+        button.destroy.assert_called_once()
         tk.Toplevel.return_value.destroy.assert_not_called()
-        with patch.object(self.application, "global_action", side_effect=OSError("backup failed")), self.assertLogs(
-                app.log, level="ERROR"):
-            button["command"]()
-        self.application.message.assert_called_once_with("AgentDeck 操作失败", "backup failed", error=True)
+        tk.Toplevel.assert_called_once()
+        self.application.message.assert_not_called()
+        with patch.object(app, "init_all") as initialize:
+            commands["开始使用"]()
+        initialize.assert_not_called()
+
+    def test_onboarding_failure_stays_in_same_window_and_allows_retry(self):
+        tk, commands, caption, label, button = self.build_onboarding()
+        with patch.object(app, "init_all", side_effect=OSError("backup failed")), self.assertLogs(app.log, level="ERROR"):
+            commands["开始使用"]()
+        self.assertIn("backup failed", caption.configure.call_args.kwargs["text"])
         tk.Toplevel.return_value.destroy.assert_not_called()
-        with patch.object(self.application, "global_action", return_value=True) as enable:
-            button["command"]()
-        enable.assert_called_once_with(True)
+        button.destroy.assert_not_called()
+        self.assertNotIn("initialized", self.prefs.values)
+        self.application.message.assert_not_called()
+        commands["开始使用"]()
+        self.assertTrue(app.Preferences(self.home).values["initialized"])
         tk.Toplevel.return_value.destroy.assert_called_once()
 
     def test_diagnostics_queues_report_for_gui_thread(self):
@@ -623,19 +800,11 @@ class ApplicationTests(unittest.TestCase):
         self.assertEqual(self.queue.get_nowait(), ("report", report))
         self.application.message.assert_not_called()
 
-    def test_onboarding_three_steps_and_do_not_show_again_persist(self):
-        tk = MagicMock()
-        tk.BooleanVar.return_value.get.return_value = True
-        with patch.dict(sys.modules, {"tkinter": tk}), patch("hub_doctor.installed_projects", return_value=[]):
-            self.application.onboarding()
-        labels = [call.kwargs.get("text") for call in tk.Label.call_args_list]
-        self.assertEqual([t for t in labels if t in ("1", "2", "3")], ["1", "2", "3"])
-        self.assertIn("所有项目启用", labels)
-        self.assertTrue(any("/hooks" in str(t) for t in labels))
-        self.assertIn("开始干活", labels)
-        close = tk.Toplevel.return_value.protocol.call_args.args[1]
-        close()
-        self.assertTrue(app.Preferences(self.home).values["onboarding_dismissed"])
+    def test_closing_onboarding_does_not_mark_initialization_complete(self):
+        tk, commands, caption, label, button = self.build_onboarding()
+        tk.Toplevel.return_value.protocol.call_args.args[1]()
+        self.assertNotIn("initialized", app.Preferences(self.home).values)
+        self.assertEqual(self.registry.writes, [])
 
     def test_run_always_stops_tray_even_when_overlay_fails(self):
         self.application.icon = Mock()
