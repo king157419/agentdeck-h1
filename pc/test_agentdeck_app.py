@@ -1,5 +1,6 @@
 """Offline tray behavior checks: all OS, registry, sockets and GUI effects replaced."""
 import errno
+import ctypes
 import io
 import json
 from pathlib import Path
@@ -14,6 +15,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 import agentdeck_app as app
 import hub_install
+import voice_shortcut_capture as shortcut_capture
 
 
 class MenuItem:
@@ -178,6 +180,135 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(app.keymap_model(config, "alternate")["rows"][0][0][1], "prompt my-template")
         with self.assertRaisesRegex(ValueError, "missing"):
             app.keymap_model(config, "missing")
+
+
+class ShortcutRecordingTests(unittest.TestCase):
+    def event(self, code, symbol):
+        return SimpleNamespace(keycode=code, keysym=symbol)
+
+    def test_chord_is_complete_only_after_every_key_is_released(self):
+        recorder = app.ShortcutRecorder()
+        control, shift, key = self.event(17, "Control_L"), self.event(16, "Shift_L"), self.event(32, "space")
+        for event in (control, shift, key, key):
+            recorder.press(event)
+        self.assertIsNone(recorder.release(key))
+        self.assertIsNone(recorder.release(control))
+        self.assertEqual(recorder.release(shift), {"key_codes": [32], "modifiers": ["control", "shift"]})
+        self.assertEqual(recorder.label, "Ctrl + Shift + Space")
+        recorder.press(self.event(65, "a"))
+        self.assertEqual(recorder.shortcut["key_codes"], [32])
+
+    def test_single_side_modifier_is_not_discarded(self):
+        for symbol, code in (("Alt_R", 0xA5), ("Control_R", 0xA3), ("Shift_L", 0xA0), ("Win_R", 0x5C)):
+            with self.subTest(symbol=symbol):
+                recorder = app.ShortcutRecorder()
+                event = self.event(18, symbol)
+                recorder.press(event)
+                self.assertEqual(recorder.release(event), {"key_codes": [code], "modifiers": []})
+
+    def test_modifier_only_chord_preserves_sides(self):
+        recorder = app.ShortcutRecorder()
+        keys = [self.event(17, "Control_R"), self.event(18, "Alt_R")]
+        for key in keys:
+            recorder.press(key)
+        recorder.release(keys[0])
+        self.assertEqual(recorder.release(keys[1]), {"key_codes": [0xA3, 0xA5], "modifiers": []})
+
+    def test_right_modifier_with_main_key_keeps_its_specific_virtual_key(self):
+        recorder = app.ShortcutRecorder()
+        keys = [self.event(17, "Control_L"), self.event(18, "Alt_R"), self.event(75, "k")]
+        for key in keys:
+            recorder.press(key)
+        for key in keys[:-1]:
+            recorder.release(key)
+        self.assertEqual(recorder.release(keys[-1]), {"key_codes": [0xA5, 75], "modifiers": ["control"]})
+
+    def test_ordinary_key_and_unknown_release(self):
+        recorder = app.ShortcutRecorder()
+        key = self.event(72, "h")
+        self.assertIsNone(recorder.release(key))
+        recorder.press(self.event(0, "??"))
+        recorder.press(key)
+        self.assertEqual(recorder.release(key), {"key_codes": [72], "modifiers": []})
+        self.assertEqual(recorder.label, "H")
+
+
+class NativeShortcutCaptureTests(unittest.TestCase):
+    def setUp(self):
+        self.events = []
+        self.errors = []
+        self.calls = []
+        self.foreground = 13
+        self.window = Mock()
+        self.window.winfo_id.return_value = 7
+        api = SimpleNamespace(root=lambda child: 13, foreground=lambda: self.foreground,
+                              install=lambda proc: self.calls.append(("install", proc)) or 91,
+                              remove=lambda handle: self.calls.append(("remove", handle)),
+                              next=lambda *args: self.calls.append(("next", args)) or 73)
+        self.capture = shortcut_capture.ShortcutCapture(self.window,
+                lambda down, event: self.events.append((down, event.keycode, event.keysym)), self.errors.append, api=api)
+        self.capture.start()
+        self.addCleanup(self.capture.close)
+
+    def feed(self, code, *, down=True, scan=0, flags=0, hook_code=0):
+        flags |= 0 if down else shortcut_capture.LLKHF_UP
+        data = shortcut_capture.KBDLLHOOKSTRUCT(code, scan, flags, 0, 0)
+        message = shortcut_capture.WM_KEYDOWN if down else shortcut_capture.WM_KEYUP
+        return self.capture._hookproc(hook_code, message, ctypes.addressof(data))
+
+    def test_ordinary_chord_is_suppressed_and_close_unhooks_once(self):
+        self.assertEqual(self.feed(0x11), 1)
+        self.assertEqual(self.feed(0x4B), 1)
+        self.assertEqual(self.feed(0x4B, down=False), 1)
+        self.assertEqual(self.feed(0x11, down=False), 1)
+        self.assertEqual(self.events, [(True, 0xA2, "Control_L"), (True, 0x4B, "K"),
+                                      (False, 0x4B, "K"), (False, 0xA2, "Control_L")])
+        self.capture.close()
+        self.capture.close()
+        self.assertEqual([call for call in self.calls if call[0] == "remove"], [("remove", 91)])
+        self.assertNotIn(91, shortcut_capture._installed)
+
+    def test_extended_control_alt_and_shift_scan_preserve_sides(self):
+        for code, scan, flags, expected in ((0x11, 0, 1, 0xA3), (0x12, 0, 1, 0xA5),
+                                            (0x10, 0x36, 0, 0xA1), (0x10, 0x2A, 0, 0xA0),
+                                            (0xA5, 0, 0, 0xA5)):
+            with self.subTest(code=code, scan=scan, flags=flags):
+                self.assertEqual(self.feed(code, scan=scan, flags=flags), 1)
+                self.assertEqual(self.events[-1][1], expected)
+                self.feed(code, down=False, scan=scan, flags=flags)
+
+    def test_negative_hook_code_and_injected_events_pass_through(self):
+        for options in ({"hook_code": -1}, {"flags": 0x10}, {"flags": 2}):
+            self.assertEqual(self.feed(65, **options), 73)
+        self.assertEqual(self.events, [])
+        self.assertTrue(self.capture.active)
+
+    def test_keyup_without_owned_keydown_passes_through(self):
+        self.assertEqual(self.feed(0x11, down=False), 73)
+        self.assertEqual(self.events, [])
+
+    def test_foreground_loss_unhooks_and_never_swallows_another_windows_input(self):
+        self.foreground = 99
+        self.assertEqual(self.feed(65), 73)
+        self.assertFalse(self.capture.active)
+        self.assertIsNone(self.capture.handle)
+        self.assertEqual(self.events, [])
+        self.assertEqual(self.errors, ["窗口已失焦，请重录"])
+
+    def test_callback_exception_unhooks_and_is_contained(self):
+        self.capture.on_key = Mock(side_effect=RuntimeError("fake callback failure"))
+        self.assertEqual(self.feed(65), 73)
+        self.assertFalse(self.capture.active)
+        self.assertIsNone(self.capture.handle)
+        self.assertEqual(self.errors, ["录制失败，请重录"])
+
+    def test_install_failure_never_owns_or_intercepts_keyboard(self):
+        self.capture.close()
+        self.capture.api.install = Mock(side_effect=OSError("fake hook failure"))
+        with self.assertRaisesRegex(OSError, "fake hook failure"):
+            self.capture.start()
+        self.assertFalse(self.capture.active)
+        self.assertIsNone(self.capture.handle)
 
 
 class AutostartTests(unittest.TestCase):
@@ -501,6 +632,169 @@ class ApplicationTests(unittest.TestCase):
                          ["安装…", "卸载…"])
         self.engine.action.assert_not_called()
         self.overlay.show.assert_not_called()
+
+    def voice_desktop(self):
+        from hub_desktop import DesktopEffects
+        desktop = DesktopEffects(shots_dir=self.home / "shots")
+        self.engine._desktop.return_value = desktop
+        return desktop
+
+    def test_voice_shortcut_save_preserves_other_hub_config_and_applies_immediately(self):
+        desktop = self.voice_desktop()
+        path = app.data_dir(self.home) / "config.json"
+        path.parent.mkdir()
+        path.write_text('{"gate_mode":"adaptive","custom":{"keep":true}}', encoding="utf-8")
+        shortcut = {"key_codes": [0xA5], "modifiers": [], "mode": "hold"}
+        self.application.save_voice_shortcut(shortcut)
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8")),
+                         {"gate_mode": "adaptive", "custom": {"keep": True}, "dictation_shortcut": shortcut})
+        self.assertEqual(desktop.dictation_shortcut, shortcut)
+        self.assertEqual(list(path.parent.glob("*.tmp")), [])
+
+    def test_voice_shortcut_save_default_mode_and_restart_read(self):
+        desktop = self.voice_desktop()
+        self.application.save_voice_shortcut({"key_codes": [72], "modifiers": ["command"]})
+        config = app.hub.load_json(app.data_dir(self.home) / "config.json")
+        self.assertEqual(config["dictation_shortcut"]["mode"], "toggle")
+        self.assertEqual(desktop._shortcut(config["dictation_shortcut"]), desktop.dictation_shortcut)
+
+    def test_voice_shortcut_bad_config_and_invalid_chord_preserve_file_and_desktop(self):
+        desktop = self.voice_desktop()
+        original = desktop.dictation_shortcut
+        path = app.data_dir(self.home) / "config.json"
+        path.parent.mkdir()
+        path.write_text("[]", encoding="utf-8")
+        for shortcut in ({"key_codes": [72]}, {"key_codes": []}):
+            with self.assertRaises(ValueError):
+                self.application.save_voice_shortcut(shortcut)
+        self.assertEqual(path.read_text(encoding="utf-8"), "[]")
+        self.assertEqual(desktop.dictation_shortcut, original)
+
+    def test_voice_shortcut_save_failure_rolls_back_memory_and_preserves_existing_config(self):
+        desktop = self.voice_desktop()
+        original = desktop.dictation_shortcut
+        path = app.data_dir(self.home) / "config.json"
+        path.parent.mkdir()
+        path.write_text('{"custom":true}', encoding="utf-8")
+        with patch.object(app.os, "replace", side_effect=OSError("write denied")):
+            with self.assertRaisesRegex(OSError, "write denied"):
+                self.application.save_voice_shortcut({"key_codes": [0xA5], "mode": "hold"})
+        self.assertEqual(path.read_text(encoding="utf-8"), '{"custom":true}')
+        self.assertEqual(desktop.dictation_shortcut, original)
+        self.assertEqual(list(path.parent.glob("*.tmp")), [])
+
+    def test_voice_shortcut_changes_are_blocked_while_voice_is_active(self):
+        desktop = self.voice_desktop()
+        with patch.object(type(desktop), "voice_active", new_callable=lambda: property(lambda self: True)):
+            with self.assertRaisesRegex(RuntimeError, "松开语音键"):
+                self.application.save_voice_shortcut({"key_codes": [0xA5], "mode": "hold"})
+        self.assertFalse((app.data_dir(self.home) / "config.json").exists())
+
+    def build_voice_settings(self):
+        tk = MagicMock()
+        commands, bindings = {}, {}
+        mode = SimpleNamespace(value="hold")
+        mode.get = lambda: mode.value
+        tk.StringVar.return_value = mode
+        tk.Toplevel.return_value.bind.side_effect = lambda event, command: bindings.__setitem__(event, command)
+        captures = []
+
+        def capture(window, on_key, on_error):
+            native = Mock(on_key=on_key, on_error=on_error)
+            captures.append(native)
+            bindings["<KeyPress>"] = lambda event: on_key(True, event)
+            bindings["<KeyRelease>"] = lambda event: on_key(False, event)
+            return native
+
+        tk.capture_instances = captures
+
+        def button(parent, text, command, kind="primary", **kwargs):
+            commands[text] = command
+            return Mock()
+
+        with patch.dict(sys.modules, {"tkinter": tk}), patch.object(app.theme, "label", side_effect=lambda *a, **kw: Mock()), patch.object(
+                app.theme, "button", side_effect=button), patch.object(
+                app.theme, "style_window", side_effect=lambda window, title: window), patch.object(app.theme, "center"), patch.object(
+                app, "ShortcutCapture", side_effect=capture):
+            self.application.show_voice_shortcut()
+        # Re-record invokes the same injectable substitute after construction.
+        original = commands["重录"]
+
+        def rerecord():
+            with patch.object(app, "ShortcutCapture", side_effect=capture):
+                original()
+
+        commands["重录"] = rerecord
+        return tk, commands, bindings, mode
+
+    def test_voice_settings_records_chord_then_saves_selected_mode_and_closes(self):
+        self.voice_desktop()
+        tk, commands, bindings, mode = self.build_voice_settings()
+        event = SimpleNamespace(keycode=18, keysym="Alt_R")
+        bindings["<KeyPress>"](event)
+        bindings["<KeyRelease>"](event)
+        mode.value = "toggle"
+        commands["保存"]()
+        self.assertEqual(app.hub.load_json(app.data_dir(self.home) / "config.json")["dictation_shortcut"],
+                         {"key_codes": [0xA5], "modifiers": [], "mode": "toggle"})
+        tk.capture_instances[0].close.assert_called_once()
+        tk.Toplevel.return_value.destroy.assert_called_once()
+
+    def test_voice_settings_cancel_and_rerecord_never_apply_partial_chords(self):
+        tk, commands, bindings, mode = self.build_voice_settings()
+        with patch.object(self.application, "save_voice_shortcut") as save:
+            commands["保存"]()
+            event = SimpleNamespace(keycode=18, keysym="Alt_R")
+            bindings["<KeyPress>"](event)
+            bindings["<KeyRelease>"](event)
+            commands["重录"]()
+            commands["保存"]()
+            commands["取消"]()
+        save.assert_not_called()
+        tk.Toplevel.return_value.destroy.assert_called_once()
+
+    def test_voice_settings_focus_loss_discards_incomplete_chord_without_refocusing(self):
+        tk, commands, bindings, mode = self.build_voice_settings()
+        event = SimpleNamespace(keycode=17, keysym="Control_L")
+        bindings["<KeyPress>"](event)
+        tk.Toplevel.return_value.focus_force.reset_mock()
+        bindings["<FocusOut>"](SimpleNamespace(widget=tk.Toplevel.return_value))
+        tk.capture_instances[0].close.assert_called_once()
+        tk.Toplevel.return_value.focus_force.assert_not_called()
+        with patch.object(self.application, "save_voice_shortcut") as save:
+            commands["保存"]()
+        save.assert_not_called()
+
+    def test_voice_settings_destroy_unhooks_and_rerecord_creates_new_capture(self):
+        tk, commands, bindings, mode = self.build_voice_settings()
+        commands["重录"]()
+        self.assertEqual(len(tk.capture_instances), 2)
+        tk.capture_instances[0].close.assert_called_once()
+        bindings["<Destroy>"](SimpleNamespace(widget=tk.Toplevel.return_value))
+        tk.capture_instances[1].close.assert_called_once()
+
+    def test_voice_settings_native_error_disables_save_and_keeps_dialog_open(self):
+        tk, commands, bindings, mode = self.build_voice_settings()
+        tk.capture_instances[0].on_error("录制失败，请重录")
+        with patch.object(self.application, "save_voice_shortcut") as save:
+            commands["保存"]()
+        save.assert_not_called()
+        tk.Toplevel.return_value.destroy.assert_not_called()
+
+    def test_keys_window_has_voice_shortcut_entry(self):
+        tk = MagicMock()
+        commands = {}
+
+        def button(parent, text, command, kind="primary", **kwargs):
+            commands[text] = command
+            return Mock()
+
+        with patch.dict(sys.modules, {"tkinter": tk}), patch.object(app.theme, "label", return_value=Mock()), patch.object(
+                app.theme, "button", side_effect=button), patch.object(app.theme, "style_window", side_effect=lambda w, title: w), patch.object(
+                app.theme, "center"), patch.object(self.application, "show_voice_shortcut") as settings:
+            self.application.show_keys()
+            commands["语音快捷键"]()
+        settings.assert_called_once_with()
 
     def test_dynamic_session_menu_preserves_full_identity(self):
         menu = self.application.menu(SimpleNamespace(Menu=Menu, MenuItem=MenuItem))

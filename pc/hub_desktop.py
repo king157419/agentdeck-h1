@@ -16,6 +16,7 @@ if sys.platform == "win32":
 
 VOICE_POLL_SECONDS = 0.1
 VOICE_MAX_SECONDS = 60.0
+DICTATION_MODIFIERS = {"control": 0x11, "option": 0x12, "shift": 0x10, "command": 0x5B}
 log = logging.getLogger("agentdeck.hub.voice")
 
 
@@ -33,6 +34,11 @@ class _Voice:
     close_error: object = None
     closed: bool = False
     result: object = None
+    mode: str = "toggle"
+    keys: tuple = ()
+    cleanup_only: bool = False
+    closing_triggered: bool = False
+    uncertain: bool = False
 
 
 if sys.platform == "win32":
@@ -48,35 +54,77 @@ if sys.platform == "win32":
             return bool(self.user.IsWindow(hwnd))
 
         def send_combo(self, keys, expected):
+            self._combo_triggered = False
             keys = tuple(keys)
-            modifiers = (0x10, 0x11, 0x12, 0x5B, 0x5C)
-            if (not keys or self() != expected
-                    or any(self.user.GetAsyncKeyState(key) & 0x8000
-                           for key in set(modifiers + keys))):
+            if not self._can_press(keys, expected):
                 return False
             transitions = [(key, 0) for key in keys]
             transitions.extend((key, 2) for key in reversed(keys))
+            return self._send_owned(transitions)
+
+        def hold_combo(self, keys, expected):
+            keys = tuple(keys)
+            if not self._can_press(keys, expected):
+                return False
+            return self._send_owned([(key, 0) for key in keys])
+
+        def _can_press(self, keys, expected):
+            modifiers = (0x10, 0x11, 0x12, 0x5B, 0x5C, *range(0xA0, 0xA6))
+            return (bool(keys) and not getattr(self, "_held_keys", ())
+                    and not any(self.user.GetAsyncKeyState(key) & 0x8000
+                                for key in set(modifiers + keys))
+                    and self() == expected)
+
+        def _send_owned(self, transitions):
+            # Reserve ownership before native input: even an exception after
+            # insertion must leave enough information to release our keys.
+            self._held_keys = list(dict.fromkeys(key for key, flags in transitions if not flags))
             events = self._events(transitions)
-            sent = self.user.SendInput(len(events), events, ctypes.sizeof(INPUT))
-            if sent == len(events):
-                return True
-            held = []
+            self._combo_triggered = None  # An interrupted native call has unknown delivery.
+            try:
+                sent = self.user.SendInput(len(events), events, ctypes.sizeof(INPUT))
+            except BaseException:
+                self.release_combo()
+                raise
+            self._combo_triggered = sent >= len(self._held_keys)
+            self._held_keys = []
             for key, flags in transitions[:sent]:
                 if flags:
-                    held.remove(key)
+                    self._held_keys.remove(key)
                 else:
-                    held.append(key)
-            if held:
-                releases = self._events([(key, 2) for key in reversed(held)])
-                self.user.SendInput(len(releases), releases, ctypes.sizeof(INPUT))
-            return False
+                    self._held_keys.append(key)
+            if sent != len(events):
+                self.release_combo()
+                return False
+            return True
+
+        def release_combo(self):
+            # Cleanup contains ONLY key-ups for keys owned by this adapter.
+            # It must work even after the target disappears or focus changes.
+            for attempt in range(2):
+                keys = list(reversed(getattr(self, "_held_keys", ())))
+                if not keys:
+                    return True
+                events = self._events([(key, 2) for key in keys])
+                try:
+                    sent = self.user.SendInput(len(events), events, ctypes.sizeof(INPUT))
+                except BaseException:
+                    if attempt:
+                        raise
+                    continue
+                for key in keys[:sent]:
+                    self._held_keys.remove(key)
+            return not self._held_keys
 
         @staticmethod
         def _events(transitions):
             events = (INPUT * len(transitions))()
             for event, (key, flags) in zip(events, transitions):
                 event.type = 1  # INPUT_KEYBOARD
-                event.ki = KEYBDINPUT(key, 0, flags, 0, 0)
+                extended = key in (0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
+                                   0x28, 0x2C, 0x2D, 0x2E, 0x5B, 0x5C, 0x5D,
+                                   0x6F, 0x90, 0xA3, 0xA5)
+                event.ki = KEYBDINPUT(key, 0, flags | int(extended), 0, 0)
             return events
 
 
@@ -148,7 +196,7 @@ class DesktopEffects:
 
     def __init__(self, windows=None, *, clipboard=None, capture=None,
                  shots_dir=None, now=None, sleeper=None, monotonic=None,
-                 voice_wait=None):
+                 voice_wait=None, dictation_shortcut=None):
         self._windows = windows
         self.clipboard = set_clipboard if clipboard is None else clipboard
         self.capture = capture_screen if capture is None else capture
@@ -161,6 +209,41 @@ class DesktopEffects:
         self._voice = None
         self._voice_lock = threading.RLock()
         self._voice_commands = threading.RLock()
+        self.set_dictation_shortcut(dictation_shortcut)
+
+    @staticmethod
+    def _shortcut(shortcut):
+        if shortcut is None:
+            shortcut = {"key_codes": [0x48], "modifiers": ["command"]}
+        if (not isinstance(shortcut, dict)
+                or set(shortcut) - {"key_codes", "modifiers", "mode"}):
+            raise ValueError("dictation_shortcut needs key_codes, optional modifiers and mode")
+        codes, modifiers = shortcut.get("key_codes"), shortcut.get("modifiers", [])
+        mode = shortcut.get("mode", "toggle")
+        if (not isinstance(codes, list) or not 1 <= len(codes) <= 4
+                or any(type(code) is not int or not 1 <= code <= 254 for code in codes)
+                or len(codes) != len(set(codes))
+                or not isinstance(modifiers, list)
+                or any(not isinstance(modifier, str) or modifier not in DICTATION_MODIFIERS
+                       for modifier in modifiers)
+                or len(modifiers) != len(set(modifiers))
+                or mode not in ("toggle", "hold")):
+            raise ValueError("invalid dictation key_codes, modifiers or mode")
+        keys = [DICTATION_MODIFIERS[name] for name in modifiers] + codes
+        families = ({0x10, 0xA0, 0xA1}, {0x11, 0xA2, 0xA3},
+                    {0x12, 0xA4, 0xA5}, {0x5B, 0x5C})
+        if any(sum(key in family for key in keys) > 1 for family in families):
+            raise ValueError("duplicate dictation modifier")
+        return {"key_codes": list(codes), "modifiers": list(modifiers), "mode": mode}
+
+    def set_dictation_shortcut(self, shortcut):
+        shortcut = DesktopEffects._shortcut(shortcut)
+        with self._voice_commands, self._voice_lock:
+            if self.voice_active:
+                raise RuntimeError("release voice before changing its shortcut")
+            self.dictation_shortcut = shortcut
+            self._dictation_mode = shortcut["mode"]
+            self._dictation_keys = tuple(DICTATION_MODIFIERS[name] for name in shortcut["modifiers"]) + tuple(shortcut["key_codes"])
 
     @property
     def windows(self):
@@ -184,6 +267,10 @@ class DesktopEffects:
         return window
 
     def _combo(self, keys, expected):
+        # Reset before the outer foreground check too: a rejected attempt must
+        # never inherit delivery information from the previous toggle.
+        if hasattr(self.windows, "_combo_triggered"):
+            self.windows._combo_triggered = False
         if self.windows() != expected or not self.windows.send_combo(keys, expected):
             raise RuntimeError("foreground changed or key combination failed")
 
@@ -198,7 +285,7 @@ class DesktopEffects:
         self._combo((0x11, 0x56), expected)  # Ctrl+V
 
     def _voice_shortcut(self, expected):
-        self._combo((0x5B, 0x48), expected)  # Win+H
+        self._combo(self._dictation_keys, expected)
 
     def interrupt(self, session, sessions):
         self._key(0x1B, self._focus(session, sessions))
@@ -219,17 +306,36 @@ class DesktopEffects:
             if previous is not None and previous.thread.ident is not None:
                 previous.thread.join()
             window = self._focus(session, sessions)
-            self._voice_shortcut(window)  # Dictation only, never text or approval.
-            voice = _Voice(dict(session), window[0], self.monotonic(), on_stop)
+            voice = _Voice(dict(session), window[0], self.monotonic(), on_stop,
+                           mode=self._dictation_mode, keys=self._dictation_keys)
             voice.thread = threading.Thread(target=self._guard_voice, args=(voice,),
                                             name="AgentDeck voice focus", daemon=True)
-            with self._voice_lock:
-                self._voice = voice
             try:
+                if voice.mode == "hold":
+                    # Publish ownership before key-down, including partial input
+                    # or exceptions raised while starting the guard thread.
+                    with self._voice_lock:
+                        self._voice = voice
+                    if self.windows() != window or not self.windows.hold_combo(voice.keys, window):
+                        raise RuntimeError("foreground changed or key combination failed")
+                else:
+                    self._voice_shortcut(window)
+                    with self._voice_lock:
+                        self._voice = voice
                 voice.thread.start()
-            except Exception as error:
-                voice.reason, voice.error = "error", str(error)
-                self._finish_voice(voice)
+            except BaseException as error:
+                triggered = getattr(self.windows, "_combo_triggered", False)
+                if self._voice is not voice and (getattr(self.windows, "_held_keys", ())
+                                                or triggered is not False):
+                    # A failed toggle may still own a partially inserted key.
+                    # Complete key-down delivery may also have started dictation.
+                    voice.cleanup_only = triggered is False
+                    voice.uncertain = triggered is None
+                    with self._voice_lock:
+                        self._voice = voice
+                if self._voice is voice:
+                    voice.reason, voice.error = "error", str(error)
+                    self._finish_voice(voice)
                 raise
             log.info("Voice started: target=%s hwnd=%s", voice.session["key"], voice.hwnd)
         return True
@@ -252,7 +358,7 @@ class DesktopEffects:
                         voice.reason = "focus_failed"
                         voice.stop.set()
                         break
-        except Exception as error:
+        except BaseException as error:
             with self._voice_lock:
                 voice.reason, voice.error = "error", str(error)
                 voice.stop.set()
@@ -279,21 +385,20 @@ class DesktopEffects:
                 return
             voice.stop.set()
             try:
-                # Restore the target before closing when it is still available.
-                # If it vanished or activation fails, Win+H is a global stop;
-                # this path never pastes or injects a text/approval key.
+                # Restore the original target before a closing toggle. Hold
+                # cleanup releases owned keys even if restoring is impossible.
                 exists = self._voice_exists(voice)
                 if not exists and voice.reason == "released":
                     voice.reason = "window_lost"
                 if (exists and voice.reason != "focus_failed"
                         and self.windows()[0] != voice.hwnd):
                     self._restore_voice(voice)
-            except Exception as error:
+            except BaseException as error:
                 voice.error = str(error)
             try:
                 self._close_voice(voice)
                 voice.closed, voice.close_error = True, None
-            except Exception as error:
+            except BaseException as error:
                 voice.close_error = str(error)
             result = {"session": voice.session, "reason": voice.reason,
                       "restores": voice.restores, "closed": voice.closed}
@@ -312,7 +417,24 @@ class DesktopEffects:
                 log.exception("Voice completion callback failed")
 
     def _close_voice(self, voice):
-        self._voice_shortcut(self.windows())
+        release = getattr(self.windows, "release_combo", None)
+        if release is not None and not release():
+            raise RuntimeError("dictation key release failed")
+        if voice.mode != "hold" and not voice.cleanup_only:
+            if voice.uncertain:
+                raise RuntimeError("dictation shortcut delivery is unknown; input remains blocked")
+            if voice.closing_triggered:
+                return
+            foreground = self.windows()
+            if foreground[0] != voice.hwnd:
+                raise RuntimeError("voice target is not foreground; cannot stop dictation")
+            try:
+                self._combo(voice.keys, foreground)
+            except BaseException:
+                triggered = getattr(self.windows, "_combo_triggered", False)
+                voice.closing_triggered = triggered is True
+                voice.uncertain = triggered is None
+                raise
 
     def _stop_voice(self, reason):
         with self._voice_commands:
@@ -325,7 +447,7 @@ class DesktopEffects:
                     voice.reason = reason
                     voice.stop.set()
             # The guard does not need _voice_commands; never join under the
-            # state lock that it needs to finish the one closing Win+H.
+            # state lock that it needs to release the owned shortcut.
             if (voice.thread.ident is not None
                     and voice.thread is not threading.current_thread()):
                 voice.thread.join()

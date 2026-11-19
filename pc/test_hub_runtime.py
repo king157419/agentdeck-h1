@@ -1,6 +1,7 @@
 """Offline CLI lifecycle checks; no native inputs, windows or serial ports."""
 import argparse
 import io
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -14,6 +15,25 @@ import hub
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_windows_reads_voice_shortcut_from_default_or_explicit_config(self):
+        shortcut = {"key_codes": [0xA5], "modifiers": [], "mode": "hold"}
+        class Constructed(Exception):
+            pass
+        with tempfile.TemporaryDirectory() as directory:
+            for explicit in (False, True):
+                config = Path(directory) / ("custom.json" if explicit else ".agentdeck/config.json")
+                config.parent.mkdir(parents=True, exist_ok=True)
+                config.write_text(json.dumps({"dictation_shortcut": shortcut}), encoding="utf-8")
+                argv = ["--backend", "none", "--no-lcd", "--home", directory]
+                if explicit:
+                    argv += ["--config", str(config)]
+                with self.subTest(explicit=explicit), patch("hub.logging.basicConfig"), patch(
+                        "hub_desktop.DesktopEffects") as factory, patch(
+                        "hub.Hub", side_effect=Constructed), self.assertRaises(Constructed):
+                    hub.main(argv)
+                factory.assert_called_once_with(shots_dir=Path(directory) / ".agentdeck/shots",
+                                                dictation_shortcut=shortcut)
+
     def test_macos_imports_when_wintypes_is_unavailable(self):
         script = '''
 import builtins

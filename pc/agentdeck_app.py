@@ -12,12 +12,14 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 
 import agentdeck_theme as theme
 import hub
 import hub_install
 from hub_overlay import Overlay
+from voice_shortcut_capture import ShortcutCapture
 
 
 log = logging.getLogger("agentdeck.app")
@@ -38,6 +40,56 @@ KEY_ROWS = (
 )
 KNOBS = (("hid:0x16", "hid:0x09", "hid:0x0F"), ("hid:0x15", "hid:0x13", "hid:0x14"),
          ("hid:0x2D", "hid:0x2E", "hid:0x19"), ("hid:0x30", "hid:0x2F", "ctrl+hid:0x27"))
+
+
+class ShortcutRecorder:
+    """Record one chord; repeated keydowns never add another key."""
+    MODIFIERS = {
+        "Control_L": (0xA2, "control", "Ctrl"), "Control_R": (0xA3, "control", "Right Ctrl"),
+        "Alt_L": (0xA4, "option", "Alt"), "Alt_R": (0xA5, "option", "Right Alt"),
+        "Shift_L": (0xA0, "shift", "Shift"), "Shift_R": (0xA1, "shift", "Right Shift"),
+        "Win_L": (0x5B, "command", "Win"), "Win_R": (0x5C, "command", "Right Win"),
+        "Super_L": (0x5B, "command", "Win"), "Super_R": (0x5C, "command", "Right Win"),
+    }
+
+    def __init__(self):
+        self.held = {}
+        self.chord = {}
+        self.shortcut = None
+        self.label = ""
+
+    def key(self, event):
+        if event.keysym in self.MODIFIERS:
+            return self.MODIFIERS[event.keysym]
+        code = event.keycode
+        if type(code) is not int or not 1 <= code <= 254:
+            return None
+        name = {"space": "Space", "Return": "Enter", "Escape": "Esc"}.get(event.keysym, event.keysym)
+        return code, None, name.upper() if len(name) == 1 else name
+
+    def press(self, event):
+        key = self.key(event)
+        if self.shortcut is not None or key is None or key[0] in self.held:
+            return
+        self.held[key[0]] = key
+        self.chord[key[0]] = key
+
+    def release(self, event):
+        key = self.key(event)
+        if self.shortcut is not None or key is None or key[0] not in self.held:
+            return None
+        self.held.pop(key[0])
+        if self.held:
+            return None
+        keys = list(self.chord.values())
+        main = [key[0] for key in keys if key[1] is None]
+        right = {0xA1, 0xA3, 0xA5, 0x5C}
+        modifiers = list(dict.fromkeys(key[1] for key in keys if key[1] is not None and key[0] not in right))
+        # Preserve right modifiers even in chords; modifier-only shortcuts keep both sides.
+        codes = [key[0] for key in keys if key[0] in right] + main if main else [key[0] for key in keys]
+        self.shortcut = {"key_codes": codes, "modifiers": modifiers if main else []}
+        self.label = " + ".join(key[2] for key in keys)
+        return self.shortcut
 
 
 def data_dir(home=None):
@@ -458,7 +510,157 @@ class TrayApplication:
             for mark, value in (("顺", cw), ("逆", ccw), ("按", press)):
                 theme.label(card, "%s  %s" % (mark, value), color=theme.MUTED, size=9, bg=theme.SURFACE,
                             wraplength=140, justify="left").pack(anchor="w")
+        theme.button(grid, "语音快捷键", self.show_voice_shortcut, "quiet").grid(
+            row=len(model["rows"]) + 1, column=0, columnspan=4, sticky="e", pady=(theme.S4, 0))
         theme.center(window)
+
+    def save_voice_shortcut(self, shortcut):
+        from hub_desktop import DesktopEffects
+        shortcut = DesktopEffects._shortcut(shortcut)
+        with self.hub.lock:
+            desktop = self.hub._desktop()
+            if desktop.voice_active:
+                raise RuntimeError("请先松开语音键")
+            path = data_dir(self.hub.home) / "config.json"
+            config = hub.load_json(path) if path.exists() else {}
+            if not isinstance(config, dict):
+                raise ValueError("config.json 必须是 JSON 对象")
+            config["dictation_shortcut"] = shortcut
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                                 prefix="config-", suffix=".tmp", delete=False) as output:
+                    temporary = Path(output.name)
+                    output.write(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
+                previous = desktop.dictation_shortcut
+                desktop.set_dictation_shortcut(shortcut)
+                try:
+                    os.replace(temporary, path)
+                except Exception:
+                    desktop.set_dictation_shortcut(previous)
+                    raise
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+
+    def show_voice_shortcut(self):
+        import tkinter as tk
+        window = theme.style_window(tk.Toplevel(self.overlay.root), "语音快捷键")
+        body = tk.Frame(window, bg=theme.BG, padx=theme.S5, pady=theme.S5)
+        body.pack(fill="both", expand=True)
+        caption = theme.label(body, "按一次语音软件的快捷键", color=theme.MUTED)
+        caption.pack(anchor="w")
+        chord = theme.label(body, "等待按键…", size=14, bold=True, latin=True)
+        chord.pack(anchor="w", pady=(theme.S3, theme.S4))
+        mode = tk.StringVar(window, value="hold")
+        choices = []
+        for value, text in (("hold", "按住说话"), ("toggle", "按一下开始、再按结束")):
+            choice = tk.Radiobutton(body, text=text, value=value, variable=mode, bg=theme.BG,
+                                    fg=theme.TEXT, selectcolor=theme.RAISED, activebackground=theme.BG,
+                                    activeforeground=theme.TEXT, font=theme.font(10), anchor="w",
+                                    highlightthickness=0, state="disabled")
+            choice.pack(anchor="w", pady=theme.S1)
+            choices.append(choice)
+        bar = tk.Frame(body, bg=theme.BG)
+        bar.pack(fill="x", pady=(theme.S5, 0))
+        state = {"recorder": ShortcutRecorder(), "capture": None}
+
+        def stop_capture():
+            capture = state["capture"]
+            if capture is not None:
+                capture.close()
+                state["capture"] = None
+
+        def failed(text):
+            state["recorder"] = ShortcutRecorder()
+            caption.configure(text=text, fg=theme.STATUS["ERR"])
+            save.configure(fg=theme.FAINT)
+
+        def record(focus=True):
+            stop_capture()
+            state["recorder"] = ShortcutRecorder()
+            caption.configure(text="按一次语音软件的快捷键", fg=theme.MUTED)
+            chord.configure(text="等待按键…")
+            for choice in choices:
+                choice.configure(state="disabled")
+            save.configure(fg=theme.FAINT)
+            if focus:
+                window.focus_force()
+            capture = ShortcutCapture(window, lambda down, event: pressed(event) if down else released(event), failed)
+            state["capture"] = capture
+            try:
+                capture.start()
+            except Exception:
+                stop_capture()
+                failed("无法录制，请重录")
+
+        def pressed(event):
+            recorder = state["recorder"]
+            if recorder.shortcut is None:
+                recorder.press(event)
+                if recorder.chord:
+                    chord.configure(text=" + ".join(key[2] for key in recorder.chord.values()))
+                return "break"
+
+        def released(event):
+            from hub_desktop import DesktopEffects
+            recorder = state["recorder"]
+            if recorder.shortcut is not None:
+                return
+            if recorder.release(event) is not None:
+                stop_capture()
+                try:
+                    DesktopEffects._shortcut(recorder.shortcut)
+                except ValueError:
+                    record()
+                    caption.configure(text="组合键太长，请重录", fg=theme.STATUS["ERR"])
+                else:
+                    caption.configure(text="选择语音方式", fg=theme.MUTED)
+                    chord.configure(text=recorder.label)
+                    for choice in choices:
+                        choice.configure(state="normal")
+                    save.configure(fg=theme.BG)
+            return "break"
+
+        def persist():
+            shortcut = state["recorder"].shortcut
+            if shortcut is None:
+                return
+            try:
+                self.save_voice_shortcut(dict(shortcut, mode=mode.get()))
+            except Exception as error:
+                caption.configure(text=str(error), fg=theme.STATUS["ERR"])
+            else:
+                finish()
+
+        def finish():
+            try:
+                stop_capture()
+            finally:
+                window.destroy()
+
+        def lost_focus(event):
+            if event.widget is window and state["capture"] is not None:
+                stop_capture()
+                failed("窗口已失焦，请重录")
+
+        def destroyed(event):
+            if event.widget is window:
+                stop_capture()
+
+        theme.button(bar, "重录", record, "plain").pack(side="left")
+        theme.button(bar, "取消", finish, "quiet").pack(side="right", padx=(theme.S2, 0))
+        save = theme.button(bar, "保存", persist)
+        save.pack(side="right")
+        save.configure(fg=theme.FAINT)
+        window.bind("<FocusOut>", lost_focus)
+        window.bind("<Destroy>", destroyed)
+        window.protocol("WM_DELETE_WINDOW", finish)
+        theme.center(window)
+        window.attributes("-topmost", True)
+        window.grab_set()
+        record()
 
     def diagnostics(self):
         import hub_doctor

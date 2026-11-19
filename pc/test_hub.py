@@ -681,6 +681,69 @@ class HubTests(unittest.TestCase):
         self.assertNotIn("VOICE: stop failed", self.calls[-2])
         self.assertEqual(self.engine.action({"action": "approve"})["status"], "no_request")
 
+    def test_hold_voice_blocks_approval_and_releases_on_usb_or_raw_device_removal(self):
+        from hub_desktop import DesktopEffects
+        from hub_keyboard import KeyboardInput, RawKeys
+        self.event("SessionStart")
+        for backend in ("usb", "raw"):
+            with self.subTest(backend=backend):
+                windows = Windows()
+                windows.foreground = (12, "WindowsTerminal.exe", "project - Claude")
+                windows.items = [windows.foreground]
+                desktop = DesktopEffects(windows, monotonic=self.clock, dictation_shortcut={
+                    "key_codes": [0xA5], "mode": "hold"})
+                self.engine.desktop = desktop
+                callback = hub.USBKeys(self.engine, monotonic=self.clock)
+                if backend == "raw":
+                    reader = RawKeys(callback, monotonic=self.clock)
+                    reader({"kind": "keyboard", "device": 1, "vkey": 0x48, "down": True})
+                else:
+                    reader = KeyboardInput(callback, monotonic=self.clock,
+                                           usb_factory=lambda *a, **kw: None,
+                                           raw_factory=lambda *a, **kw: None)
+                    for event in ReportState().feed(bytes([0, 0, 0x0B, 0, 0, 0, 0, 0])):
+                        event["t"] = self.clock.value
+                        reader(event)
+                self.assertTrue(desktop.voice_active)
+                self.assertEqual(windows.held, [0xA5])
+                with self.assertRaisesRegex(hub.HubError, "release voice"):
+                    self.engine.action({"action": "approve"})
+                self.clock.value += 5  # A stale release must still clean up.
+                if backend == "raw":
+                    reader({"kind": "device_removed", "device": 1})
+                else:
+                    reader._release_usb()
+                self.assertFalse(desktop.voice_active)
+                self.assertEqual(windows.held, [])
+                self.assertEqual(windows.released, [0xA5])
+                self.assertEqual(windows.combos, [])
+                self.assertEqual(windows.keys, [])
+                self.assertEqual(callback.held, {})
+
+    def test_lost_toggle_window_keeps_approval_blocked_until_safe_stop(self):
+        from hub_desktop import DesktopEffects
+        windows, ticks = Windows(), GuardTicks()
+        target = (12, "WindowsTerminal.exe", "project - Claude")
+        windows.foreground, windows.items = target, [target]
+        desktop = DesktopEffects(windows, monotonic=self.clock, voice_wait=ticks)
+        self.engine.desktop = desktop
+        self.event("SessionStart")
+        self.engine.action({"action": "voice_down"})
+        self.assertEqual(ticks.entered.get(timeout=1), 0.1)
+        windows.foreground, windows.items = (99, "other.exe", "other"), []
+        with self.assertLogs("agentdeck.hub.voice", level="WARNING"):
+            ticks.permits.release()
+            desktop._voice.thread.join(1)
+        self.assertFalse(desktop._voice.thread.is_alive())
+        self.assertTrue(desktop.voice_active)
+        with self.assertRaisesRegex(hub.HubError, "release voice"):
+            self.engine.action({"action": "approve"})
+        self.assertEqual(windows.combos, [(0x5B, 0x48)])
+        windows.foreground, windows.items = target, [target]
+        self.engine.action({"action": "voice_up"})
+        self.assertFalse(desktop.voice_active)
+        self.assertEqual(windows.combos, [(0x5B, 0x48)] * 2)
+
     def test_voice_failures_are_reported_and_do_not_resolve_hooks(self):
         thread, result = self.permission()
         with patch.object(self.desktop, "voice_down", side_effect=RuntimeError("could not activate")):

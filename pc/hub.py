@@ -1144,8 +1144,7 @@ def main(argv=None, *, ui_factory=None):
     if args.require_nonce is not None:
         options['require_nonce'] = args.require_nonce
     desktop_options = {"shots_dir": home / ".agentdeck" / "shots"}
-    if sys.platform == "darwin":
-        desktop_options["dictation_shortcut"] = config.get("dictation_shortcut")
+    desktop_options["dictation_shortcut"] = config.get("dictation_shortcut")
     hub = Hub(approve_timeout=args.approve_timeout, prompts=load_json(args.prompts),
               risk_rules=load_json(args.risk_rules) if args.risk_rules else None,
               critical_rules=load_json(args.critical_rules) if args.critical_rules else None,

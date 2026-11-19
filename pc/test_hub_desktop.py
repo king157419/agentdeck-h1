@@ -21,6 +21,8 @@ class Windows:
         self.items = [WINDOW]
         self.keys = []
         self.combos = []
+        self.held = []
+        self.released = []
         self.activated = []
         self.activate_ok = True
         self.input_ok = True
@@ -47,6 +49,20 @@ class Windows:
         assert self.foreground == expected
         self.combos.append(keys)
         return self.input_ok
+
+    def hold_combo(self, keys, expected):
+        assert self.foreground == expected
+        self.held.extend(keys)
+        return self.input_ok
+
+    def release_combo(self):
+        if not self.held:
+            return True
+        if not self.input_ok:
+            return False
+        self.released.extend(reversed(self.held))
+        self.held.clear()
+        return True
 
 
 class DesktopTests(unittest.TestCase):
@@ -188,6 +204,82 @@ class ComboTests(unittest.TestCase):
         self.assertFalse(native.send_combo((0x11, 0x56), WINDOW))
         self.assertEqual(calls, [])
 
+    def test_hold_only_presses_and_release_is_reversed_and_idempotent(self):
+        native, calls = self.make_native()
+        self.assertTrue(native.hold_combo((0x11, 0xA5), WINDOW))
+        self.assertEqual(calls, [[(0x11, 0), (0xA5, 1)]])
+        self.assertTrue(native.release_combo())
+        self.assertEqual(calls[1], [(0xA5, 3), (0x11, 2)])
+        self.assertTrue(native.release_combo())
+        self.assertEqual(len(calls), 2)
+
+    def test_hold_partial_send_releases_only_inserted_keys(self):
+        native, calls = self.make_native(sent=1)
+        self.assertFalse(native.hold_combo((0x11, 0xA5), WINDOW))
+        self.assertEqual(calls, [[(0x11, 0), (0xA5, 1)], [(0x11, 2)]])
+        self.assertEqual(native._held_keys, [])
+
+    def test_hold_rejects_physical_modifiers_without_releasing_them(self):
+        native, calls = self.make_native(held=(0xA5,))
+        self.assertFalse(native.hold_combo((0xA5,), WINDOW))
+        self.assertTrue(native.release_combo())
+        self.assertEqual(calls, [])
+
+    def test_hold_rechecks_foreground_after_key_state_queries(self):
+        native, calls = self.make_native(foreground=(99, "", "other"))
+        self.assertFalse(native.hold_combo((0xA5,), WINDOW))
+        self.assertEqual(calls, [])
+
+    def test_native_exception_after_insertion_releases_owned_keys(self):
+        native, calls = self.make_native()
+        send = native.user.SendInput
+
+        def fail(count, events, size):
+            send(count, events, size)
+            if len(calls) == 1:
+                raise OSError("native input failed")
+            return count
+
+        native.user.SendInput = fail
+        with self.assertRaisesRegex(OSError, "native input failed"):
+            native.hold_combo((0x11, 0xA5), WINDOW)
+        self.assertEqual(calls[1], [(0xA5, 3), (0x11, 2)])
+        self.assertEqual(native._held_keys, [])
+
+    def test_partial_and_failed_releases_retry_without_new_key_downs(self):
+        native, calls = self.make_native()
+        send = native.user.SendInput
+        counts = iter((2, 1, 0, 1))
+
+        def partial(count, events, size):
+            send(count, events, size)
+            return next(counts)
+
+        native.user.SendInput = partial
+        self.assertTrue(native.hold_combo((0x11, 0xA5), WINDOW))
+        self.assertFalse(native.release_combo())
+        self.assertEqual(native._held_keys, [0x11])
+        self.assertTrue(native.release_combo())
+        self.assertEqual(calls[1:], [[(0xA5, 3), (0x11, 2)], [(0x11, 2)], [(0x11, 2)]])
+
+    def test_release_retries_an_exception_and_works_without_target_focus(self):
+        native, calls = self.make_native()
+        self.assertTrue(native.hold_combo((0xA5,), WINDOW))
+        send = native.user.SendInput
+
+        def fail_once(count, events, size):
+            send(count, events, size)
+            if len(calls) == 2:
+                raise OSError("release failed")
+            return count
+
+        native.user.SendInput = fail_once
+        # No foreground or key-state query is allowed on emergency key-up.
+        native.user.GetAsyncKeyState = lambda key: self.fail("key-state query during release")
+        with patch.object(type(native), "__call__", side_effect=AssertionError("foreground query")):
+            self.assertTrue(native.release_combo())
+        self.assertEqual(calls[1:], [[(0xA5, 3)], [(0xA5, 3)]])
+
 
 class GuardTicks:
     """Advance one requested guard period without wall-clock timing assertions."""
@@ -266,15 +358,23 @@ class VoiceTests(unittest.TestCase):
         self.assertEqual(self.ended()["reason"], "timeout")
         self.assertIsNone(self.effects.voice_up())
 
-    def test_missing_window_stops_on_next_tick_and_only_sends_global_close(self):
+    def test_missing_window_stops_without_toggling_unrelated_foreground(self):
         self.start()
         self.windows.items = []
         self.windows.foreground = (99, "other.exe", "other")
-        self.ticks.permits.release()
-        result = self.ended()
+        with self.assertLogs("agentdeck.hub.voice", level="WARNING"):
+            self.ticks.permits.release()
+            self.assertTrue(self.completed.wait(1))
+        result = self.completions[0]
+        self.assertTrue(self.effects.voice_active)
+        self.assertFalse(result["closed"])
+        self.assertEqual(self.windows.combos, [(0x5B, 0x48)])
         self.assertEqual(result["reason"], "window_lost")
         self.assertEqual(result["restores"], 0)
         self.assertEqual(self.windows.activated, [12])
+        self.windows.items, self.windows.foreground = [WINDOW], WINDOW
+        self.assertTrue(self.effects.voice_up()["closed"])
+        self.assertFalse(self.effects.voice_active)
 
     def test_release_notices_window_loss_before_next_tick(self):
         self.start()
@@ -320,8 +420,16 @@ class VoiceTests(unittest.TestCase):
         self.start()
         self.windows.foreground = (99, "other.exe", "other")
         self.windows.activate_ok = False
-        self.ticks.permits.release()
-        self.assertEqual(self.ended()["reason"], "focus_failed")
+        with self.assertLogs("agentdeck.hub.voice", level="WARNING"):
+            self.ticks.permits.release()
+            self.assertTrue(self.completed.wait(1))
+        self.assertEqual(self.completions[0]["reason"], "focus_failed")
+        self.assertTrue(self.effects.voice_active)
+        self.assertFalse(self.completions[0]["closed"])
+        self.assertEqual(self.windows.combos, [(0x5B, 0x48)])
+        self.windows.foreground, self.windows.activate_ok = WINDOW, True
+        self.assertTrue(self.effects.voice_up()["closed"])
+        self.assertFalse(self.effects.voice_active)
 
     def test_window_query_error_still_attempts_owned_dictation_close(self):
         self.start()
@@ -434,6 +542,292 @@ class VoiceTests(unittest.TestCase):
         self.assertEqual(len(self.windows.combos), 1)
         self.assertEqual(self.completions, [])
         self.assertIsNone(self.effects.voice_up())
+
+
+class ShortcutTests(unittest.TestCase):
+    def native_effects(self, counts):
+        native, calls = ComboTests().make_native()
+        send = native.user.SendInput
+        remaining = iter(counts)
+        native.listening, native.pressed = False, set()
+        def partial(count, events, size):
+            send(count, events, size)
+            inserted = next(remaining, count)
+            for event in events[:inserted]:
+                key, flags = event.ki.wVk, event.ki.dwFlags
+                if flags & 2:
+                    native.pressed.discard(key)
+                else:
+                    if key == 0x48 and 0x5B in native.pressed:
+                        native.listening = not native.listening
+                    native.pressed.add(key)
+            return inserted
+        native.user.SendInput = partial
+        native.windows = lambda: [WINDOW]
+        native.activate = lambda handle: handle == WINDOW[0]
+        native.exists = lambda handle: handle == WINDOW[0]
+        effects = DesktopEffects(native)
+        self.addCleanup(effects.close)
+        return effects, calls
+
+    def test_toggle_retry_releases_stranded_modifier_before_closing(self):
+        effects, calls = self.native_effects([4, 1, 0, 0, 1, 4])
+        effects.voice_down(SESSION, [SESSION])
+        with self.assertLogs("agentdeck.hub.voice", level="WARNING"):
+            with self.assertRaisesRegex(RuntimeError, "combination failed"):
+                effects.voice_up()
+        self.assertTrue(effects.voice_active)
+        self.assertEqual(effects.windows._held_keys, [0x5B])
+        self.assertTrue(effects.voice_up()["closed"])
+        self.assertEqual(calls[4], [(0x5B, 3)])
+        self.assertEqual(effects.windows._held_keys, [])
+        self.assertFalse(effects.voice_active)
+
+    def test_failed_toggle_start_keeps_partial_key_cleanup_retryable(self):
+        effects, calls = self.native_effects([1, 0, 0, 0, 0, 1])
+        with self.assertLogs("agentdeck.hub.voice", level="WARNING"):
+            with self.assertRaisesRegex(RuntimeError, "combination failed"):
+                effects.voice_down(SESSION, [SESSION])
+        self.assertTrue(effects.voice_active)
+        self.assertEqual(effects.windows._held_keys, [0x5B])
+        self.assertTrue(effects.voice_up()["closed"])
+        self.assertEqual(calls[-1], [(0x5B, 3)])
+        self.assertEqual(len(calls), 6)
+        self.assertFalse(effects.voice_active)
+
+    def test_partial_start_that_pressed_main_key_is_closed_after_release_retry(self):
+        effects, calls = self.native_effects([2, 0, 0, 0, 0, 2, 4])
+        with self.assertLogs("agentdeck.hub.voice", level="WARNING"):
+            with self.assertRaisesRegex(RuntimeError, "combination failed"):
+                effects.voice_down(SESSION, [SESSION])
+        self.assertTrue(effects.windows.listening)
+        self.assertTrue(effects.voice_active)
+        self.assertTrue(effects.voice_up()["closed"])
+        self.assertFalse(effects.windows.listening)
+        self.assertEqual(effects.windows.pressed, set())
+        self.assertEqual(len(calls), 7)
+
+    def test_partial_start_with_successful_key_cleanup_still_stops_started_dictation(self):
+        effects, calls = self.native_effects([2, 2, 4])
+        with self.assertLogs("agentdeck.hub.voice", level="WARNING"):
+            with self.assertRaisesRegex(RuntimeError, "combination failed"):
+                effects.voice_down(SESSION, [SESSION])
+        self.assertFalse(effects.windows.listening)
+        self.assertFalse(effects.voice_active)
+        self.assertEqual(effects.windows.pressed, set())
+        self.assertEqual(len(calls), 3)
+
+    def test_partial_close_retry_only_releases_keys_without_reopening_dictation(self):
+        effects, calls = self.native_effects([4, 2, 0, 0, 2])
+        effects.voice_down(SESSION, [SESSION])
+        self.assertTrue(effects.windows.listening)
+        with self.assertLogs("agentdeck.hub.voice", level="WARNING"):
+            with self.assertRaisesRegex(RuntimeError, "combination failed"):
+                effects.voice_up()
+        self.assertFalse(effects.windows.listening)
+        self.assertTrue(effects.voice_active)
+        self.assertTrue(effects.voice_up()["closed"])
+        self.assertFalse(effects.windows.listening)
+        self.assertEqual(effects.windows.pressed, set())
+        self.assertEqual(len(calls), 5)
+
+    def test_unknown_native_delivery_releases_keys_but_keeps_input_blocked(self):
+        effects, calls = self.native_effects([])
+        effects.voice_down(SESSION, [SESSION])
+        send = effects.windows.user.SendInput
+        def interrupted(count, events, size):
+            inserted = send(count, events, size)
+            if len(calls) == 2:
+                raise OSError("native call interrupted")
+            return inserted
+        effects.windows.user.SendInput = interrupted
+        with self.assertLogs("agentdeck.hub.voice", level="WARNING"):
+            with self.assertRaisesRegex(RuntimeError, "native call interrupted"):
+                effects.voice_up()
+        self.assertEqual(effects.windows.pressed, set())
+        self.assertTrue(effects.voice_active)
+        before = len(calls)
+        with self.assertLogs("agentdeck.hub.voice", level="WARNING"):
+            with self.assertRaisesRegex(RuntimeError, "delivery is unknown"):
+                effects.voice_up()
+        self.assertEqual(len(calls), before)
+        # Model an operator ending dictation separately before fixture teardown.
+        effects._voice.cleanup_only = True
+        effects.voice_up()
+
+    def test_outer_foreground_rejection_does_not_reuse_previous_delivery(self):
+        effects, calls = self.native_effects([])
+        effects.voice(SESSION, [SESSION])
+        self.assertTrue(effects.windows._combo_triggered)
+        with patch.object(type(effects.windows), "__call__", return_value=(99, "", "other")):
+            with self.assertRaisesRegex(RuntimeError, "foreground changed"):
+                effects._voice_shortcut(WINDOW)
+        self.assertFalse(effects.windows._combo_triggered)
+        self.assertEqual(len(calls), 2)
+
+    def test_default_and_old_config_keep_win_h_toggle(self):
+        for config in (None, {"key_codes": [0x48], "modifiers": ["command"]}):
+            with self.subTest(config=config):
+                effects = DesktopEffects(Windows(), dictation_shortcut=config)
+                self.assertEqual(effects.dictation_shortcut,
+                                 {"key_codes": [0x48], "modifiers": ["command"], "mode": "toggle"})
+                effects.voice(SESSION, [SESSION])
+                self.assertEqual(effects.windows.combos, [(0x5B, 0x48)] * 2)
+
+    def test_custom_toggle_and_live_update(self):
+        config = {"key_codes": [0x20], "modifiers": ["control", "option"]}
+        effects = DesktopEffects(Windows(), dictation_shortcut=config)
+        config["key_codes"][0] = 0x0D
+        effects.voice(SESSION, [SESSION])
+        self.assertEqual(effects.windows.combos, [(0x11, 0x12, 0x20)] * 2)
+        effects.set_dictation_shortcut({"key_codes": [0xA5]})
+        effects.voice(SESSION, [SESSION])
+        self.assertEqual(effects.windows.combos[-2:], [(0xA5,)] * 2)
+
+    def test_invalid_config_is_rejected_without_native_access(self):
+        invalid = ["Win+H", {}, {"key_codes": []}, {"key_codes": [True]},
+                   {"key_codes": [0]}, {"key_codes": [255]}, {"key_codes": ["H"]},
+                   {"key_codes": [72] * 5}, {"key_codes": [72, 72]},
+                   {"key_codes": [72], "modifiers": "control"},
+                   {"key_codes": [72], "modifiers": ["ctrl"]},
+                   {"key_codes": [72], "modifiers": [[], "control"]},
+                   {"key_codes": [72], "modifiers": ["control", "control"]},
+                   {"key_codes": [0xA5], "modifiers": ["option"]},
+                   {"key_codes": [72], "mode": "press"},
+                   {"key_codes": [72], "script": "arbitrary"}]
+        with patch("hub_desktop.HubWindowControl", side_effect=AssertionError("native access")):
+            for config in invalid:
+                with self.subTest(config=config), self.assertRaises(ValueError):
+                    DesktopEffects(dictation_shortcut=config)
+
+
+class HoldVoiceTests(unittest.TestCase):
+    def setUp(self):
+        self.windows = Windows()
+        self.ticks = GuardTicks()
+        self.now = 100.0
+        self.completed = threading.Event()
+        self.results = []
+        self.effects = DesktopEffects(self.windows, dictation_shortcut={
+            "key_codes": [0x20], "modifiers": ["control", "option"], "mode": "hold"},
+            monotonic=lambda: self.now, voice_wait=self.ticks)
+        self.addCleanup(self.effects.close)
+        self.addCleanup(setattr, self.windows, "input_ok", True)
+
+    def start(self):
+        def done(result):
+            self.results.append(result)
+            self.completed.set()
+        self.effects.voice_down(SESSION, [SESSION], on_stop=done)
+        self.assertEqual(self.ticks.entered.get(timeout=1), 0.1)
+        self.assertTrue(self.effects.voice_active)
+
+    def stopped(self):
+        self.assertTrue(self.completed.wait(1), "guard did not finish")
+        self.effects._voice.thread.join(1)
+        self.assertFalse(self.effects._voice.thread.is_alive())
+        self.assertFalse(self.effects.voice_active)
+        self.assertEqual(self.windows.held, [])
+        self.assertEqual(self.windows.released, [0x20, 0x12, 0x11])
+        self.assertEqual(self.windows.combos, [])
+        self.assertEqual(self.windows.keys, [])
+        return self.results[-1]
+
+    def test_hold_down_once_and_release_once_in_reverse(self):
+        self.start()
+        self.assertEqual(self.windows.held, [0x11, 0x12, 0x20])
+        self.effects.voice_down(SESSION, [SESSION])
+        self.assertEqual(self.windows.held, [0x11, 0x12, 0x20])
+        self.effects.voice_up()
+        self.assertEqual(self.stopped()["reason"], "released")
+        self.assertIsNone(self.effects.voice_up())
+        self.assertEqual(len(self.results), 1)
+
+    def test_hold_times_out_and_releases_without_physical_up(self):
+        self.start()
+        self.now = 160.0
+        self.ticks.permits.release()
+        self.assertEqual(self.stopped()["reason"], "timeout")
+
+    def test_missing_window_releases_owned_keys_without_new_presses(self):
+        self.start()
+        self.windows.items = []
+        self.windows.foreground = (99, "other.exe", "other")
+        self.ticks.permits.release()
+        self.assertEqual(self.stopped()["reason"], "window_lost")
+
+    def test_failed_focus_restore_still_releases(self):
+        self.start()
+        self.windows.foreground = (99, "other.exe", "other")
+        self.windows.activate_ok = False
+        self.ticks.permits.release()
+        self.assertEqual(self.stopped()["reason"], "focus_failed")
+
+    def test_query_error_still_releases(self):
+        self.start()
+        self.windows.windows = lambda: (_ for _ in ()).throw(OSError("lookup failed"))
+        with self.assertLogs("agentdeck.hub.voice", level="WARNING"):
+            self.ticks.permits.release()
+            result = self.stopped()
+        self.assertEqual(result["reason"], "error")
+
+    def test_guard_wait_exception_still_releases(self):
+        def fail_wait(stop, seconds):
+            raise OSError("wait failed")
+        self.effects.voice_wait = fail_wait
+        with self.assertLogs("agentdeck.hub.voice", level="WARNING"):
+            self.effects.voice_down(SESSION, [SESSION])
+            self.effects._voice.thread.join(1)
+        self.assertFalse(self.effects.voice_active)
+        self.assertEqual(self.windows.held, [])
+        self.assertEqual(self.windows.released, [0x20, 0x12, 0x11])
+
+    def test_shutdown_releases_and_joins_guard(self):
+        self.start()
+        self.effects.close()
+        self.assertEqual(self.stopped()["reason"], "shutdown")
+
+    def test_thread_start_failure_releases_before_propagating(self):
+        with patch("hub_desktop.threading.Thread.start", side_effect=RuntimeError("thread failed")):
+            with self.assertLogs("agentdeck.hub.voice", level="WARNING"):
+                with self.assertRaisesRegex(RuntimeError, "thread failed"):
+                    self.effects.voice_down(SESSION, [SESSION])
+        self.assertFalse(self.effects.voice_active)
+        self.assertEqual(self.windows.held, [])
+        self.assertEqual(self.windows.released, [0x20, 0x12, 0x11])
+
+    def test_exception_after_partial_down_releases_before_propagating(self):
+        def partial(keys, expected):
+            self.windows.held.append(keys[0])
+            raise OSError("partial input")
+        self.windows.hold_combo = partial
+        with self.assertLogs("agentdeck.hub.voice", level="WARNING"):
+            with self.assertRaisesRegex(OSError, "partial input"):
+                self.effects.voice_down(SESSION, [SESSION])
+        self.assertFalse(self.effects.voice_active)
+        self.assertEqual(self.windows.held, [])
+        self.assertEqual(self.windows.released, [0x11])
+
+    def test_failed_release_keeps_ownership_and_blocks_reconfiguration_until_retry(self):
+        self.start()
+        self.windows.input_ok = False
+        with self.assertLogs("agentdeck.hub.voice", level="WARNING"):
+            with self.assertRaisesRegex(RuntimeError, "key release failed"):
+                self.effects.voice_up()
+        self.assertTrue(self.effects.voice_active)
+        self.assertEqual(self.windows.held, [0x11, 0x12, 0x20])
+        with self.assertRaisesRegex(RuntimeError, "release voice"):
+            self.effects.set_dictation_shortcut(None)
+        self.windows.input_ok = True
+        self.effects.voice_up()
+        self.stopped()
+
+    def test_live_setting_cannot_replace_the_owned_shortcut(self):
+        self.start()
+        with self.assertRaisesRegex(RuntimeError, "release voice"):
+            self.effects.set_dictation_shortcut({"key_codes": [0xA5], "mode": "hold"})
+        self.effects.voice_up()
+        self.stopped()
 
 
 if __name__ == "__main__":
