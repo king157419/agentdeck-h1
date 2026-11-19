@@ -125,7 +125,7 @@ print("macOS imports OK without ctypes.wintypes")
         with tempfile.TemporaryDirectory() as directory, patch.dict(sys.modules, {
                 "hub_hotkey": SimpleNamespace(HotkeyInput=Input),
                 "hub_overlay": SimpleNamespace(Overlay=Overlay)}), patch(
-                "deck_usb.USBInput", Input), patch("hub.HubServer", return_value=server), patch(
+                "hub_keyboard.KeyboardInput", Input), patch("hub.HubServer", return_value=server), patch(
                 "hub_desktop.DesktopEffects", side_effect=AssertionError("native output")):
             argv = ["--backend", backends, "--no-lcd", "--no-desktop", "--home", directory]
             if overlay_enabled:

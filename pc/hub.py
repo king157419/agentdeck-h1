@@ -1031,6 +1031,10 @@ class USBKeys:
     def snapshot(self):
         return self.hub.input_snapshot() if hasattr(self.hub, 'input_snapshot') else dict(self.hub.rendered_request)
 
+    def snapshot_at(self, received_at):
+        return (self.hub.input_snapshot(received_at) if hasattr(self.hub, 'input_snapshot')
+                else self.snapshot())
+
     def __call__(self, event):
         received_at = event.get('t', self.monotonic())
         if (isinstance(received_at, bool) or not isinstance(received_at, (int, float))
@@ -1172,8 +1176,8 @@ def main(argv=None, *, ui_factory=None):
 
     try:
         if "usb" in args.backend:
-            from deck_usb import USBInput
-            readers.append((USBInput(USBKeys(hub, mapping, profile=args.profile), monotonic=hub.monotonic), "AgentDeck USB"))
+            from hub_keyboard import KeyboardInput
+            readers.append((KeyboardInput(USBKeys(hub, mapping, profile=args.profile), monotonic=hub.monotonic), "AgentDeck USB"))
         if "hotkey" in args.backend:
             from hub_hotkey import HotkeyInput
             readers.append((HotkeyInput(hub, mapping), "AgentDeck hotkeys"))

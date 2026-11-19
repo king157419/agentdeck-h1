@@ -232,6 +232,79 @@ def serial_log_status(home):
     return "未确认（诊断不打开串口）；最近日志未发现占用或权限不足记录"
 
 
+def _rawinput_keyboard_available(user=None):
+    """Enumerate keyboard paths only; never register or open HID collections."""
+    import ctypes
+    from deck_input import PTR, U32, UINT_ERROR, RIDI_DEVICENAME, target_path
+
+    class Device(ctypes.Structure):
+        _fields_ = [("handle", PTR), ("kind", U32)]
+
+    if user is None:
+        if sys.platform != "win32":
+            return False
+        user = ctypes.WinDLL("user32", use_last_error=True)
+    user.GetRawInputDeviceList.argtypes = [ctypes.POINTER(Device), ctypes.POINTER(U32), U32]
+    user.GetRawInputDeviceList.restype = U32
+    user.GetRawInputDeviceInfoW.argtypes = [PTR, U32, PTR, ctypes.POINTER(U32)]
+    user.GetRawInputDeviceInfoW.restype = U32
+    # A device can arrive between the size query and the list query.
+    for _ in range(2):
+        count = U32()
+        if user.GetRawInputDeviceList(None, ctypes.byref(count), ctypes.sizeof(Device)) == UINT_ERROR:
+            raise OSError("Raw Input device enumeration failed")
+        if count.value == 0:
+            return False
+        if count.value > 4096:
+            raise OSError("Raw Input device count is invalid")
+        devices = (Device * count.value)()
+        copied = user.GetRawInputDeviceList(devices, ctypes.byref(count), ctypes.sizeof(Device))
+        if copied == UINT_ERROR:
+            continue
+        if copied > len(devices):
+            raise OSError("Raw Input device list is invalid")
+        for device in devices[:copied]:
+            if device.kind != 1 or not device.handle:
+                continue
+            size = U32()
+            result = user.GetRawInputDeviceInfoW(device.handle, RIDI_DEVICENAME, None, ctypes.byref(size))
+            if result == UINT_ERROR or not 0 < size.value <= 32768:
+                continue
+            name = ctypes.create_unicode_buffer(size.value + 1)
+            result = user.GetRawInputDeviceInfoW(device.handle, RIDI_DEVICENAME, name, ctypes.byref(size))
+            if result != UINT_ERROR and target_path(name.value):
+                return True
+        return False
+    raise OSError("Raw Input device list changed during diagnostic")
+
+
+def _usb_backend_available():
+    import usb.core
+    import libusb_package
+    return callable(usb.core.find) and libusb_package.get_libusb1_backend() is not None
+
+
+def keyboard_status(*, driver_probe=None, raw_probe=None, usb_probe=None):
+    """Read availability evidence without claiming USB or replacing input registration."""
+    from deck_usb import interface0_driver
+    errors = []
+
+    def probe(callback):
+        try:
+            return callback()
+        except Exception as error:
+            errors.append(str(error))
+            return None
+
+    driver = probe(driver_probe or interface0_driver)
+    raw_available = probe(raw_probe or _rawinput_keyboard_available) is True
+    usb_available = (str(driver).casefold() == "winusb"
+                     and probe(usb_probe or _usb_backend_available) is True)
+    return {"connected": True if driver or raw_available else None, "driver": driver,
+            "usb_available": usb_available, "rawinput_available": raw_available,
+            "errors": errors}
+
+
 def app_report(*, home=None, projects=(), port=47800, usb_probe=None, serial_probe=None,
                connection_factory=None, runner=None, wall_time=None):
     """Chinese tray diagnostics, using the existing doctor and injectable external probes."""
@@ -258,20 +331,24 @@ def app_report(*, home=None, projects=(), port=47800, usb_probe=None, serial_pro
         if label:
             lines.append("%s：%s" % (label[0], label[1] if check["success"] else label[2]))
     try:
-        if usb_probe is None:
-            from deck_usb import interface0_driver
-            driver = interface0_driver()
-            usb = {"connected": True if driver else None, "driver": driver}
-        else:
-            usb = usb_probe()
+        usb = (usb_probe or keyboard_status)()
         driver = usb.get("driver")
         connected = usb.get("connected")
+        driver_name = str(driver).casefold()
+        # Preserve the original injectable connected/driver-only probe contract.
+        direct = usb.get("usb_available", connected is not False and driver_name == "winusb") is True
+        raw = usb.get("rawinput_available", connected is not False and driver_name == "hidusb") is True
+        mode = "USB 直读" if direct else "Raw Input" if raw else None
         lines.extend(("键盘 USB：" + ("已连接" if connected is True else "未连接" if connected is False else "未检测到或无法确认"),
-                      "接口 0 驱动：" + ("WinUSB（正确）" if str(driver).casefold() == "winusb" else
-                      "HidUsb（请由用户手动通过 Zadig 更换接口 0）" if str(driver).casefold() == "hidusb" else "无法确认")))
+                      "接口 0 驱动：" + ("WinUSB" if driver_name == "winusb" else
+                      "HidUsb（系统 HID 键盘）" if driver_name == "hidusb" else "无法确认"),
+                      "读键方式：" + (mode or "不可用（USB 直读和 Raw Input 均不可用；请检查键盘连接）")))
+        checks.append({"label": "Keyboard input", "success": mode is not None,
+                       "detail": mode or "USB direct and Raw Input unavailable"})
     except Exception as error:
         usb = {"connected": None, "driver": None}
-        lines.append("键盘 USB / 接口 0 驱动：无法确认（%s）" % error)
+        lines.append("读键方式：无法确认（%s）" % error)
+        checks.append({"label": "Keyboard input", "success": False, "detail": str(error)})
     lines.append("COM4 占用：" + ((serial_probe or serial_log_status)(home)))
     global_hooks = hub_install.global_status(home=home)
     lines.append("全局钩子：" + _global_label(global_hooks))

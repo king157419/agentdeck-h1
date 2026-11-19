@@ -1,4 +1,5 @@
 """Offline doctor checks; no real hooks, credentials, network, or CLI calls."""
+import ctypes
 import io
 import json
 from pathlib import Path
@@ -250,6 +251,90 @@ class DoctorTests(unittest.TestCase):
             self.auth_result = SimpleNamespace(returncode=0, stdout=text)
             self.output = io.StringIO()
             self.assertEqual(self.run_doctor(), 0)
+
+    def test_keyboard_report_accepts_both_reading_methods_without_driver_advice(self):
+        cases = [({"connected": True, "driver": "winusb"}, "USB 直读", True),
+                 ({"connected": True, "driver": "hidusb"}, "Raw Input", True),
+                 ({"connected": True, "driver": "winusb", "usb_available": False,
+                   "rawinput_available": True}, "Raw Input", True),
+                 ({"connected": None, "driver": None, "usb_available": False,
+                   "rawinput_available": True}, "Raw Input", True),
+                 ({"connected": True, "driver": "winusb", "usb_available": False,
+                   "rawinput_available": False}, "不可用", False),
+                 ({"connected": False, "driver": None}, "不可用", False)]
+        for evidence, mode, success in cases:
+            with self.subTest(evidence=evidence), patch.object(hub_doctor, "doctor", return_value=0):
+                report = hub_doctor.app_report(home=self.home, usb_probe=lambda: evidence,
+                                               serial_probe=lambda home: "未确认")
+            self.assertIn("读键方式：" + mode, report["text"])
+            self.assertNotIn("Zadig", report["text"])
+            self.assertNotIn("正确", report["text"])
+            self.assertEqual(report["checks"][-1]["success"], success)
+
+    def test_keyboard_probe_retains_raw_input_when_usb_probe_fails(self):
+        for driver, raw, direct, expected in (("hidusb", True, False, (False, True)),
+                                              ("winusb", False, True, (True, False)),
+                                              ("winusb", True, False, (False, True)),
+                                              (None, False, False, (False, False))):
+            with self.subTest(driver=driver, raw=raw, direct=direct):
+                status = hub_doctor.keyboard_status(driver_probe=lambda: driver,
+                    raw_probe=lambda: raw, usb_probe=lambda: direct)
+                self.assertEqual((status["usb_available"], status["rawinput_available"]), expected)
+        failed = lambda: (_ for _ in ()).throw(OSError("unavailable"))
+        status = hub_doctor.keyboard_status(driver_probe=lambda: "winusb",
+                                            raw_probe=lambda: True, usb_probe=failed)
+        self.assertTrue(status["rawinput_available"])
+        self.assertFalse(status["usb_available"])
+        self.assertEqual(status["errors"], ["unavailable"])
+        status = hub_doctor.keyboard_status(driver_probe=failed, raw_probe=lambda: True)
+        self.assertTrue(status["connected"])
+        self.assertTrue(status["rawinput_available"])
+
+    def test_rawinput_probe_enumerates_only_exact_target_keyboard_without_registration(self):
+        class Function:
+            def __init__(self, callback):
+                self.callback = callback
+
+            def __call__(self, *args):
+                return self.callback(*args)
+
+        paths = {1: r"\\?\HID#VID_3837&PID_0001#main",
+                 2: r"\\?\HID#VID_4132&PID_21070#wrong",
+                 3: r"\\?\HID#VID_4132&PID_2107&MI_00#target"}
+        rows = [(1, 1), (9, 2), (2, 1), (3, 1)]
+        queried = []
+        def uint(pointer):
+            return ctypes.cast(pointer, ctypes.POINTER(ctypes.c_uint32)).contents
+
+        def list_devices(devices, count, size):
+            self.assertEqual(size, 16 if ctypes.sizeof(ctypes.c_void_p) == 8 else 8)
+            if devices is None:
+                uint(count).value = len(rows)
+                return 0
+            for index, (handle, kind) in enumerate(rows):
+                devices[index].handle, devices[index].kind = handle, kind
+            return len(rows)
+
+        def info(handle, command, destination, size):
+            queried.append(handle)
+            self.assertEqual(command, 0x20000007)
+            if destination is None:
+                uint(size).value = len(paths[handle]) + 1
+                return 0
+            destination.value = paths[handle]
+            return len(paths[handle])
+
+        user = SimpleNamespace(GetRawInputDeviceList=Function(list_devices),
+                               GetRawInputDeviceInfoW=Function(info))
+        self.assertTrue(hub_doctor._rawinput_keyboard_available(user))
+        self.assertNotIn(9, queried)  # Never inspects unknown vendor HID collections.
+        rows.pop()
+        self.assertFalse(hub_doctor._rawinput_keyboard_available(user))
+        rows.clear()
+        self.assertFalse(hub_doctor._rawinput_keyboard_available(user))
+        user.GetRawInputDeviceList.callback = lambda *args: 0xFFFFFFFF
+        with self.assertRaisesRegex(OSError, "enumeration failed"):
+            hub_doctor._rawinput_keyboard_available(user)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,344 @@
+"""Offline USB/Raw Input switching and parity; every native boundary is fake."""
+from pathlib import Path
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+import hub
+from deck_usb import ReportState
+import deck_input
+from hub_keyboard import KeyboardInput, RawKeys, VKEY_USAGES
+from test_deck_input import Backend
+
+
+def raw_event(vkey, down=True, *, device=1, scan=0, flags=0):
+    return {"kind": "keyboard", "vkey": vkey, "make_code": scan,
+            "device": device, "flags": flags | (0 if down else 1), "down": down}
+
+
+def report(*keys, bits=0):
+    return bytes([bits, 0, *keys] + [0] * (6 - len(keys)))
+
+
+def ordinary(events):
+    return [e for e in events if not e.get("modifier")]
+
+
+class AdapterTests(unittest.TestCase):
+    def test_all_actual_bindings_and_function_keys_match_usb(self):
+        config = hub.load_json(Path(__file__).with_name("hub_keys.json"))
+        usages = {int(key.split(":")[-1], 16) for section in
+                  (config, config["v2_emulation"]) for key in section["bindings"]}
+        usages.update(range(0x68, 0x74))
+        inverse = {usage: key for key, usage in VKEY_USAGES.items()}
+        for usage in sorted(usages):
+            for bits in (0, 1, 2, 4, 8, 0x10):
+                with self.subTest(usage=usage, bits=bits):
+                    events = []
+                    adapter = RawKeys(events.append, lambda: 10.)
+                    modifiers = {1: 0xA2, 2: 0xA0, 4: 0xA4, 8: 0x5B, 0x10: 0xA3}
+                    if bits:
+                        adapter(raw_event(modifiers[bits]))
+                    adapter(raw_event(inverse[usage]))
+                    usb = ordinary(ReportState().feed(report(usage, bits=bits)))[0]
+                    actual = ordinary(events)[-1]
+                    for field in ("keys", "down", "usage", "modifiers", "modifier_bits",
+                                  "pressed", "new_modifiers"):
+                        self.assertEqual(actual[field], usb[field], field)
+
+    def test_fresh_modifiers_repeats_and_releases_match_report_state(self):
+        raw_events, usb_events = [], []
+        adapter, state = RawKeys(raw_events.append, lambda: 10.), ReportState()
+        sequence = [(raw_event(0x11, flags=2), report(bits=0x10)),
+                    (raw_event(0x5A), report(0x1D, bits=0x10)),
+                    (raw_event(0x5A), report(0x1D, bits=0x10)),
+                    (raw_event(0x5A, False), report(bits=0x10)),
+                    (raw_event(0x46), report(9, bits=0x10)),
+                    (raw_event(0x46, False), report(bits=0x10)),
+                    (raw_event(0x11, False, flags=2), report())]
+        for raw, packet in sequence:
+            adapter(raw)
+            usb_events.extend(state.feed(packet))
+        fields = ("keys", "down", "modifiers", "pressed", "new_modifiers", "usage", "modifier")
+        self.assertEqual([{f: e[f] for f in fields} for e in raw_events],
+                         [{f: e[f] for f in fields} for e in usb_events])
+
+    def test_main_keyboard_cannot_trigger_or_modify_deck(self):
+        backend, events = Backend(), []
+        receiver = deck_input.RawInput(RawKeys(events.append, lambda: 10.),
+                                      backend.user, backend.kernel, backend.hid, transitions=True)
+        for device, vkey in ((2, 0x11), (2, 0x45), (1, 0x45)):
+            backend.packet_for(device, 1, deck_input.RAWKEYBOARD(18, 0, 0, vkey, 0x100, 0))
+            receiver._read(1)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["keys"], ("hid:0x08",))
+        self.assertEqual(events[0]["modifiers"], ())
+
+    def test_device_modifiers_are_isolated_and_right_shift_is_normalized(self):
+        events = []
+        adapter = RawKeys(events.append, lambda: 10.)
+        adapter(raw_event(0x10, scan=0x36, device=1))
+        adapter(raw_event(0x45, device=2))
+        self.assertEqual(events[-1]["keys"], ("hid:0x08",))
+        self.assertEqual(events[-1]["modifiers"], ())
+        adapter(raw_event(0x45, device=1))
+        self.assertEqual(events[-1]["keys"], ("shift+hid:0x08", "hid:0x08"))
+        self.assertEqual(events[-1]["modifier_bits"], 0x20)
+
+    def test_snapshot_time_and_voice_release_on_removal(self):
+        actions, shown, now = [], {"request_id": "before", "nonce": "n"}, [10.]
+        engine = SimpleNamespace(monotonic=lambda: now[0], input_snapshot=lambda received_at=None: dict(shown),
+                                 action=lambda payload, **kw: actions.append((payload, kw)))
+        callback = hub.USBKeys(engine)
+        events = []
+
+        class Capture:
+            snapshot = callback.snapshot
+
+            def __call__(self, event):
+                events.append(event)
+                callback(event)
+
+        adapter = RawKeys(Capture(), engine.monotonic)
+        adapter(raw_event(0x48))
+        now[0] += 5
+        shown["request_id"] = "after"
+        adapter({"kind": "device_removed", "device": 1})
+        self.assertEqual([a[0]["action"] for a in actions], ["voice_down", "voice_up"])
+        self.assertEqual(events[0]["shown"]["request_id"], "before")
+        self.assertEqual(events[0]["t"], 10.)
+        self.assertEqual(callback.held, {})
+
+    def test_unknown_held_key_and_chords_block_single_key_actions(self):
+        actions = []
+        engine = SimpleNamespace(monotonic=lambda: 10., input_snapshot=lambda received_at=None: {},
+                                 action=lambda payload, **kw: actions.append(payload))
+        adapter = RawKeys(hub.USBKeys(engine), engine.monotonic)
+        adapter(raw_event(0xFE))  # unmapped key must count in single-key guard
+        adapter(raw_event(0x45))
+        self.assertEqual(actions, [])
+        adapter(raw_event(0x45, False))
+        adapter(raw_event(0xFE, False))
+        adapter(raw_event(0x45))
+        self.assertEqual(actions, [{"action": "slot 1"}])
+
+    def test_mouse_consumer_and_unknown_removal_do_not_generate_keyboard_actions(self):
+        events = []
+        adapter = RawKeys(events.append)
+        for event in ({"kind": "mouse", "keys": ("wheel:+1",)},
+                      {"kind": "consumer", "usage": 0xE9},
+                      {"kind": "device_removed", "device": 999}):
+            adapter(event)
+        self.assertEqual(events, [])
+
+    def test_overflow_waits_for_all_keys_up_without_replaying_held_keys(self):
+        events = []
+        adapter = RawKeys(events.append, lambda: 10.)
+        for vkey in range(0x41, 0x48):
+            adapter(raw_event(vkey))
+        events.clear()
+        for vkey in range(0x42, 0x48):
+            adapter(raw_event(vkey, False))
+        self.assertEqual(events, [])
+        adapter(raw_event(0x41, False))
+        adapter(raw_event(0x45))
+        self.assertEqual([(e["usage"], e["down"]) for e in events], [(8, True)])
+
+    def test_invalid_keyboard_packets_do_not_pollute_pressed_state(self):
+        events = []
+        adapter = RawKeys(events.append, lambda: 10.)
+        for event in (raw_event(0), raw_event(0xFF), raw_event(0x45, scan=0xFF),
+                      raw_event(0x45, flags=4)):
+            adapter(event)
+        adapter(raw_event(0x45))
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["pressed"], frozenset((8,)))
+
+    def test_queued_event_uses_original_age_and_historical_snapshot(self):
+        events, sampled = [], []
+
+        class Capture:
+            def snapshot_at(self, received_at):
+                sampled.append(received_at)
+                return {"request_id": "older"}
+
+            def __call__(self, event):
+                events.append(event)
+
+        adapter = RawKeys(Capture(), lambda: 20.)
+        event = raw_event(0x45)
+        event["age"] = .5
+        adapter(event)
+        self.assertEqual(sampled, [19.5])
+        self.assertEqual(events[0]["t"], 19.5)
+        self.assertEqual(events[0]["shown"], {"request_id": "older"})
+
+
+class SwitchingTests(unittest.TestCase):
+    def make_reader(self, *, open_results=(), raw_run=None, usb_run=None, raw_factory_error=None):
+        events, trace, clock, instances = [], [], [10.], []
+        results = iter(open_results)
+
+        class USB:
+            def __init__(self, callback, **kwargs):
+                self.callback, self.closed = callback, False
+                instances.append(self)
+
+            def open(self):
+                trace.append("usb.open")
+                result = next(results, None)
+                if isinstance(result, Exception):
+                    raise result
+                self.closed = False
+
+            def run(self, *, reconnect):
+                self_outer.assertFalse(reconnect)
+                trace.append("usb.run")
+                if usb_run:
+                    usb_run(reader, self.callback, trace)
+                else:
+                    reader.stop()
+
+            def stop(self):
+                trace.append("usb.stop")
+
+            def close(self):
+                trace.append("usb.close")
+                self.closed = True
+
+        class Raw:
+            def __init__(self, callback, *, transitions, poll, monotonic):
+                trace.append("raw.create")
+                if raw_factory_error:
+                    reader.stop()
+                    raise raw_factory_error
+                self_outer.assertTrue(transitions)
+                self.callback, self.poll, self.stopped = callback, poll, False
+                instances.append(self)
+
+            def run(self):
+                trace.append("raw.run")
+                if raw_run:
+                    raw_run(reader, self, trace, clock)
+                else:
+                    reader.stop()
+                trace.append("raw.closed")
+
+            def stop(self):
+                self.stopped = True
+                trace.append("raw.stop")
+
+        self_outer = self
+        reader = KeyboardInput(events.append, monotonic=lambda: clock[0],
+                               usb_factory=USB, raw_factory=Raw)
+        return reader, events, trace, instances
+
+    def test_usb_open_failure_falls_back_and_stop_cleans_both(self):
+        reader, events, trace, instances = self.make_reader(open_results=[OSError("HID driver")])
+        with self.assertLogs("agentdeck.hub.keyboard", "INFO") as logs:
+            reader.run()
+        self.assertEqual(trace[:3], ["usb.open", "raw.create", "raw.run"])
+        self.assertIn("Raw Input", "\n".join(logs.output))
+        self.assertTrue(instances[0].closed)
+        self.assertTrue(instances[1].stopped)
+        self.assertIsNone(reader.raw)
+
+    def test_raw_switches_to_usb_without_dispatch_overlap(self):
+        def raw_run(reader, raw, trace, clock):
+            raw.callback(raw_event(0x48))
+            clock[0] += 2.
+            raw.poll()
+            self.assertTrue(raw.stopped)
+
+        reader, events, trace, _ = self.make_reader(open_results=[OSError("HID"), None], raw_run=raw_run)
+        reader.run()
+        self.assertLess(trace.index("raw.closed"), trace.index("usb.run"))
+        self.assertEqual([(e["usage"], e["down"]) for e in events], [(0x0B, True), (0x0B, False)])
+        self.assertEqual(trace.count("usb.open"), 2)
+
+    def test_usb_read_failure_falls_back_and_releases_held_voice(self):
+        def usb_run(reader, callback, trace):
+            for event in ReportState().feed(report(0x0B)):
+                event["t"] = 10.
+                callback(event)
+            raise OSError("unplugged")
+
+        reader, events, trace, _ = self.make_reader(usb_run=usb_run)
+        reader.run()
+        self.assertIn("raw.run", trace)
+        self.assertEqual([e["down"] for e in events], [True, False])
+
+    def test_failed_probe_keeps_raw_and_retries_at_bounded_interval(self):
+        def raw_run(reader, raw, trace, clock):
+            raw.poll()
+            self.assertEqual(trace.count("usb.open"), 1)
+            clock[0] += 2
+            raw.poll()
+            self.assertEqual(trace.count("usb.open"), 2)
+            self.assertFalse(raw.stopped)
+            raw.poll()
+            self.assertEqual(trace.count("usb.open"), 2)
+            reader.stop()
+
+        reader, _, _, _ = self.make_reader(open_results=[OSError("HID"), OSError("still HID")],
+                                            raw_run=raw_run)
+        reader.run()
+
+    def test_raw_startup_failure_and_preemptive_stop_release_resources(self):
+        reader, _, trace, instances = self.make_reader(open_results=[OSError("USB unavailable")],
+                                                       raw_factory_error=OSError("register failed"))
+        reader.run()
+        self.assertTrue(instances[0].closed)
+        self.assertNotIn("raw.run", trace)
+        reader, _, trace, instances = self.make_reader()
+        reader.stop()
+        reader.run()
+        self.assertNotIn("usb.open", trace)
+        self.assertNotIn("raw.create", trace)
+        self.assertTrue(instances[0].closed)
+
+    def test_stop_during_raw_construction_cannot_start_listener(self):
+        reader, _, trace, instances = self.make_reader(open_results=[OSError("USB unavailable")])
+        original_factory = reader.raw_factory
+
+        def create(*args, **kwargs):
+            raw = original_factory(*args, **kwargs)
+            reader.stop()
+            return raw
+
+        reader.raw_factory = create
+        reader.run()
+        self.assertNotIn("raw.run", trace)
+        self.assertTrue(instances[1].stopped)
+        self.assertTrue(instances[0].closed)
+
+    def test_two_unavailable_backends_wait_before_retrying(self):
+        reader, _, trace, _ = self.make_reader(open_results=[OSError("USB unavailable")])
+
+        def unavailable(*args, **kwargs):
+            trace.append("raw.unavailable")
+            raise OSError("Raw unavailable")
+
+        reader.raw_factory = unavailable
+        with patch.object(reader._stop, "wait", side_effect=lambda seconds: reader.stop()) as wait:
+            reader.run()
+        wait.assert_called_once_with(2)
+        self.assertEqual(trace.count("usb.open"), 1)
+        self.assertEqual(trace.count("raw.unavailable"), 1)
+        self.assertNotIn("raw.run", trace)
+
+    def test_snapshot_is_forwarded_to_usb_probe_callback(self):
+        events = []
+
+        class Capture:
+            snapshot = lambda self: {"request_id": "captured", "nonce": "n"}
+            __call__ = lambda self, event: events.append(event)
+
+        fake = SimpleNamespace(stop=lambda: None, close=lambda: None)
+        reader = KeyboardInput(Capture(), usb_factory=lambda callback, **kw: fake,
+                               raw_factory=lambda *a, **kw: None)
+        self.assertEqual(reader.snapshot(), {"request_id": "captured", "nonce": "n"})
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

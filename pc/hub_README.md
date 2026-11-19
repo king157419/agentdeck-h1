@@ -7,7 +7,7 @@
 3. 托盘菜单可显示或隐藏浮窗、切换会话、跳到等待你的会话、查看当前键位和诊断，也可从项目卸载。首次运行的三步引导可勾选“不再提示”。再次双击程序会显示现有浮窗。
 4. 需要登录 Windows 后启动时，勾选“开机自启”；取消勾选会移除当前用户的 AgentDeck 启动项。退出请使用托盘的“退出”。
 
-首次运行会把默认 `hub_keys.json` 和 `hub_prompts.json` 复制到 `~/.agentdeck/`（Windows 通常是 `%USERPROFILE%\.agentdeck\`）。以后编辑这里的文件，重启程序后生效，升级不会覆盖你的修改。默认使用 `default` 键位；可在同目录 `app.json` 中设置 `"profile": "v2_emulation"` 后重启，键位窗口按当前 profile 显示。日志保存在 `~/.agentdeck/logs/app.log`，可从“打开日志文件夹”进入。USB 接口 0 需由用户事先设置为 WinUSB；程序不会修改驱动。1602 串口被占用时只记日志，Hub 继续工作。
+首次运行会把默认 `hub_keys.json` 和 `hub_prompts.json` 复制到 `~/.agentdeck/`（Windows 通常是 `%USERPROFILE%\.agentdeck\`）。以后编辑这里的文件，重启程序后生效，升级不会覆盖你的修改。默认使用 `default` 键位；可在同目录 `app.json` 中设置 `"profile": "v2_emulation"` 后重启，键位窗口按当前 profile 显示。日志保存在 `~/.agentdeck/logs/app.log`，可从“打开日志文件夹”进入。键盘先尝试 USB 直读，失败后自动使用 Windows Raw Input，无需更换系统 HID 驱动；程序不会修改驱动。诊断显示当前可用的读键方式。1602 串口被占用时只记日志，Hub 继续工作。
 
 “诊断”会检查项目钩子、旧版全局 `agent_lcd.py` 钩子和 relay 路径。只有主动点击“移除旧版钩子”并确认后，程序才会先生成 `*.bak-agentdeck-<时间>` 备份，再移除对应旧钩子。若移动了 `AgentDeck` 文件夹，请在诊断里检查路径，并对使用过的项目重新执行“安装到项目…”，使钩子指向新的 `AgentDeck-relay.exe`；开机自启也需重新勾选。
 
@@ -220,8 +220,14 @@ writes to `.env`, `.ssh`, private key/certificate files or credential JSON.
 Deployment commands are intercepted regardless of context; classification uses
 the existing conservative regex rules rather than resolving cluster state.
 
-Hub defaults to HTTP input only. USB mode reuses `deck_usb.USBInput` and requires
-the existing WinUSB interface 0 setup; it does not change drivers or keymaps.
+Hub defaults to HTTP input only. `--backend usb` first tries direct reads through
+`deck_usb.USBInput`, then falls back to Windows Raw Input for VID 4132 / PID 2107
+when USB cannot open or disconnects. Both paths feed the same HID bindings and
+preserve device-local modifiers and key releases. The reader retries USB every
+two seconds while using Raw Input, so unplugging or changing drivers does not
+require a restart. Logs identify the active reader. Raw Input observes keyboard
+events without suppressing them; keys can also reach the foreground window.
+It does not change drivers or keymaps.
 Run one AgentDeck keyboard reader at a time: use Hub's USB mode in place of
 `deck.py run` / `daemon.py --deck` when testing Hub controls.
 
@@ -505,8 +511,8 @@ with `down` and/or `up` action strings. The default voice binding is:
 Releases are paired with the accepted physical press, even if the device's
 modifiers change or another key is now held. An aged voice release still stops
 the guard. Rejected presses never arm a release action, and repeated reports do
-not start another guard. If a USB disconnect loses the release, the 60-second
-limit still ends the guard.
+not start another guard. Disconnecting a device or switching readers synthesizes
+the release for an accepted hold; the 60-second guard remains a final timeout.
 
 Risk has three levels: `low` allows a single press, `high` requires a double
 press, and `critical` always falls back to terminal confirmation. Critical rules

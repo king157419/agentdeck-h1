@@ -408,6 +408,21 @@ def test_usb_initial_open_failure_retries_and_zadig_hint():
         assert any(usb.ZADIG_HINT in str(call.args) for call in warned.call_args_list)
 
 
+def test_usb_supervised_run_propagates_errors_and_closes_without_retry():
+    for packets in (None, [Timeout("idle"), report(8), OSError("unplugged")]):
+        endpoint = Endpoint(packets=packets) if packets is not None else None
+        device = Device([endpoint]) if endpoint is not None else None
+        backend = FakeUSB([device])
+        receiver = usb.USBInput(lambda event: None, foreground=lambda: 0)
+        receiver._stop = StopFlag()
+        with backend.installed():
+            raises(OSError, lambda: receiver.run(reconnect=False))
+        assert len(backend.finds) == 1 and receiver._stop.waits == []
+        assert receiver.endpoint is None and receiver.state.pressed == set()
+        if device is not None:
+            assert backend.releases == [(device, 0)] and backend.disposals == [device]
+
+
 def test_usb_open_failures_dispose_and_close_is_idempotent():
     cases = [(Device(configuration_error=OSError("access denied")), None),
              (Device([Endpoint()]), NotImplementedError("WinUSB required")),

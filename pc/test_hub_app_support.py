@@ -336,7 +336,7 @@ class AppSupportTests(unittest.TestCase):
             report = hub_doctor.app_report(home=self.home, projects=[project],
                 usb_probe=lambda: {"connected": True, "driver": "winusb"},
                 serial_probe=lambda home: "替身：未确认")
-        for text in ("中枢服务：正常运行", "WinUSB（正确）", "键盘 USB：已连接", "COM4 占用：替身",
+        for text in ("中枢服务：正常运行", "读键方式：USB 直读", "键盘 USB：已连接", "COM4 占用：替身",
                      "全局旧版 agent_lcd.py 钩子：1 条", "路径已失效", "重新安装", "/hooks 信任"):
             self.assertIn(text, report["text"])
         self.assertEqual(report["legacy_count"], 1)

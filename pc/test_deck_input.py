@@ -29,9 +29,10 @@ class Backend:
         self.hwnd = 0x123456789
         names = ("GetRawInputData", "GetRawInputDeviceInfoW", "RegisterRawInputDevices", "RegisterClassW",
                  "UnregisterClassW", "CreateWindowExW", "DestroyWindow", "DefWindowProcW", "PeekMessageW",
-                 "TranslateMessage", "DispatchMessageW")
+                 "TranslateMessage", "DispatchMessageW", "GetMessageTime")
         self.user = SimpleNamespace(**{name: Function(getattr(self, name, lambda *args: 1)) for name in names})
-        self.kernel = SimpleNamespace(GetModuleHandleW=Function(lambda name: self.hwnd))
+        self.kernel = SimpleNamespace(GetModuleHandleW=Function(lambda name: self.hwnd),
+                                      GetTickCount=Function(lambda: 17))
         self.hid = SimpleNamespace(HidP_MaxUsageListLength=Function(self.max_usages),
                                    HidP_GetUsages=Function(self.get_usages))
 
@@ -250,9 +251,39 @@ def test_deck_input_lifecycle():
     assert backend.calls[-2:] == [("destroy",), ("unregister_class",)]
 
 
+def test_deck_input_hub_transitions_and_poll():
+    backend, events = Backend(), []
+    receiver = raw.RawInput(events.append, backend.user, backend.kernel, backend.hid,
+                            transitions=True, monotonic=lambda: 10.)
+    for handle, flags in ((2, 0), (1, 0), (1, 1)):
+        backend.packet_for(handle, 1, raw.RAWKEYBOARD(100, flags, 0, 0x7C, 0x100, 0))
+        receiver._read(10)
+    assert [event["down"] for event in events] == [True, False]
+    assert all(event["device"] == 1 and event["vkey"] == 0x7C for event in events)
+    receiver._wndproc(backend.hwnd, raw.WM_INPUT_DEVICE_CHANGE, 2, 1)
+    assert events[-1] == {"kind": "device_removed", "device": 1}
+    backend.packet_for(1, 1, raw.RAWKEYBOARD(100, 0, 0, 0x7C, 0x100, 0))
+    backend.user.GetMessageTime.function = lambda: 0xFFFFFFF1
+    receiver._wndproc(backend.hwnd, raw.WM_INPUT, 0, 10)
+    assert abs(events[-1]["t"] - 9.952) < 1e-9  # DWORD wrap plus 16 ms uncertainty
+    # Stop during poll and before run must both be respected, without a
+    # message pump clearing the stop request at listener startup.
+    receiver.poll = receiver.stop
+    backend.user.PeekMessageW.function = lambda *args: (_ for _ in ()).throw(
+        AssertionError("poll stop must precede message dispatch"))
+    receiver.run()
+    assert receiver.hwnd is None and not receiver.running
+    assert backend.calls[-2:] == [("destroy",), ("unregister_class",)]
+    backend = Backend()
+    receiver = backend.receiver(events.append)
+    receiver.stop()
+    receiver.run()
+    assert backend.calls == [] and backend.registrations == []
+
+
 def main():
     tests = (test_deck_input_transitions, test_deck_input_device_filter, test_deck_input_packets,
-             test_deck_input_lifecycle)
+             test_deck_input_lifecycle, test_deck_input_hub_transitions_and_poll)
     for test in tests:
         test()
         print(test.__name__ + ": PASS")

@@ -8,6 +8,7 @@ from collections import deque
 import logging
 import os
 import re
+import threading
 import time
 
 U16, U32 = ctypes.c_uint16, ctypes.c_uint32
@@ -232,7 +233,8 @@ def _signature(dll, name, restype, argtypes):
 class RawInput:
     """Receive only the deck's presses in a hidden, unfocused window."""
 
-    def __init__(self, callback, user=None, kernel=None, hid=None, *, exclusive=False):
+    def __init__(self, callback, user=None, kernel=None, hid=None, *, exclusive=False,
+                 transitions=False, poll=None, monotonic=None):
         if user is None:
             if os.name != "nt":
                 raise OSError("AgentDeck learn/run require Windows Raw Input")
@@ -246,6 +248,10 @@ class RawInput:
         self.hwnd, self.running = None, False
         self._callback_error = None
         self.exclusive = exclusive
+        self.transitions = transitions
+        self.poll = poll
+        self.monotonic = time.monotonic if monotonic is None else monotonic
+        self._stop = threading.Event()
         self.matcher = KeyboardMatcher()
         self.hook = None
         self._inside_hook = False
@@ -268,6 +274,9 @@ class RawInput:
                 ("DispatchMessageW", IPTR, [ctypes.POINTER(MSG)])):
             _signature(self.user, name, result, args)
         _signature(self.kernel, "GetModuleHandleW", PTR, [ctypes.c_wchar_p])
+        if self.transitions:
+            _signature(self.user, "GetMessageTime", ctypes.c_int32, [])
+            _signature(self.kernel, "GetTickCount", U32, [])
         if self.exclusive:
             for name, result, args in (
                     ("SetWindowsHookExW", PTR, [ctypes.c_int, HOOKPROC, PTR, U32]),
@@ -323,7 +332,7 @@ class RawInput:
             return None
         return usages[:length.value]
 
-    def _read(self, raw_handle, timestamp=None):
+    def _read(self, raw_handle, timestamp=None, input_time=None):
         # Observer mode excludes other devices before reading their payload.
         # Exclusive mode also needs negative keyboard evidence to fail open.
         header = RAWINPUTHEADER()
@@ -354,7 +363,14 @@ class RawInput:
                     timestamp = self.user.GetMessageTime()
                 self.matcher.record(header.hDevice, target, key.VKey, key.MakeCode, key.Flags, timestamp)
             if target:
-                events = self.state.keyboard(header.hDevice, key.VKey, key.MakeCode, key.Flags)
+                if self.transitions:
+                    # Hub adapts both edges through the same boot-report state
+                    # machine as USB. Legacy deck callbacks still get presses only.
+                    events = [{"kind": "keyboard", "device": header.hDevice,
+                               "vkey": key.VKey, "make_code": key.MakeCode,
+                               "flags": key.Flags, "down": not bool(key.Flags & 1)}]
+                else:
+                    events = self.state.keyboard(header.hDevice, key.VKey, key.MakeCode, key.Flags)
         elif header.dwType == 0 and len(payload) >= ctypes.sizeof(RAWMOUSE):
             mouse = RAWMOUSE.from_buffer_copy(payload)
             events = self.state.mouse(header.hDevice, mouse.usButtonFlags, mouse.usButtonData)
@@ -369,6 +385,8 @@ class RawInput:
                 if usages is not None:
                     events.extend(self.state.consumer(header.hDevice, report[0], usages))
         for event in events:
+            if self.transitions and input_time is not None:
+                event["t"] = input_time
             self.callback(event)
 
     def _hookproc(self, code, message, address):
@@ -453,9 +471,18 @@ class RawInput:
     def _wndproc(self, hwnd, message, wparam, lparam):
         try:
             if message == WM_INPUT:
-                self._read(lparam)
+                if self.transitions:
+                    # Match the hotkey path's DWORD wrap and clock uncertainty:
+                    # a queued press must not acquire a successor's request.
+                    received_at = self.monotonic()
+                    age = ((self.kernel.GetTickCount() - self.user.GetMessageTime()) & 0xFFFFFFFF) / 1000.0
+                    self._read(lparam, input_time=received_at - age - 0.016)
+                else:
+                    self._read(lparam)
             elif message == WM_INPUT_DEVICE_CHANGE:
                 self.forget(lparam)
+                if self.transitions and wparam == 2:
+                    self.callback({"kind": "device_removed", "device": lparam})
             elif message in (WM_CLOSE, WM_DESTROY):
                 self.running = False
         except KeyboardInterrupt:
@@ -474,7 +501,13 @@ class RawInput:
             *(RAWINPUTDEVICE(page, usage, flags, None if remove else self.hwnd) for page, usage in USAGES))
         return self.user.RegisterRawInputDevices(devices, len(devices), ctypes.sizeof(RAWINPUTDEVICE))
 
+    def stop(self):
+        self._stop.set()
+        self.running = False
+
     def run(self):
+        if self._stop.is_set():
+            return
         instance = self.kernel.GetModuleHandleW(None)
         class_name = "AgentDeckRawInput_%d_%x" % (os.getpid(), id(self))
         procedure = WNDPROC(self._wndproc)  # keep callback alive until class is unregistered
@@ -492,7 +525,7 @@ class RawInput:
             if not self._register_devices():
                 raise ctypes.WinError()
             registered = True
-            self.running = True
+            self.running = not self._stop.is_set()
             if self.exclusive:
                 self.hook = self.user.SetWindowsHookExW(WH_KEYBOARD_LL, hook_procedure, instance, 0)
                 if not self.hook:
@@ -500,6 +533,10 @@ class RawInput:
                 self.callback({"kind": "hook", "decision": "installed", "keys": ()})
             message = MSG()
             while self.running:
+                if self.poll is not None:
+                    self.poll()
+                    if not self.running:
+                        break
                 # A bounded drain permits Ctrl+C even during busy input streams.
                 for _ in range(100):
                     if not self.user.PeekMessageW(ctypes.byref(message), None, 0, 0, 1):

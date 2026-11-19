@@ -231,13 +231,15 @@ class USBInput:
         context["hwnd"] = hwnd
         return context
 
-    def run(self):
+    def run(self, *, reconnect=True):
         try:
             while not self._stop.is_set():
                 if self.endpoint is None:
                     try:
                         self.open()
                     except Exception:
+                        if not reconnect:
+                            raise
                         self._stop.wait(RECONNECT_SECONDS)
                         continue
                 try:
@@ -251,6 +253,8 @@ class USBInput:
                 except self._core.USBTimeoutError:
                     continue
                 except Exception as error:
+                    if not reconnect:
+                        raise
                     log.warning("USB keyboard read failed (%s); %s; reconnecting in %s seconds",
                                 error, ZADIG_HINT, RECONNECT_SECONDS)
                     self.close()

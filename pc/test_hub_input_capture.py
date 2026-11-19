@@ -9,6 +9,7 @@ import unittest
 import hub
 from deck_usb import USBInput
 from hub_hotkey import HotkeyInput
+from hub_keyboard import RawKeys
 
 
 class Clock:
@@ -160,6 +161,27 @@ class InputCaptureTests(unittest.TestCase):
             self.assertEqual(event["t"], 100.0)
             self.assertEqual(event.get("shown"), {"request_id": "old", "nonce": 123})
 
+    def test_rawinput_queued_deny_cannot_decide_successor_request(self):
+        first = self.permission("raw-history-first")
+        second = self.permission("raw-history-second")
+        self.engine.record_rendered(first.id, first.nonce)
+        self.clock.value = 100.5
+        self.engine.event("cc", {"hook_event_name": "Stop", "session_id": first.session[1]})
+        self.engine.record_rendered(second.id, second.nonce)
+        self.clock.value = 101.0
+        reader = RawKeys(hub.USBKeys(self.engine, {"bindings": {"hid:0x68": "deny"}}),
+                         self.clock)
+        reader({"kind": "keyboard", "device": 1, "vkey": 0x7C,
+                "make_code": 0x64, "flags": 0, "down": True, "age": .75})
+        self.assertIn(second.id, self.engine.pending)
+        self.assertFalse(second.ready.is_set())
+        # After release, a genuinely fresh press can decide the displayed request.
+        reader({"kind": "keyboard", "device": 1, "vkey": 0x7C,
+                "make_code": 0x64, "flags": 1, "down": False, "age": 0})
+        reader({"kind": "keyboard", "device": 1, "vkey": 0x7C,
+                "make_code": 0x64, "flags": 0, "down": True, "age": 0})
+        self.assertTrue(second.ready.is_set())
+
     def test_usb_report_context_captures_before_foreground_query(self):
         def foreground():
             self.clock.value += .22
@@ -168,6 +190,50 @@ class InputCaptureTests(unittest.TestCase):
         context = receiver._report_context()
         self.assertEqual(context["t"], 100.0)
         self.assertEqual(context["hwnd"], 42)
+
+    def test_rawinput_native_read_delay_keeps_original_request_and_time(self):
+        import deck_input
+        from test_deck_input import Backend
+
+        first = self.permission("raw-delayed-first")
+        second = self.permission("raw-delayed-second")
+        self.engine.record_rendered(first.id, first.nonce)
+        self.clock.value = 100.25
+        backend = Backend()
+        backend.kernel.GetTickCount.function = lambda: int(self.clock.value * 1000)
+        backend.user.GetMessageTime.function = lambda: 100250
+        original_info = backend.user.GetRawInputDeviceInfoW.function
+        switched = False
+
+        def delayed_info(*args):
+            nonlocal switched
+            if not switched:
+                switched = True
+                self.clock.value = 100.4
+                self.engine.event("cc", {"hook_event_name": "Stop",
+                                         "session_id": first.session[1]})
+                self.engine.record_rendered(second.id, second.nonce)
+                self.clock.value = 100.5
+            return original_info(*args)
+
+        backend.user.GetRawInputDeviceInfoW.function = delayed_info
+        keys = hub.USBKeys(self.engine, {"bindings": {"hid:0x68": "deny"}})
+        received = []
+
+        def dispatch(event):
+            received.append(event)
+            keys(event)
+
+        dispatch.snapshot_at = keys.snapshot_at
+        receiver = deck_input.RawInput(RawKeys(dispatch, self.clock), backend.user,
+            backend.kernel, backend.hid, transitions=True, monotonic=self.clock)
+        backend.packet_for(1, 1, deck_input.RAWKEYBOARD(100, 0, 0, 0x7C, 0x100, 0))
+        receiver._wndproc(backend.hwnd, deck_input.WM_INPUT, 0, 10)
+        self.assertEqual(len(received), 1)
+        self.assertAlmostEqual(received[0]["t"], 100.234)
+        self.assertEqual(received[0]["shown"], {"request_id": first.id, "nonce": first.nonce})
+        self.assertIn(second.id, self.engine.pending)
+        self.assertFalse(second.ready.is_set())
 
 
 if __name__ == "__main__":
