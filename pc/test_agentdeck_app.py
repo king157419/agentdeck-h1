@@ -1122,6 +1122,27 @@ class ApplicationTests(unittest.TestCase):
         self.overlay.root.after.assert_called_with(300, self.application.pump)
 
 
+    def test_live_menu_actions_defer_hub_locks_and_native_focus(self):
+        self.application._background_enabled = True
+        self.application.dispatch("select", ("cc", "session"))
+        self.engine.state.assert_not_called()
+        self.engine.action.assert_not_called()
+        self.overlay.defer.assert_called_once()
+        work = self.overlay.defer.call_args.args[0]
+        self.engine.state.return_value = {"sessions": [
+            {"agent": "cc", "session_id": "session", "slot": 3}]}
+        work()
+        self.engine.action.assert_called_once_with({"action": "slot 3"})
+
+    def test_live_pump_uses_background_snapshot_without_hub_lock(self):
+        self.application._background_enabled = True
+        self.overlay.state = {"sessions": []}
+        self.application.icon = Mock()
+        self.application.pump()
+        self.engine.state.assert_not_called()
+        self.assertEqual(self.application.state, {"sessions": []})
+
+
 class GlobalRepairTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

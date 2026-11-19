@@ -58,8 +58,9 @@ def capture(callback, monotonic, age=0, received_at=None):
 class RawKeys:
     """Translate filtered Raw Input transitions into USBKeys' existing contract."""
 
-    def __init__(self, callback, monotonic=time.monotonic):
+    def __init__(self, callback, monotonic=time.monotonic, reader=None):
         self.callback, self.monotonic = callback, monotonic
+        self.reader = reader
         self.devices = {}
         self.unknown = {}
         self.pressed = {}
@@ -116,14 +117,19 @@ class RawKeys:
             for release in state.feed(bytes(8)):
                 release.update(context)
                 release["device"] = handle
-                self.callback(release)
+                self._emit(release)
             return
         for normalized in state.feed(report):
             normalized.update(context)
             normalized["device"] = handle
             if unknown:
                 normalized["pressed"] |= frozenset(unknown)
-            self.callback(normalized)
+            self._emit(normalized)
+
+    def _emit(self, event):
+        if self.reader is not None:
+            event["reader"] = self.reader
+        self.callback(event)
 
     def release(self, handle=None):
         handles = list(self.devices) if handle is None else [handle]
@@ -138,11 +144,11 @@ class RawKeys:
                 for event in state.feed(bytes(8)):
                     event.update(context)
                     event["device"] = device
-                    self.callback(event)
+                    self._emit(event)
 
 
 class KeyboardInput:
-    """One input thread owns both readers; switching never overlaps dispatch."""
+    """One thread dispatches both readers; USB discovery never blocks Raw Input."""
 
     def __init__(self, callback, monotonic=None, usb_factory=None, raw_factory=None):
         if usb_factory is None:
@@ -156,14 +162,23 @@ class KeyboardInput:
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self.raw = None
+        self.heartbeat = None
         self.usb_pressed = {}
         self.raw_factory = raw_factory
         # The callback wrapper also exposes the snapshot needed for pending USB
         # probe packets: their request identity belongs to receipt time.
         self.usb = usb_factory(self, monotonic=self.monotonic)
-        self.raw_keys = RawKeys(callback, self.monotonic)
+        if self.usb is not None:
+            self.usb.heartbeat = self._beat
+        self.raw_keys = RawKeys(callback, self.monotonic, reader="Raw Input")
         self._usb_ready = False
         self._next_probe = 0
+        self._probe_thread = None
+        self._probe_state = None
+
+    def _beat(self):
+        if self.heartbeat is not None:
+            self.heartbeat()
 
     def snapshot(self):
         snapshot = getattr(self.callback, "snapshot", None)
@@ -175,14 +190,14 @@ class KeyboardInput:
             self.usb_pressed[usage] = dict(event)
         else:
             self.usb_pressed.pop(usage, None)
-        self.callback(event)
+        self.callback(dict(event, reader="USB"))
 
     def _release_usb(self):
         held, self.usb_pressed = self.usb_pressed, {}
         context = capture(self.callback, self.monotonic)
         for event in held.values():
             event.update(context, down=False, pressed=frozenset())
-            self.callback(event)
+            self.callback(dict(event, reader="USB"))
 
     def stop(self):
         self._stop.set()
@@ -191,26 +206,58 @@ class KeyboardInput:
             if self.raw is not None:
                 self.raw.stop()
 
+    def _check_usb(self):
+        from deck_usb import interface0_driver
+        try:
+            driver = interface0_driver()
+            if driver != "winusb":
+                state = ("driver", driver)
+                if state != self._probe_state:
+                    log.info("USB probe skipped: interface 0 driver=%s; using Raw Input", driver or "unknown/absent")
+                self._probe_state = state
+                return
+            if self._stop.is_set():
+                return
+            self.usb.open()
+            self._probe_state = ("driver", "winusb")
+        except Exception as error:
+            state = ("error", str(error))
+            if state != self._probe_state:
+                log.info("USB keyboard unavailable (%s); using Raw Input", error)
+            self._probe_state = state
+            return
+        if self._stop.is_set():
+            self.usb.close()
+        else:
+            self._usb_ready = True
+
     def _probe_usb(self):
+        self._beat()
         if self._stop.is_set():
             self.raw.stop()
             return
-        if self.monotonic() < self._next_probe:
+        if self._usb_ready:
+            self.raw.stop()
+            return
+        if (self.monotonic() < self._next_probe
+                or self._probe_thread is not None and self._probe_thread.is_alive()):
             return
         self._next_probe = self.monotonic() + RECONNECT_SECONDS
-        try:
-            self.usb.open()
-        except Exception:
-            return
-        self._usb_ready = True
-        self.raw.stop()
+        self._probe_thread = threading.Thread(target=self._check_usb, name="AgentDeck USB probe", daemon=True)
+        self._probe_thread.start()
 
     def run(self):
         try:
             while not self._stop.is_set():
+                self._beat()
+                if self._probe_thread is not None and self._probe_thread.is_alive():
+                    self._stop.wait(.01)
+                    continue
                 try:
                     if not self._usb_ready:
-                        self.usb.open()
+                        self._check_usb()
+                    if not self._usb_ready:
+                        raise OSError("WinUSB input not ready")
                     self._usb_ready = False
                     if self._stop.is_set():
                         break
@@ -219,7 +266,7 @@ class KeyboardInput:
                     if self._stop.is_set():
                         break
                 except Exception as error:
-                    log.info("USB keyboard unavailable (%s); trying Raw Input", error)
+                    log.debug("USB input ended (%s); trying Raw Input", error)
                 finally:
                     self._release_usb()
                 if self._stop.is_set():
@@ -244,6 +291,9 @@ class KeyboardInput:
                 if not self._usb_ready:
                     self._stop.wait(RECONNECT_SECONDS)
         finally:
-            self.usb.close()
+            # A stuck native discovery/open must not freeze shutdown or race
+            # close(). Its daemon worker closes its own result after stop.
+            if self._probe_thread is None or not self._probe_thread.is_alive():
+                self.usb.close()
             self._release_usb()
             self.raw_keys.release()

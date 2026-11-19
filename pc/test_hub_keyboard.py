@@ -2,7 +2,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import hub
 from deck_usb import ReportState
@@ -176,6 +176,9 @@ class AdapterTests(unittest.TestCase):
 
 class SwitchingTests(unittest.TestCase):
     def make_reader(self, *, open_results=(), raw_run=None, usb_run=None, raw_factory_error=None):
+        driver = patch("deck_usb.interface0_driver", return_value="winusb")
+        driver.start()
+        self.addCleanup(driver.stop)
         events, trace, clock, instances = [], [], [10.], []
         results = iter(open_results)
 
@@ -233,6 +236,27 @@ class SwitchingTests(unittest.TestCase):
                                usb_factory=USB, raw_factory=Raw)
         return reader, events, trace, instances
 
+    def test_non_winusb_never_opens_usb_even_on_repeated_raw_polls(self):
+        def raw_run(reader, raw, trace, clock):
+            for _ in range(3):
+                clock[0] += 2
+                raw.poll()
+                probe = getattr(reader, "_probe_thread", None)
+                if probe is not None:
+                    probe.join(timeout=1)
+            self.assertNotIn("usb.open", trace)
+            reader.stop()
+
+        for driver in ("hidusb", None, "other"):
+            with self.subTest(driver=driver):
+                reader, _, trace, _ = self.make_reader(raw_run=raw_run)
+                with patch("deck_usb.interface0_driver", return_value=driver), self.assertLogs(
+                        "agentdeck.hub.keyboard", "INFO") as logs:
+                    reader.run()
+                self.assertNotIn("usb.open", trace)
+                skipped = [line for line in logs.output if "USB probe skipped" in line]
+                self.assertEqual(len(skipped), 1)
+
     def test_usb_open_failure_falls_back_and_stop_cleans_both(self):
         reader, events, trace, instances = self.make_reader(open_results=[OSError("HID driver")])
         with self.assertLogs("agentdeck.hub.keyboard", "INFO") as logs:
@@ -247,6 +271,8 @@ class SwitchingTests(unittest.TestCase):
         def raw_run(reader, raw, trace, clock):
             raw.callback(raw_event(0x48))
             clock[0] += 2.
+            raw.poll()
+            reader._probe_thread.join(timeout=1)
             raw.poll()
             self.assertTrue(raw.stopped)
 
@@ -274,6 +300,7 @@ class SwitchingTests(unittest.TestCase):
             self.assertEqual(trace.count("usb.open"), 1)
             clock[0] += 2
             raw.poll()
+            reader._probe_thread.join(timeout=1)
             self.assertEqual(trace.count("usb.open"), 2)
             self.assertFalse(raw.stopped)
             raw.poll()
@@ -327,6 +354,52 @@ class SwitchingTests(unittest.TestCase):
         self.assertEqual(trace.count("raw.unavailable"), 1)
         self.assertNotIn("raw.run", trace)
 
+    def test_slow_driver_probe_does_not_block_raw_message_pump(self):
+        import threading
+
+        entered, release = threading.Event(), threading.Event()
+
+        def query():
+            entered.set()
+            release.wait(2)
+            return "hidusb"
+
+        def raw_run(reader, raw, trace, clock):
+            clock[0] += 2
+            with patch("deck_usb.interface0_driver", side_effect=query):
+                raw.poll()
+                self.assertTrue(entered.wait(1))
+                try:
+                    raw.callback(raw_event(0x45))
+                    self.assertEqual(events[-1]["usage"], 8)
+                    self.assertEqual(events[-1]["reader"], "Raw Input")
+                    self.assertFalse(raw.stopped)
+                    raw.poll()  # a pending probe must not spawn a second one
+                finally:
+                    release.set()
+                    reader._probe_thread.join(timeout=1)
+                reader.stop()
+
+        reader, events, trace, _ = self.make_reader(raw_run=raw_run)
+        with patch("deck_usb.interface0_driver", return_value="hidusb"):
+            reader.run()
+        self.assertNotIn("usb.open", trace)
+
+    def test_driver_change_to_winusb_enables_probe(self):
+        def raw_run(reader, raw, trace, clock):
+            clock[0] += 2
+            with patch("deck_usb.interface0_driver", return_value="winusb"):
+                raw.poll()
+                reader._probe_thread.join(timeout=1)
+            raw.poll()
+            self.assertTrue(raw.stopped)
+
+        reader, _, trace, _ = self.make_reader(raw_run=raw_run)
+        with patch("deck_usb.interface0_driver", return_value="hidusb"):
+            reader.run()
+        self.assertEqual(trace.count("usb.open"), 1)
+        self.assertLess(trace.index("raw.closed"), trace.index("usb.run"))
+
     def test_snapshot_is_forwarded_to_usb_probe_callback(self):
         events = []
 
@@ -338,6 +411,93 @@ class SwitchingTests(unittest.TestCase):
         reader = KeyboardInput(Capture(), usb_factory=lambda callback, **kw: fake,
                                raw_factory=lambda *a, **kw: None)
         self.assertEqual(reader.snapshot(), {"request_id": "captured", "nonce": "n"})
+
+    def test_idle_usb_timeouts_and_raw_polls_still_beat(self):
+        from deck_usb import USBInput
+
+        class Timeout(Exception):
+            pass
+
+        receiver = USBInput(lambda event: None)
+        receiver.heartbeat = Mock()
+        receiver._core = SimpleNamespace(USBTimeoutError=Timeout)
+
+        def read(*args, **kwargs):
+            if receiver.heartbeat.call_count == 5:
+                receiver.stop()
+            raise Timeout()
+
+        receiver.endpoint = SimpleNamespace(read=read, wMaxPacketSize=8)
+        receiver.run(reconnect=False)
+        self.assertEqual(receiver.heartbeat.call_count, 5)
+
+        def raw_run(reader, raw, trace, clock):
+            before = reader.heartbeat.call_count
+            for _ in range(5):
+                raw.poll()
+            self.assertEqual(reader.heartbeat.call_count - before, 5)
+            reader.stop()
+
+        reader, _, _, _ = self.make_reader(raw_run=raw_run)
+        reader.heartbeat = Mock()
+        with patch("deck_usb.interface0_driver", return_value="hidusb"):
+            reader.run()
+
+    def test_stop_during_probe_closes_late_usb_without_switching(self):
+        import threading
+
+        entered, release = threading.Event(), threading.Event()
+
+        def raw_run(reader, raw, trace, clock):
+            original = reader.usb.open
+
+            def slow_open():
+                entered.set()
+                release.wait(2)
+                original()
+
+            reader.usb.open = slow_open
+            clock[0] += 2
+            with patch("deck_usb.interface0_driver", return_value="winusb"):
+                raw.poll()
+                try:
+                    self.assertTrue(entered.wait(1))
+                    reader.stop()
+                finally:
+                    release.set()
+                    reader._probe_thread.join(timeout=1)
+
+        reader, _, trace, instances = self.make_reader(raw_run=raw_run)
+        with patch("deck_usb.interface0_driver", return_value="hidusb"):
+            reader.run()
+        self.assertTrue(instances[0].closed)
+        self.assertFalse(reader._usb_ready)
+        self.assertNotIn("usb.run", trace)
+
+
+class KeyboardLogTests(unittest.TestCase):
+    def test_hub_logs_receipt_and_action_result_with_reader(self):
+        for reader in ("USB", "Raw Input"):
+            engine = SimpleNamespace(monotonic=lambda: 10., input_snapshot=lambda: {},
+                                     action=Mock(return_value={"status": "selected"}))
+            keys = hub.USBKeys(engine, {"bindings": {"hid:0x08": "slot 1"}})
+            event = dict(ReportState().feed(report(8))[0], t=10., reader=reader)
+            with self.assertLogs("agentdeck.hub.keys", "DEBUG") as logs:
+                keys(event)
+            output = "\n".join(logs.output)
+            self.assertIn("entered hub reader=" + reader, output)
+            self.assertIn("action=slot 1", output)
+            self.assertIn("'status': 'selected'", output)
+            self.assertEqual(len(logs.output), 2)
+
+    def test_blocked_action_is_logged_with_reader_and_reason(self):
+        engine = SimpleNamespace(monotonic=lambda: 10., input_snapshot=lambda: {},
+                                 action=Mock(side_effect=hub.HubError("no session")))
+        keys = hub.USBKeys(engine, {"bindings": {"hid:0x08": "slot 1"}})
+        with self.assertLogs("agentdeck.hub.keys", "DEBUG") as logs:
+            keys(dict(ReportState().feed(report(8))[0], t=10., reader="Raw Input"))
+        self.assertIn("reader=Raw Input", logs.output[-1])
+        self.assertIn("result=blocked: no session", logs.output[-1])
 
 
 if __name__ == "__main__":

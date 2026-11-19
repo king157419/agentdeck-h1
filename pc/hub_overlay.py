@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from pathlib import Path
+from queue import Empty, SimpleQueue
 import sys
 import threading
 
@@ -261,6 +262,79 @@ class Overlay:
         self.decisions = None
         self.decision_buttons = {}
         self.note = None
+        self.state = {}
+        self._tasks = self._completed = self._worker = None
+        self._worker_stop = threading.Event()
+        self._state_pending = False
+
+    def _start_background(self):
+        """Keep Hub locks and native desktop work out of Tk callbacks."""
+        self._tasks, self._completed = SimpleQueue(), SimpleQueue()
+        self._worker_stop.clear()
+
+        def work():
+            while not self._worker_stop.is_set():
+                job = self._tasks.get()
+                if job is None or self._worker_stop.is_set():
+                    break
+                callback, done, failed = job
+                try:
+                    value = callback()
+                except Exception as error:
+                    log.exception("Overlay background operation failed")
+                    self._completed.put((failed, error))
+                else:
+                    self._completed.put((done, value))
+
+        self._worker = threading.Thread(target=work, name="AgentDeck UI tasks", daemon=True)
+        self._worker.start()
+
+    def _stop_background(self):
+        self._worker_stop.set()
+        if self._tasks is not None:
+            self._tasks.put(None)
+        if self._worker is not None:
+            self._worker.join(timeout=.2)
+
+    def defer(self, callback, done=None, failed=None):
+        """Completion callbacks run on Tk when _poll consumes the result."""
+        if self._tasks is None:
+            try:
+                value = callback()
+            except Exception as error:
+                if failed is None:
+                    raise
+                failed(error)
+            else:
+                if done is not None:
+                    done(value)
+            return
+        if not self._worker_stop.is_set():
+            self._tasks.put((callback, done, failed))
+
+    def _drain_completed(self):
+        if self._completed is None:
+            return
+        for _ in range(50):
+            try:
+                callback, value = self._completed.get_nowait()
+            except Empty:
+                break
+            if callback is not None:
+                callback(value)
+
+    def _display_call(self, callback):
+        # These two Hub operations only publish display metadata. Skip a busy
+        # lock and retry from the next Tk poll so acknowledgements describe the
+        # pixels currently visible, never an old queued render.
+        if self._tasks is None:
+            callback()
+            return
+        if self.hub.lock.acquire(blocking=False):
+            try:
+                callback()
+            finally:
+                self.hub.lock.release()
 
     @staticmethod
     def _request_ids(state):
@@ -279,7 +353,7 @@ class Overlay:
             self._dismissed_requests.add(request["id"])
         self.hidden = True
         self._pressed_decisions.clear()
-        self.hub.hide_display('overlay')
+        self._display_call(lambda: self.hub.hide_display('overlay'))
         if self.root is not None:
             self.root.withdraw()
         if self.window is not None:
@@ -364,6 +438,19 @@ class Overlay:
                 return None
             payload["request_id"] = request_id
             payload["nonce"] = nonce
+        if self._tasks is not None:
+            if received_at is None:
+                received_at = self.hub.monotonic()
+
+            def done(result):
+                self.message = result.get("message") or result.get("status", "")
+
+            def failed(error):
+                self.message = str(error)
+
+            self.defer(lambda: self.hub.action(payload, source="overlay", received_at=received_at),
+                       done, failed)
+            return None
         try:
             if received_at is None:
                 result = self.hub.action(payload, source="overlay")
@@ -618,7 +705,23 @@ class Overlay:
         previous_active = set(self._active_ids)
         previous_dismissed = set(self._dismissed_requests)
         try:
-            state = self.hub.state()
+            if self._tasks is None:
+                state = self.hub.state()
+            else:
+                self._drain_completed()
+                if not self._state_pending:
+                    self._state_pending = True
+
+                    def received(value):
+                        self.state = value
+                        self._state_pending = False
+
+                    def failed(error):
+                        self._state_pending = False
+                        self.message = "Hub state unavailable"
+
+                    self.defer(self.hub.state, received, failed)
+                state = self.state
             active_ids = self._request_ids(state)
             self._active_ids = active_ids
             self._dismissed_requests &= active_ids
@@ -638,8 +741,11 @@ class Overlay:
             request = self.model["request"]
             # Startup and hidden states keep the window withdrawn; acknowledge only visible pixels.
             if not self.hidden and self.root.state() != "withdrawn":
-                self.hub.record_rendered(request["id"] if request else None,
-                                         request.get("nonce") if request else None, source="overlay")
+                self._display_call(lambda: self.hub.record_rendered(
+                    request["id"] if request else None,
+                    request.get("nonce") if request else None, source="overlay"))
+            elif self.hidden:
+                self._display_call(lambda: self.hub.hide_display('overlay'))
         except KeyboardInterrupt:
             self._interrupted = True
             self.stop()
@@ -669,6 +775,7 @@ class Overlay:
             self.root.report_callback_exception = self._callback_exception
             self.root.withdraw()
             self._build()
+            self._start_background()
             self._poll()
             self.root.update_idletasks()
             height = self.root.winfo_reqheight()
@@ -694,6 +801,7 @@ class Overlay:
                 raise KeyboardInterrupt
         finally:
             self.stopped.set()
+            self._stop_background()
             try:
                 if self.window is not None:
                     self.window.close()

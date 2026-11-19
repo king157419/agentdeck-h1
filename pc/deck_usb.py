@@ -141,6 +141,7 @@ class USBInput:
         self._core = self._util = None
         self._claimed = False
         self._stop = threading.Event()
+        self.heartbeat = None
 
     def open(self):
         if self.endpoint is not None:
@@ -234,6 +235,8 @@ class USBInput:
     def run(self, *, reconnect=True):
         try:
             while not self._stop.is_set():
+                if self.heartbeat is not None:
+                    self.heartbeat()
                 if self.endpoint is None:
                     try:
                         self.open()

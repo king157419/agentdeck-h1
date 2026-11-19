@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import threading
+import time
 import types
 import unittest
 from unittest.mock import Mock, patch
@@ -259,6 +261,70 @@ class OverlayActionsTests(unittest.TestCase):
         self.window.close.assert_called_once_with()
         root.destroy.assert_called_once_with()
         done.assert_called_once_with()
+
+
+class BackgroundOverlayTests(unittest.TestCase):
+    def setUp(self):
+        self.lock = threading.RLock()
+        self.hub = Mock(lock=self.lock)
+        self.hub.state.return_value = {"sessions": []}
+        self.hub.monotonic.return_value = 100.
+        self.overlay = Overlay(self.hub, window=Mock())
+        self.overlay.root = Mock()
+        self.overlay._render = Mock()
+        self.overlay._start_background()
+        self.addCleanup(self.overlay._stop_background)
+
+    def test_poll_does_not_wait_for_hub_state_or_its_lock(self):
+        entered, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+
+        def slow_state():
+            with self.lock:
+                entered.set()
+                release.wait(2)
+            return {"sessions": []}
+
+        self.hub.state.side_effect = slow_state
+        self.overlay._poll()
+        self.assertTrue(entered.wait(1))
+        self.hub.record_rendered.reset_mock()
+        before = time.monotonic()
+        self.overlay._poll()
+        self.assertLess(time.monotonic() - before, .2)
+        self.hub.record_rendered.assert_not_called()
+        self.overlay.hide()
+        self.hub.hide_display.assert_not_called()
+        release.set()
+
+    def test_slow_action_keeps_captured_request_and_completes_on_tk_poll(self):
+        entered, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        caller = threading.get_ident()
+        workers = []
+
+        def slow_action(payload, **kwargs):
+            workers.append(threading.get_ident())
+            entered.set()
+            release.wait(2)
+            return {"status": "allowed"}
+
+        self.hub.action.side_effect = slow_action
+        before = time.monotonic()
+        self.overlay.dispatch("approve", "old", 71, received_at=100.)
+        self.assertLess(time.monotonic() - before, .2)
+        self.assertTrue(entered.wait(1))
+        self.overlay.model = display_model({"displayed_request_id": "new", "pending": [{"id": "new"}]})
+        release.set()
+        deadline = time.monotonic() + 2
+        while self.overlay.message != "allowed" and time.monotonic() < deadline:
+            self.overlay._poll()
+            time.sleep(.01)
+        self.assertEqual(self.overlay.message, "allowed")
+        self.assertNotEqual(workers, [caller])
+        self.hub.action.assert_called_once_with(
+            {"action": "approve", "request_id": "old", "nonce": 71},
+            source="overlay", received_at=100.)
 
 
 class NativeFunction:

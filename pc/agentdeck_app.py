@@ -333,6 +333,7 @@ class TrayApplication:
         self.icon = None
         self.tray_thread = None
         self.state = {}
+        self._background_enabled = False
         self.last_status = None
         self.autostart_enabled = self.autostart.enabled()
 
@@ -375,6 +376,7 @@ class TrayApplication:
         self.icon = tray_icon_type(pystray.Icon)("AgentDeck", self.draw_icon("idle"), "AgentDeck", self.menu(pystray))
         self.tray_thread = threading.Thread(target=self._run_tray, name="AgentDeck tray", daemon=True)
         self.tray_thread.start()
+        self._background_enabled = getattr(self.overlay, "_tasks", None) is not None
         self.overlay.root.after(100, self.pump)
         self.overlay.root.after(400, self.onboarding)
 
@@ -405,7 +407,8 @@ class TrayApplication:
                 except Exception as error:
                     log.exception("菜单动作失败：%s", action)
                     self.message("AgentDeck 操作失败", str(error), error=True)
-            self.state = self.hub.state()
+            # Live mode: the overlay refreshes state on its worker; Tk never takes the Hub lock.
+            self.state = self.overlay.state if self._background_enabled else self.hub.state()
             status = tray_status(self.state)
             if status != self.last_status:
                 self.icon.icon = self.draw_icon(status[0])
@@ -419,6 +422,17 @@ class TrayApplication:
     def message(self, title, text, *, error=False):
         theme.notice(self.overlay.root, title, text, error=error)
 
+    def _run_slow(self, work, action):
+        """Hub locks and native window focus run off the Tk thread when live."""
+        if not self._background_enabled:
+            work()
+            return
+
+        def failed(error):
+            log.error("菜单动作失败：%s：%s", action, error)
+            self.message("AgentDeck 操作失败", str(error), error=True)
+        self.overlay.defer(work, failed=failed)
+
     def dispatch(self, action, payload=None):
         if action == "show":
             self.overlay.show()
@@ -426,14 +440,16 @@ class TrayApplication:
             (self.overlay.show if self.overlay.hidden else self.overlay.hide)()
         elif action == "select":
             # Verify the full identity at click time; a recycled slot must never retarget.
-            with self.hub.lock:
-                session = next((s for s in self.hub.state()["sessions"]
-                                if (s["agent"], s["session_id"]) == payload), None)
-                if session is None:
-                    raise ValueError("该会话已结束")
-                self.hub.action({"action": "slot %s" % session["slot"]})
+            def select():
+                with self.hub.lock:
+                    session = next((s for s in self.hub.state()["sessions"]
+                                    if (s["agent"], s["session_id"]) == payload), None)
+                    if session is None:
+                        raise ValueError("该会话已结束")
+                    self.hub.action({"action": "slot %s" % session["slot"]})
+            self._run_slow(select, action)
         elif action == "next_wait":
-            self.hub.action({"action": "next_wait"})
+            self._run_slow(lambda: self.hub.action({"action": "next_wait"}), action)
         elif action == "keys":
             self.show_keys()
         elif action == "diagnostics":

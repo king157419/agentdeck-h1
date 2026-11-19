@@ -47,6 +47,7 @@ EVENT_STATES = {
 }
 EVENTS = set(EVENT_STATES) | {"PermissionRequest", "Notification", "SessionEnd"}
 log = logging.getLogger("agentdeck.hub")
+keylog = logging.getLogger("agentdeck.hub.keys")
 
 from hub_risk import (  # noqa: F401  (re-exported: hub.classify stays public)
     AUTHORIZED_KEYS, CRITICAL_RULES, KEY_PATH, RISK_RULES, SENSITIVE_PATH, SHELL_WRITE,
@@ -1036,6 +1037,9 @@ class USBKeys:
                 else self.snapshot())
 
     def __call__(self, event):
+        reader = event.get("reader", "USB")
+        keylog.debug("Keyboard event entered hub reader=%s keys=%s down=%s",
+                     reader, event.get("keys", ()), event.get("down"))
         received_at = event.get('t', self.monotonic())
         if (isinstance(received_at, bool) or not isinstance(received_at, (int, float))
                 or not math.isfinite(received_at)):
@@ -1054,7 +1058,7 @@ class USBKeys:
             if held is not None:
                 binding, action = held
                 if action == "voice_up" or 0 <= self.monotonic() - event.get("t", float("-inf")) <= 1.0:
-                    self._dispatch(binding, action, shown, received_at)
+                    self._dispatch(binding, action, shown, received_at, reader)
             return
         if not 0 <= self.monotonic() - event.get("t", float("-inf")) <= 1.0:
             return
@@ -1073,12 +1077,12 @@ class USBKeys:
             if modifiers and tuple(event.get("new_modifiers", ())) != modifiers:
                 continue
             action = actions.get("down") if isinstance(actions, dict) else actions
-            if action is None or self._dispatch(binding, action, shown, received_at):
+            if action is None or self._dispatch(binding, action, shown, received_at, reader):
                 if isinstance(actions, dict) and "up" in actions:
                     self.held[physical] = (binding, actions["up"])
             return
 
-    def _dispatch(self, binding, action, shown, received_at):
+    def _dispatch(self, binding, action, shown, received_at, reader="USB"):
         try:
             payload = {"action": action}
             if action in ("approve", "deny"):
@@ -1086,10 +1090,12 @@ class USBKeys:
             elif action == "interrupt":
                 payload["request_id"] = shown["request_id"]
             result = self.hub.action(payload, source="key", received_at=received_at)
-            log.info("USB %s -> %s", binding, result)
+            keylog.debug("Keyboard action reader=%s binding=%s action=%s result=%s", reader, binding, action, result)
+            log.info("%s %s -> %s", reader, binding, result)
             return True
         except (HubError, ValueError) as error:
-            log.warning("USB action failed: %s", error)
+            keylog.debug("Keyboard action reader=%s binding=%s action=%s result=blocked: %s", reader, binding, action, error)
+            log.warning("%s action failed: %s", reader, error)
             return False
 
 
@@ -1154,16 +1160,24 @@ def main(argv=None, *, ui_factory=None):
     readers = []
     stopped = threading.Event()
     server_errors = []
+    from hub_watchdog import Watchdog
+    watchdog = Watchdog()
 
     def maintain():
         while not stopped.wait(0.2):
             hub.maintain()
 
     def run_input(reader):
+        watched = callable(getattr(reader, "heartbeat", None))
+        if watched:
+            watchdog.watch("keyboard")
         try:
             reader.run()
         except Exception:
             log.exception("Hub input stopped")
+        finally:
+            if watched:
+                watchdog.unwatch("keyboard")
 
     def serve():
         try:
@@ -1176,7 +1190,9 @@ def main(argv=None, *, ui_factory=None):
     try:
         if "usb" in args.backend:
             from hub_keyboard import KeyboardInput
-            readers.append((KeyboardInput(USBKeys(hub, mapping, profile=args.profile), monotonic=hub.monotonic), "AgentDeck USB"))
+            keyboard = KeyboardInput(USBKeys(hub, mapping, profile=args.profile), monotonic=hub.monotonic)
+            keyboard.heartbeat = lambda: watchdog.beat("keyboard")
+            readers.append((keyboard, "AgentDeck USB"))
         if "hotkey" in args.backend:
             from hub_hotkey import HotkeyInput
             readers.append((HotkeyInput(hub, mapping), "AgentDeck hotkeys"))
@@ -1184,6 +1200,8 @@ def main(argv=None, *, ui_factory=None):
         if args.overlay:
             from hub_overlay import Overlay
             overlay = (ui_factory or Overlay)(hub)
+            getattr(overlay, "overlay", overlay).heartbeat = lambda: watchdog.beat("UI")
+        watchdog.start()
         maintenance = threading.Thread(target=maintain, name="AgentDeck LCD hold", daemon=True)
         maintenance.start()
         for index, (reader, name) in enumerate(readers):
@@ -1197,12 +1215,15 @@ def main(argv=None, *, ui_factory=None):
             # Tk owns the main thread; HTTP and native input keep running independently.
             http_thread = threading.Thread(target=serve, name="AgentDeck HTTP", daemon=True)
             http_thread.start()
+            watchdog.watch("UI")
             overlay.run()
             if server_errors:
                 raise server_errors[0]
     except KeyboardInterrupt:
         pass
     finally:
+        watchdog.unwatch("UI")
+        watchdog.stop()
         stopped.set()
         if overlay is not None:
             overlay.stop()

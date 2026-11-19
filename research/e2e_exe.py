@@ -76,6 +76,8 @@ for i in range(7):
     call("/event?agent=cc", {"hook_event_name": "UserPromptSubmit", "session_id": f"leak-{tag}-{i}",
                              "cwd": r"D:\desk\hardware\h1\agentdeck-test"})
 d = run("槽满后第8个会话", "leak-new-" + tag, "ls", ["approve"])
+for i in range(7):  # 自测完把假会话清掉，别占着用户的槽位
+    call("/event?agent=cc", {"hook_event_name": "SessionEnd", "session_id": f"leak-{tag}-{i}"})
 ok = '"allow"' in a and '"deny"' in b and '"allow"' in c and '"allow"' in d
 print("RESULT", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)
