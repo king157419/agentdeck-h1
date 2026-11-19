@@ -5,9 +5,7 @@ are imported when opening the receiver, so report parsing remains offline.
 """
 import ctypes
 from ctypes import wintypes
-import json
 import logging
-import subprocess
 import threading
 import time
 
@@ -15,6 +13,7 @@ import time
 VID, PID, INTERFACE = 0x4132, 0x2107, 0
 READ_TIMEOUT_MS = 100
 RECONNECT_SECONDS = 2
+INTERFACE0_ENUM_KEY = r"SYSTEM\CurrentControlSet\Enum\USB\VID_4132&PID_2107&MI_00"
 ZADIG_HINT = "请先用 Zadig 把 4132:2107 接口0 换成 WinUSB"
 log = logging.getLogger("agent_deck.usb")
 
@@ -27,33 +26,44 @@ def foreground_hwnd():
     return user.GetForegroundWindow() or 0
 
 
-def interface0_driver():
-    """Read present interface-0 PnP metadata; unknown/absent must stay on USB.
+def devnode_present(instance_id):
+    """True when cfgmgr32 locates a live (non-phantom) devnode; read-only."""
+    cfgmgr = ctypes.WinDLL("cfgmgr32")
+    locate = cfgmgr.CM_Locate_DevNodeW
+    locate.argtypes = [ctypes.POINTER(wintypes.DWORD), wintypes.LPCWSTR, wintypes.ULONG]
+    locate.restype = wintypes.DWORD
+    return locate(ctypes.byref(wintypes.DWORD()), instance_id, 0) == 0  # CR_SUCCESS
 
-    Get-PnpDevice -PresentOnly excludes stale registry entries for unplugged
-    devices. This query never opens a USB endpoint or changes any driver.
+
+def interface0_driver():
+    """Read interface-0 service names from the registry; unknown/absent must stay on USB.
+
+    Read-only winreg query (no child process). Presence is decided by
+    CM_Locate_DevNodeW(NORMAL), which finds only live devnodes, so stale registry
+    entries are skipped. Never opens a USB endpoint or changes a driver.
     """
-    script = (
-        "$ErrorActionPreference='Stop'; "
-        "Get-PnpDevice -PresentOnly | Where-Object { "
-        "$_.InstanceId -match '^USB\\\\VID_4132&PID_2107&MI_00\\\\' } | "
-        "ForEach-Object { (Get-PnpDeviceProperty -InstanceId $_.InstanceId "
-        "-KeyName 'DEVPKEY_Device_Service').Data } | ConvertTo-Json -Compress"
-    )
     try:
-        result = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-            capture_output=True, text=True, timeout=5, check=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        services = json.loads(result.stdout)
-        if isinstance(services, str):
-            services = [services]
-        if isinstance(services, list) and services:
-            names = {service.casefold() for service in services if isinstance(service, str)}
-            if len(names) == 1 and len(services) == sum(isinstance(s, str) for s in services):
+        import winreg
+        services = []
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, INTERFACE0_ENUM_KEY, 0,
+                            winreg.KEY_READ) as parent:
+            index = 0
+            while True:
+                try:
+                    instance = winreg.EnumKey(parent, index)
+                except OSError:
+                    break
+                index += 1
+                if not devnode_present("USB\\VID_4132&PID_2107&MI_00\\" + instance):
+                    continue
+                with winreg.OpenKey(parent, instance, 0, winreg.KEY_READ) as key:
+                    services.append(winreg.QueryValueEx(key, "Service")[0])
+        if services and all(isinstance(service, str) for service in services):
+            names = {service.casefold() for service in services}
+            if len(names) == 1:
                 driver = names.pop()
                 return driver if driver in ("hidusb", "winusb") else None
-    except (OSError, ValueError, subprocess.SubprocessError) as error:
+    except (OSError, ValueError, ImportError) as error:
         log.debug("USB interface 0 driver metadata unavailable: %s", error)
     return None
 

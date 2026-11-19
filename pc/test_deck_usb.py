@@ -483,26 +483,98 @@ def test_usb_auto_backend_selection_success_and_observer_fallback():
             assert any("宏键盘按键会漏到窗口" in call.args[0] for call in warned.call_args_list)
 
 
-def test_usb_interface_zero_driver_only_uses_present_device_service():
-    for output, expected in (("\"HidUsb\"", "hidusb"), ("\"WinUSB\"", "winusb"),
-                             ('["HidUsb", "HidUsb"]', "hidusb"),
-                             ('["HidUsb", "WinUSB"]', None),
-                             ('["HidUsb", null]', None), ('[]', None), ('null', None),
-                             ('"usbccgp"', None), ('not JSON', None), ("", None)):
-        with patch.object(usb.subprocess, "run", return_value=SimpleNamespace(stdout=output)) as run:
-            assert usb.interface0_driver() == expected
-        command = run.call_args.args[0]
-        assert command[:4] == ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command"]
-        assert "Get-PnpDevice -PresentOnly" in command[-1]
-        assert "VID_4132&PID_2107&MI_00" in command[-1]
-        assert "DEVPKEY_Device_Service" in command[-1]
-        assert run.call_args.kwargs["timeout"] == 5
-        assert run.call_args.kwargs["check"] is True
-        assert "shell" not in run.call_args.kwargs
-    for error in (OSError("no powershell"), usb.subprocess.TimeoutExpired("powershell.exe", 5),
-                  usb.subprocess.CalledProcessError(1, "powershell.exe")):
-        with patch.object(usb.subprocess, "run", side_effect=error):
+class FakeWinreg:
+    """winreg stand-in: tree maps instance -> (service, present) or raises on open."""
+    HKEY_LOCAL_MACHINE = "HKLM"
+    KEY_READ = 0x20019
+
+    def __init__(self, instances=None, error=None, parent_missing=False):
+        self.instances, self.error, self.parent_missing = instances or {}, error, parent_missing
+        self.opened = []
+
+    class _Key:
+        def __init__(self, path):
+            self.path = path
+        def __enter__(self):
+            return self
+        def __exit__(self, *exc):
+            return False
+
+    def OpenKey(self, base, path, reserved=0, access=0):
+        assert access == self.KEY_READ  # read-only access only
+        if self.error:
+            raise self.error
+        if base == self.HKEY_LOCAL_MACHINE:
+            self.opened.append(path)
+            if self.parent_missing:
+                raise FileNotFoundError(path)
+            return self._Key(path)
+        full = base.path + "\\" + path
+        self.opened.append(full)
+        if path not in self.instances:
+            raise FileNotFoundError(full)
+        return self._Key(full)
+
+    def EnumKey(self, key, index):
+        names = list(self.instances)
+        if index >= len(names):
+            raise OSError(259, "no more data")
+        return names[index]
+
+    def QueryValueEx(self, key, name):
+        assert name == "Service"
+        return self.instances[key.path.split("\\")[-1]][0], 1
+
+    def CloseKey(self, key):
+        pass
+
+
+def test_usb_interface_zero_driver_reads_present_instances_from_registry():
+    for instances, expected in (
+            ({"A": ("HidUsb", True)}, "hidusb"),
+            ({"A": ("WinUSB", True)}, "winusb"),
+            ({"A": ("HidUsb", True), "B": ("hidusb", True)}, "hidusb"),
+            ({"A": ("HidUsb", True), "B": ("WinUSB", True)}, None),
+            ({"A": ("usbccgp", True)}, None),
+            ({"A": (None, True)}, None),
+            ({}, None),
+            ({"A": ("WinUSB", False)}, None),
+            ({"A": ("WinUSB", False), "B": ("HidUsb", True)}, "hidusb"),
+            ({"A": ("WinUSB", False), "B": ("HidUsb", False)}, None)):
+        fake = FakeWinreg(instances)
+        present = {"USB\\VID_4132&PID_2107&MI_00\\" + name for name, (_, here) in instances.items() if here}
+        with patch.dict(sys.modules, {"winreg": fake}),                 patch.object(usb, "devnode_present", side_effect=lambda ident: ident in present):
+            assert usb.interface0_driver() == expected, instances
+        assert fake.opened[0] == usb.INTERFACE0_ENUM_KEY == r"SYSTEM\CurrentControlSet\Enum\USB\VID_4132&PID_2107&MI_00"
+    for fake in (FakeWinreg(parent_missing=True), FakeWinreg(error=PermissionError("denied")),
+                 FakeWinreg(error=OSError("boom"))):
+        with patch.dict(sys.modules, {"winreg": fake}):
             assert usb.interface0_driver() is None
+    with patch.dict(sys.modules, {"winreg": FakeWinreg({"A": ("HidUsb", True)})}),             patch.object(usb, "devnode_present", side_effect=OSError("cfgmgr32 unavailable")):
+        assert usb.interface0_driver() is None  # presence call failure stays on USB
+    with patch.dict(sys.modules, {"winreg": None}):  # ImportError on non-Windows
+        assert usb.interface0_driver() is None
+    assert not hasattr(usb, "subprocess")  # no PowerShell fallback
+
+
+def test_devnode_present_uses_read_only_cm_locate_devnode_normal():
+    for code, expected in ((0, True), (13, False), (37, False)):
+        calls = []
+
+        def locate(handle, ident, flags):
+            calls.append((ident, flags))
+            return code
+        library = SimpleNamespace(CM_Locate_DevNodeW=locate)
+        with patch.object(usb.ctypes, "WinDLL", return_value=library) as loader:
+            assert usb.devnode_present("USB\\X\\1") is expected
+        loader.assert_called_once_with("cfgmgr32")
+        assert calls == [("USB\\X\\1", 0)]  # CM_LOCATE_DEVNODE_NORMAL
+    with patch.object(usb.ctypes, "WinDLL", side_effect=OSError("no cfgmgr32")):
+        try:
+            usb.devnode_present("USB\\X\\1")
+            raise AssertionError("expected OSError")
+        except OSError:
+            pass
 
 
 def test_usb_auto_failed_open_keeps_usb_unless_hidusb_confirmed():
@@ -641,7 +713,7 @@ def main():
     tests = [value for name, value in globals().items() if name.startswith("test_") and callable(value)]
     # No standalone test may sample a real foreground window or run PnP discovery.
     with patch.object(usb, "foreground_hwnd", return_value=1), \
-            patch.object(usb.subprocess, "run", side_effect=AssertionError("real PnP query forbidden")):
+            patch.dict(sys.modules, {"winreg": FakeWinreg(error=AssertionError("real registry query forbidden"))}):
         for test in tests:
             test()
             print(test.__name__ + ": PASS")
