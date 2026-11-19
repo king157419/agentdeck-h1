@@ -7,6 +7,8 @@ from pathlib import Path
 import sys
 import threading
 
+import agentdeck_theme as theme
+
 if sys.platform == "win32":
     from ctypes import wintypes
 
@@ -16,12 +18,11 @@ POLL_MS = 300
 WIDTH = 360
 TRANSLUCENT_ALPHA = 0.85
 OPAQUE_ALPHA = 1.0
-COLORS = {"RUN": "#48b879", "ASK": "#e5ad46", "DONE": "#609ce3",
-          "ERR": "#ed6969", "IDLE": "#9299a5"}
+COLORS = theme.STATUS
 STATES = {"think": "RUN", "tool": "RUN", "wait": "ASK", "locked": "ASK",
           "done": "DONE", "error": "ERR", "idle": "IDLE"}
-BACKGROUND = "#171c24"
-FOREGROUND = "#edf1f7"
+BACKGROUND = theme.BG
+FOREGROUND = theme.TEXT
 
 
 def overlay_config_file(home=None):
@@ -37,7 +38,7 @@ def display_model(state):
         label = STATES.get(session.get("state"), "IDLE") if session else "IDLE"
         slots.append({"number": number,
                       "name": str(session.get("name") or session.get("project") or "Unnamed")
-                      if session else "No session",
+                      if session else "",
                       "label": label, "color": COLORS[label],
                       "occupied": session is not None,
                       "selected": state.get("selected_slot") == number})
@@ -75,7 +76,7 @@ def display_model(state):
         "request": detail,
         "session_count": session_count,
         "pending_count": pending_count,
-        "summary_text": "%d 个会话 / %d 个待批" % (session_count, pending_count),
+        "summary_text": "%d 待批" % pending_count if pending_count else "%d 个会话" % session_count,
         "expanded": bool(pending_count or detail is not None),
     }
 
@@ -250,6 +251,7 @@ class Overlay:
         self.frame = None
         self.header = None
         self.status_label = None
+        self.dots = None
         self.alpha_button = None
         self.body = None
         self.rows = []
@@ -305,9 +307,7 @@ class Overlay:
         self.translucent = not self.translucent
         self._apply_alpha()
         if self.alpha_button is not None:
-            self.alpha_button.configure(
-                bg="#2b394d" if self.translucent else BACKGROUND,
-                fg=FOREGROUND if self.translucent else "#778292")
+            self.alpha_button.configure(fg=FOREGROUND if self.translucent else theme.FAINT)
         self._save_prefs()
         if self.window is not None:
             self.window.restore()
@@ -484,74 +484,83 @@ class Overlay:
 
     def _build(self):
         import tkinter as tk
-        self.root.title("AgentDeck Hub")
+        pad, gap = theme.S3, theme.S2
+        self.root.title("AgentDeck")
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
-        self.root.configure(bg=BACKGROUND)
+        self.root.configure(bg=theme.BORDER)
         self.root.protocol("WM_DELETE_WINDOW", self.hide)
-        self.frame = tk.Frame(self.root, bg=BACKGROUND, padx=12, pady=6, width=WIDTH)
+        # The 1px hairline border is the outer frame showing around the inner one.
+        outer = tk.Frame(self.root, bg=theme.BORDER, padx=1, pady=1)
+        outer.pack(fill="both", expand=True)
+        self.frame = tk.Frame(outer, bg=BACKGROUND, padx=pad, pady=gap, width=WIDTH)
         self.frame.pack(fill="both", expand=True)
         self.frame.columnconfigure(0, weight=1)
         self._bind_drag(self.frame)
         self.header = tk.Frame(self.frame, bg=BACKGROUND)
         self.header.grid(row=0, column=0, sticky="ew")
         self._bind_drag(self.header)
-        self.status_label = tk.Label(self.header, text="0 个会话 / 0 个待批", bg=BACKGROUND,
-                                     fg=FOREGROUND, anchor="w",
-                                     font=("Segoe UI", 9, "bold"), takefocus=False)
-        self.status_label.pack(side="left", fill="x", expand=True)
+        self.status_label = tk.Label(self.header, text="", bg=BACKGROUND, fg=FOREGROUND,
+                                     anchor="w", font=theme.font(9, True), takefocus=False)
+        self.status_label.pack(side="left")
         self._bind_drag(self.status_label)
-        self._button(self.header, "×", self.hide, bg=BACKGROUND, fg="#aab3c1",
-                     padx=4, font=("Segoe UI", 12)).pack(side="right")
+        self.dots = tk.Canvas(self.header, height=10, width=1, bg=BACKGROUND,
+                              highlightthickness=0, bd=0)
+        self.dots.pack(side="left", padx=(gap, 0))
+        self._bind_drag(self.dots)
+        self._button(self.header, "×", self.hide, bg=BACKGROUND, fg=theme.MUTED,
+                     padx=4, font=theme.font(13, latin=True)).pack(side="right")
         self.alpha_button = self._button(
-            self.header, "半透明", self.toggle_translucent,
-            bg="#2b394d" if self.translucent else BACKGROUND,
-            fg=FOREGROUND if self.translucent else "#778292",
-            padx=6, pady=1, font=("Segoe UI", 8))
-        self.alpha_button.pack(side="right", padx=(0, 4))
+            self.header, "◐", self.toggle_translucent, bg=BACKGROUND,
+            fg=FOREGROUND if self.translucent else theme.FAINT,
+            padx=4, font=theme.font(11, latin=True))
+        self.alpha_button.pack(side="right")
         self.body = tk.Frame(self.frame, bg=BACKGROUND)
-        self.body.grid(row=1, column=0, sticky="ew", pady=(8, 0))
+        self.body.grid(row=1, column=0, sticky="ew", pady=(gap, 0))
         self.body.columnconfigure(0, weight=1)
         self.rows = []
         for number in range(1, 7):
-            row = tk.Frame(self.body, bg=BACKGROUND, padx=5, pady=5)
+            row = tk.Frame(self.body, bg=BACKGROUND, padx=gap, pady=gap - 1)
             row.grid(row=number - 1, column=0, sticky="ew", pady=1)
             row.columnconfigure(1, weight=1)
             number_label = self._button(row, str(number), lambda n=number: self._select(n),
-                                        bg=BACKGROUND, fg="#9aa6b8", width=2,
-                                        font=("Segoe UI", 10, "bold"))
+                                        bg=BACKGROUND, fg=theme.FAINT, width=2,
+                                        font=theme.font(9, True, latin=True))
             number_label.grid(row=0, column=0)
             name = self._button(row, "", lambda n=number: self._select(n), bg=BACKGROUND,
-                                fg=FOREGROUND, anchor="w", font=("Segoe UI", 10))
-            name.grid(row=0, column=1, sticky="ew", padx=6)
-            badge = self._button(row, "IDLE", lambda n=number: self._select(n),
-                                 bg=COLORS["IDLE"], fg=BACKGROUND, width=5,
-                                 font=("Segoe UI", 8, "bold"))
-            badge.grid(row=0, column=2)
-            self.rows.append((row, number_label, name, badge))
+                                fg=FOREGROUND, anchor="w", font=theme.font(10))
+            name.grid(row=0, column=1, sticky="ew", padx=gap)
+            dot = self._button(row, "●", lambda n=number: self._select(n),
+                               bg=BACKGROUND, fg=COLORS["IDLE"], font=theme.font(9, latin=True))
+            dot.grid(row=0, column=2)
+            self.rows.append((row, number_label, name, dot))
         self.detail = tk.Frame(self.body, bg=BACKGROUND)
-        self.detail.grid(row=6, column=0, sticky="ew", pady=(10, 0))
+        self.detail.grid(row=6, column=0, sticky="ew", pady=(pad, 0))
         self.risk = tk.Label(self.detail, bg=BACKGROUND, anchor="w", takefocus=False,
-                             font=("Segoe UI", 9, "bold"))
+                             font=theme.font(9, True))
         self.risk.pack(fill="x")
-        self.summary = tk.Label(self.detail, bg=BACKGROUND, fg=FOREGROUND, anchor="w",
-                                justify="left", wraplength=WIDTH - 30, takefocus=False,
-                                font=("Segoe UI", 10))
-        self.summary.pack(fill="x", pady=(5, 8))
+        self.summary = tk.Label(self.detail, bg=theme.SURFACE, fg=FOREGROUND, anchor="w",
+                                justify="left", wraplength=WIDTH - 2 * pad - 2 * gap - 2,
+                                padx=gap, pady=gap, takefocus=False,
+                                font=theme.font(9, mono=True))
+        self.summary.pack(fill="x", pady=(gap - 2, pad))
         self.decisions = tk.Frame(self.detail, bg=BACKGROUND)
         self.decisions.pack(fill="x")
+        self.decisions.columnconfigure(0, weight=3, uniform="decision")
+        self.decisions.columnconfigure(1, weight=2, uniform="decision")
         self.decision_buttons = {}
-        for action, text in (("approve", "✓"), ("deny", "✗")):
+        for column, (action, text, fg) in enumerate((("approve", "✓", BACKGROUND),
+                                                     ("deny", "✗", COLORS["ERR"]))):
             label = tk.Label(self.decisions, text=text, takefocus=False, cursor="hand2",
-                             fg=FOREGROUND, width=7, padx=4, pady=3,
-                             font=("Segoe UI", 13, "bold"))
+                             fg=fg, pady=gap, font=theme.font(13, True, latin=True))
             label.bind("<ButtonPress-1>", lambda event, a=action: self._decision_press(event, a))
             label.bind("<ButtonRelease-1>", lambda event, a=action: self._decision_release(a))
-            label.pack(side="left", padx=(0, 8))
+            label.grid(row=0, column=column, sticky="ew", padx=(0, gap) if column == 0 else 0)
             self.decision_buttons[action] = label
-        self.note = tk.Label(self.body, text="", bg=BACKGROUND, fg="#aab3c1", anchor="w",
-                             wraplength=WIDTH - 30, takefocus=False, font=("Segoe UI", 8))
-        self.note.grid(row=7, column=0, sticky="ew", pady=(7, 0))
+        self.note = tk.Label(self.body, text="", bg=BACKGROUND, fg=theme.MUTED, anchor="w",
+                             wraplength=WIDTH - 2 * pad - 2, takefocus=False,
+                             font=theme.font(8))
+        self.note.grid(row=7, column=0, sticky="ew", pady=(gap, 0))
 
     def _render(self):
         if self.status_label is not None:
@@ -559,23 +568,30 @@ class Overlay:
                 text=self.model["summary_text"],
                 fg=COLORS["ASK"] if self.model["pending_count"] else FOREGROUND)
         if self.alpha_button is not None:
-            self.alpha_button.configure(
-                bg="#2b394d" if self.translucent else BACKGROUND,
-                fg=FOREGROUND if self.translucent else "#778292")
+            self.alpha_button.configure(fg=FOREGROUND if self.translucent else theme.FAINT)
+        if self.dots is not None:
+            occupied = [slot for slot in self.model["slots"] if slot["occupied"]]
+            self.dots.delete("all")
+            self.dots.configure(width=max(1, 14 * len(occupied) - 4))
+            for index, slot in enumerate(occupied):
+                self.dots.create_oval(14 * index, 1, 14 * index + 9, 10, fill=slot["color"], width=0)
         if self.body is not None:
             if self.model["expanded"]:
                 self.body.grid()
             else:
                 self.body.grid_remove()
         for data, (row, number, name, badge) in zip(self.model["slots"], self.rows):
-            background = "#273344" if data["selected"] else BACKGROUND
+            background = theme.RAISED if data["selected"] else BACKGROUND
+            if data["occupied"]:
+                row.grid()
+            else:
+                row.grid_remove()  # empty slots take no space; the number key still maps
             row.configure(bg=background)
-            number.configure(bg=background)
+            number.configure(bg=background, fg=FOREGROUND if data["selected"] else theme.FAINT)
             # Bound the text so a long project name cannot expand the panel.
             text = data["name"]
-            name.configure(text=text if len(text) <= 27 else text[:26] + "…", bg=background,
-                           fg=FOREGROUND if data["occupied"] else "#778292")
-            badge.configure(text=data["label"], bg=data["color"])
+            name.configure(text=text if len(text) <= 27 else text[:26] + "…", bg=background)
+            badge.configure(bg=background, fg=data["color"])
         request = self.model["request"]
         if request is None:
             if self.detail is not None:
@@ -585,11 +601,12 @@ class Overlay:
                 self.detail.grid()
             self.risk.configure(text=request["label"], fg=request["color"])
             self.summary.configure(text=request["summary"])
-            for action, key, color in (("approve", "can_approve", COLORS["RUN"]),
-                                       ("deny", "can_deny", COLORS["ERR"])):
+            for action, key, color, ink in (("approve", "can_approve", COLORS["RUN"], BACKGROUND),
+                                            ("deny", "can_deny", theme.RAISED, COLORS["ERR"])):
                 enabled = request[key]
-                self.decision_buttons[action].configure(bg=color if enabled else "#39414e",
-                                                        cursor="hand2" if enabled else "arrow")
+                self.decision_buttons[action].configure(
+                    bg=color if enabled else theme.RAISED, fg=ink if enabled else theme.FAINT,
+                    cursor="hand2" if enabled else "arrow")
         if self.note is not None:
             self.note.configure(text=self.message)
 

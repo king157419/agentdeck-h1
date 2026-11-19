@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 
+import agentdeck_theme as theme
 import hub
 import hub_install
 from hub_overlay import Overlay
@@ -22,7 +23,8 @@ from hub_overlay import Overlay
 log = logging.getLogger("agentdeck.app")
 APP_PORT = 47801
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-COLORS = {"idle": "#858b93", "running": "#31b66b", "waiting": "#e5a52e", "error": "#e35757"}
+COLORS = {"idle": theme.STATUS["IDLE"], "running": theme.STATUS["RUN"],
+          "waiting": theme.STATUS["ASK"], "error": theme.STATUS["ERR"]}
 STATES = {"idle": "空闲", "think": "思考", "tool": "运行", "wait": "待批",
           "locked": "终端确认", "error": "出错", "done": "完成"}
 TOOLS = {"cc": "Claude", "cx": "Codex"}
@@ -276,15 +278,15 @@ class TrayApplication:
             return rows or [item("暂无会话", None, enabled=False)]
 
         return menu(
-            item(lambda _: "显示浮窗" if self.overlay.hidden else "隐藏浮窗", self.enqueue("toggle"), default=True),
-            item("会话", menu(sessions)), item("跳到等我的会话", self.enqueue("next_wait")),
+            item(lambda _: "显示" if self.overlay.hidden else "隐藏", self.enqueue("toggle"), default=True),
+            item("会话", menu(sessions)), item("下一个待批", self.enqueue("next_wait")),
             item("键位", self.enqueue("keys")), item("诊断", self.enqueue("diagnostics")),
             menu.SEPARATOR, item("所有项目启用", self.enqueue("global"),
                                  checked=lambda _: hub_install.global_status(home=self.hub.home)["enabled"]),
-            item("单个项目", menu(item("安装到项目…", self.enqueue("install")),
-                                 item("从项目卸载…", self.enqueue("uninstall")))),
+            item("单个项目", menu(item("安装…", self.enqueue("install")),
+                                 item("卸载…", self.enqueue("uninstall")))),
             item("开机自启", self.enqueue("autostart"), checked=lambda _: self.autostart_enabled),
-            item("打开日志文件夹", self.enqueue("logs")), menu.SEPARATOR,
+            item("日志", self.enqueue("logs")), menu.SEPARATOR,
             item("退出", self.enqueue("quit")))
 
     def run(self):
@@ -343,9 +345,7 @@ class TrayApplication:
             self.overlay.root.after(300, self.pump)
 
     def message(self, title, text, *, error=False):
-        from tkinter import messagebox
-        method = messagebox.showerror if error else messagebox.showinfo
-        method(title, text, parent=self.overlay.root)
+        theme.notice(self.overlay.root, title, text, error=error)
 
     def dispatch(self, action, payload=None):
         if action == "show":
@@ -384,13 +384,12 @@ class TrayApplication:
             self.show_report(payload)
 
     def global_action(self, enabled=None):
-        from tkinter import messagebox
         if enabled is None:
             enabled = not hub_install.global_status(home=self.hub.home)["enabled"]
         if enabled:
-            if not messagebox.askyesno("所有项目启用",
-                    "会先备份两份全局配置、换掉旧版 1602 钩子；AgentDeck 没开时 agent 照常在终端确认。",
-                    parent=self.overlay.root):
+            if not theme.confirm(self.overlay.root, "所有项目启用",
+                                 "备份两份全局配置，替换旧版 1602 钩子。\nAgentDeck 未运行时，agent 在终端确认。",
+                                 ok="启用"):
                 return False
             hub_install.remove_legacy_hooks(home=self.hub.home, confirmed=True)
         hub_install.apply("install" if enabled else "uninstall", home=self.hub.home, output=io.StringIO())
@@ -399,30 +398,48 @@ class TrayApplication:
 
     def project_action(self, action):
         from tkinter import filedialog
-        folder = filedialog.askdirectory(title="选择要%s钩子的项目" % ("安装" if action == "install" else "卸载"),
+        folder = filedialog.askdirectory(title="选择项目",
                                          parent=self.overlay.root, mustexist=True)
         if not folder:
             return
         output = io.StringIO()
         hub_install.apply(action, project=folder, output=output)
         self.prefs.project_changed(folder, action == "install")
-        text = "已%s项目钩子：\n%s" % ("安装" if action == "install" else "卸载", folder)
+        text = "已%s\n%s" % ("安装" if action == "install" else "卸载", folder)
         if action == "install":
-            text += "\n\n请重启该项目的 agent 会话；在 Codex 里输入 /hooks，审核并信任 AgentDeck 钩子。"
-        self.message("项目钩子", text + "\n\n" + output.getvalue())
+            text += "\n\n重启该项目的会话，在 Codex 输入 /hooks 并信任。"
+        detail = output.getvalue().strip()
+        self.message("项目钩子", text + ("\n\n" + detail if detail else ""))
 
     def show_keys(self):
         import tkinter as tk
         model = keymap_model(hub.load_json(self.keys_path), self.profile)
-        window = tk.Toplevel(self.overlay.root)
-        window.title("CXT 键位 · %s（只读）" % self.profile)
+        window = theme.style_window(tk.Toplevel(self.overlay.root), "键位")
+        grid = tk.Frame(window, bg=theme.BG, padx=theme.S5, pady=theme.S5)
+        grid.pack()
         for y, row in enumerate(model["rows"]):
             for x, (key, action) in enumerate(row):
-                tk.Label(window, text=key + "\n" + action, width=24, height=4,
-                         relief="groove", wraplength=175).grid(row=y, column=x, padx=3, pady=3, sticky="nsew")
-        for y, actions in enumerate(model["knobs"], 5):
-            tk.Label(window, text="旋钮 %s：顺时针 %s · 逆时针 %s · 按下 %s" % (y - 4, *actions),
-                     wraplength=740, justify="left").grid(row=y, column=0, columnspan=4, sticky="w", padx=8, pady=4)
+                dead = action == "无信号"
+                card = tk.Frame(grid, bg=theme.SURFACE, padx=theme.S3, pady=theme.S3, width=170, height=72)
+                card.grid(row=y, column=x, padx=theme.S1, pady=theme.S1, sticky="nsew")
+                card.grid_propagate(False)
+                theme.label(card, key, color=theme.FAINT if dead else theme.TEXT, size=10, bold=True,
+                            latin=True, bg=theme.SURFACE).pack(anchor="w")
+                if not dead:
+                    theme.label(card, action, color=theme.FAINT if action == "未绑定" else theme.MUTED,
+                                size=9, bg=theme.SURFACE, wraplength=150, justify="left").pack(anchor="w")
+        knobs = tk.Frame(grid, bg=theme.BG)
+        knobs.grid(row=len(model["rows"]), column=0, columnspan=4, sticky="ew", pady=(theme.S3, 0))
+        for number, (cw, ccw, press) in enumerate(model["knobs"]):
+            knobs.columnconfigure(number, weight=1, uniform="knob")
+            card = tk.Frame(knobs, bg=theme.SURFACE, padx=theme.S3, pady=theme.S3)
+            card.grid(row=0, column=number, padx=theme.S1, sticky="nsew")
+            theme.label(card, "旋钮 %d" % (number + 1), color=theme.TEXT, size=10, bold=True,
+                        bg=theme.SURFACE).pack(anchor="w")
+            for mark, value in (("顺", cw), ("逆", ccw), ("按", press)):
+                theme.label(card, "%s  %s" % (mark, value), color=theme.MUTED, size=9, bg=theme.SURFACE,
+                            wraplength=140, justify="left").pack(anchor="w")
+        theme.center(window)
 
     def diagnostics(self):
         import hub_doctor
@@ -439,23 +456,37 @@ class TrayApplication:
 
     def show_report(self, report):
         import tkinter as tk
-        from tkinter.scrolledtext import ScrolledText
-        window = tk.Toplevel(self.overlay.root)
-        window.title("AgentDeck 诊断")
-        text = ScrolledText(window, width=88, height=26, wrap="word")
-        text.insert("1.0", report["text"])
+        window = theme.style_window(tk.Toplevel(self.overlay.root), "诊断", resizable=True)
+        lines = report["text"].splitlines()
+        text = tk.Text(window, width=64, height=min(max(len(lines), 6), 22), wrap="word", bd=0,
+                       highlightthickness=0, bg=theme.BG, fg=theme.TEXT, font=theme.font(10),
+                       padx=theme.S5, pady=theme.S5, spacing1=theme.S1, spacing3=theme.S1,
+                       cursor="arrow", tabs=("230",))
+        text.tag_configure("name", foreground=theme.MUTED, lmargin2=230)
+        text.tag_configure("warn", foreground=theme.STATUS["ASK"])
+        text.tag_configure("plain", lmargin2=230)
+        trouble = ("请", "失败", "缺失", "无法", "未连接", "未收到", "未登录")
+        for line in lines:
+            name, sep, value = line.partition("：")
+            if sep:
+                text.insert("end", name, "name")
+                text.insert("end", "\t" + value + "\n", "warn" if any(w in value for w in trouble) else "plain")
+            else:
+                text.insert("end", line + "\n", "warn")
         text.configure(state="disabled")
-        text.pack(fill="both", expand=True, padx=12, pady=12)
+        text.pack(fill="both", expand=True)
         if report.get("legacy_count"):
-            tk.Button(window, text="移除旧版钩子", command=lambda: self.remove_legacy(window)).pack(pady=8)
+            bar = tk.Frame(window, bg=theme.BG, padx=theme.S5, pady=theme.S4)
+            bar.pack(fill="x")
+            theme.button(bar, "移除旧版钩子", lambda: self.remove_legacy(window), "quiet").pack(side="right")
+        theme.center(window)
 
     def remove_legacy(self, window):
-        from tkinter import messagebox
-        if not messagebox.askyesno("移除旧版钩子", "将先备份全局配置，再只删除 agent_lcd.py 钩子。\n其他配置保持不变。是否继续？",
-                                   parent=window):
+        if not theme.confirm(window, "移除旧版钩子",
+                             "备份全局配置，只删除 agent_lcd.py 钩子，其余不动。", ok="移除"):
             return
         changed = hub_install.remove_legacy_hooks(home=self.hub.home, confirmed=True)
-        self.message("旧版钩子", "已处理 %s 个文件，备份保存在原文件旁（*.bak-agentdeck-时间）。" % len(changed))
+        self.message("旧版钩子", "已处理 %s 个文件，备份在原文件旁。" % len(changed))
         window.destroy()
         self.diagnostics()
 
@@ -466,12 +497,16 @@ class TrayApplication:
                 project["agents"] for project in hub_doctor.installed_projects(self.prefs.projects))):
             return
         import tkinter as tk
-        window = tk.Toplevel(self.overlay.root)
-        window.title("欢迎使用 AgentDeck")
-        tk.Label(window, text="1. 所有项目启用\n\n2. 在 Codex 中输入 /hooks，审核并信任钩子\n\n3. 开始干活，用宏键盘管理会话",
-                 justify="left", padx=24, pady=20).pack()
+        window = theme.style_window(tk.Toplevel(self.overlay.root), "AgentDeck")
+        body = tk.Frame(window, bg=theme.BG, padx=theme.S5 + theme.S3, pady=theme.S5 + theme.S3)
+        body.pack()
+        steps = tk.Frame(body, bg=theme.BG)
+        steps.pack(anchor="w")
+        for number, step in enumerate(("所有项目启用", "在 Codex 输入 /hooks，信任钩子", "开始干活"), 1):
+            theme.label(steps, str(number), color=theme.FAINT, size=16, bold=True, latin=True,
+                        width=2).grid(row=number - 1, column=0, pady=theme.S2)
+            theme.label(steps, step, size=11).grid(row=number - 1, column=1, sticky="w", pady=theme.S2)
         dismissed = tk.BooleanVar(window, value=False)
-        tk.Checkbutton(window, text="不再提示", variable=dismissed).pack(anchor="w", padx=24)
 
         def close():
             self.prefs.values["onboarding_dismissed"] = dismissed.get()
@@ -486,9 +521,13 @@ class TrayApplication:
                 log.exception("全局钩子启用失败")
                 self.message("AgentDeck 操作失败", str(error), error=True)
 
-        tk.Button(window, text="所有项目启用", command=enable).pack(pady=10)
-        tk.Button(window, text="开始使用", command=close).pack(pady=10)
+        actions = tk.Frame(body, bg=theme.BG)
+        actions.pack(fill="x", pady=(theme.S5, 0))
+        theme.checkbox(actions, "不再提示", dismissed).pack(side="left")
+        theme.button(actions, "稍后", close, "plain").pack(side="right", padx=(theme.S2, 0))
+        theme.button(actions, "所有项目启用", enable).pack(side="right")
         window.protocol("WM_DELETE_WINDOW", close)
+        theme.center(window)
 
 
 def repair_global_hooks(home):

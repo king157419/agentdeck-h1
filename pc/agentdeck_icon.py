@@ -5,22 +5,23 @@ from PIL import Image, ImageDraw
 
 
 def create_icon(size=256, color="#26a269"):
-    image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    """Dark rounded tile, a 3x2 key grid, one large status dot. Drawn 4x and downsampled."""
+    big = size * 4
+    image = Image.new("RGBA", (big, big), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
-    scale = size / 256
+    unit = big / 256
 
-    def box(coords):
-        return tuple(round(value * scale) for value in coords)
+    def box(*coords):
+        return tuple(round(value * unit) for value in coords)
 
-    draw.rounded_rectangle(box((12, 35, 244, 221)), radius=round(32 * scale), fill="#202a36")
+    draw.rounded_rectangle(box(6, 6, 250, 250), radius=round(60 * unit), fill="#1b1e25")
     for row in range(2):
         for column in range(3):
-            left, top = 35 + column * 62, 76 + row * 60
-            draw.rounded_rectangle(box((left, top, left + 43, top + 40)),
-                                   radius=max(1, round(8 * scale)), fill="#f2f5f8")
-    draw.ellipse(box((163, 14, 245, 96)), fill=color, outline="#ffffff",
-                 width=max(1, round(7 * scale)))
-    return image
+            left, top = 40 + column * 62, 128 + row * 56
+            draw.rounded_rectangle(box(left, top, left + 50, top + 44), radius=round(10 * unit),
+                                   fill="#d9dde4")
+    draw.ellipse(box(88, 28, 168, 108), fill=color)
+    return image.resize((size, size), Image.LANCZOS)
 
 
 def main():

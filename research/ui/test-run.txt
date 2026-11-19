@@ -1,0 +1,31 @@
+test_agentdeck_app.py: Ran 61 tests in 0.760s  OK 
+test_daemon.py: test_main_schedule_and_lock: PASS test_process_snapshot: PASS daemon offline tests: 10 groups passed 
+test_deck.py: test_hook_fail_open_callback_error_and_reentrancy: PASS test_hook_lifecycle_install_failure_and_observer: PAS
+test_deck_exclusive.py: test_hook_fail_open_callback_error_and_reentrancy: PASS test_hook_lifecycle_install_failure_and_observer: PAS
+test_deck_input.py: test_deck_input_packets: PASS test_deck_input_lifecycle: PASS deck Raw Input offline tests: 4 groups passed
+test_deck_keymap.py: test_show_layer_zero_names_and_encoder_directions: PASS test_real_cli_gate_never_opens_or_sends_even_with_fak
+test_deck_probe.py: test_probe_transport_rejects_writes_and_bad_responses: PASS test_probe_unknown_interfaces_never_open: PASS d
+test_deck_usb.py: test_usb_run_uses_selected_backend_mapping_and_cleans_up: PASS test_usb_learn_prints_hid_key_once_and_cli_sel
+test_focus_lock.py: test_invalid_timeout_and_non_windows_fallback: PASS test_windows_named_mutex_excludes_other_process: PASS fo
+test_hub.py: Ran 144 tests in 4.868s  OK 
+test_hub_app_support.py: Ran 24 tests in 0.572s  OK 
+test_hub_demo.py: Ran 10 tests in 0.056s  OK 
+test_hub_desktop.py: Ran 30 tests in 0.188s  OK 
+test_hub_desktop_mac.py: Ran 35 tests in 0.136s  OK 
+test_hub_doctor.py: Ran 14 tests in 0.355s  OK 
+test_hub_gate.py: Ran 20 tests in 4.001s  OK 
+test_hub_hotkey.py: Ran 36 tests in 0.040s  OK 
+test_hub_input_capture.py: Ran 5 tests in 0.079s  OK 
+test_hub_install.py: Ran 35 tests in 1.630s  OK 
+test_hub_macos_fix.py: Ran 3 tests in 0.060s  OK 
+test_hub_nonce.py: Ran 33 tests in 1.335s  OK 
+test_hub_nonce_integration.py: Ran 16 tests in 0.967s  OK 
+test_hub_overlay.py: Ran 32 tests in 0.179s  OK 
+test_hub_overlay_position.py: Ran 10 tests in 0.028s  OK 
+test_hub_relay.py: Ran 12 tests in 2.020s  OK 
+test_hub_runtime.py: Ran 6 tests in 0.582s  OK 
+test_hub_virtual_device.py: Ran 15 tests in 0.004s  OK 
+test_hub_virtual_nonce_integration.py: Ran 7 tests in 5.130s  OK 
+test_pc.py: test_demo: PASS test_firmware_loop: PASS PC and firmware loop: 4 groups passed 
+test_ui.py: test_bad_commands_glyphs: PASS test_dance: PASS UI: 7 groups passed 
+test_verify_real_session.py: Ran 20 tests in 87.021s  OK 

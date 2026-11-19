@@ -333,17 +333,17 @@ class ApplicationTests(unittest.TestCase):
         rows = [r for r in menu.children() if isinstance(r, MenuItem)]
         by_name = {r.text: r for r in rows if isinstance(r.text, str)}
         for label, action in (("键位", "keys"), ("诊断", "diagnostics"), ("所有项目启用", "global"),
-                              ("打开日志文件夹", "logs"),
-                              ("跳到等我的会话", "next_wait"), ("退出", "quit")):
+                              ("日志", "logs"),
+                              ("下一个待批", "next_wait"), ("退出", "quit")):
             by_name[label].action()
             self.assertEqual(self.queue.get_nowait(), (action, None))
-        self.assertNotIn("安装到项目…", by_name)
-        self.assertNotIn("从项目卸载…", by_name)
+        self.assertNotIn("安装…", by_name)
+        self.assertNotIn("卸载…", by_name)
         for row, action in zip(by_name["单个项目"].action.children(), ("install", "uninstall")):
             row.action()
             self.assertEqual(self.queue.get_nowait(), (action, None))
         self.assertEqual([row.text for row in by_name["单个项目"].action.children()],
-                         ["安装到项目…", "从项目卸载…"])
+                         ["安装…", "卸载…"])
         self.engine.action.assert_not_called()
         self.overlay.show.assert_not_called()
 
@@ -495,12 +495,12 @@ class ApplicationTests(unittest.TestCase):
         self.assertFalse(checked(row))
 
     def test_global_enable_cancel_leaves_home_untouched(self):
-        with patch("tkinter.messagebox.askyesno", return_value=False) as confirm, patch.object(
+        with patch("agentdeck_theme.confirm", return_value=False) as confirm, patch.object(
                 hub_install, "remove_legacy_hooks") as remove, patch.object(hub_install, "apply") as install:
             self.application.dispatch("global")
         confirm.assert_called_once()
-        text = confirm.call_args.args[1]
-        for phrase in ("备份两份全局配置", "旧版 1602 钩子", "AgentDeck 没开", "终端确认"):
+        text = confirm.call_args.args[2]
+        for phrase in ("备份两份全局配置", "旧版 1602 钩子", "AgentDeck 未运行", "终端确认"):
             self.assertIn(phrase, text)
         remove.assert_not_called()
         install.assert_not_called()
@@ -516,7 +516,7 @@ class ApplicationTests(unittest.TestCase):
                     {"type": "command", "command": "python old/agent_lcd.py hook " + agent}]}]}}
             path.write_text(json.dumps(data), encoding="utf-8")
             before[path] = data
-        with patch("tkinter.messagebox.askyesno", return_value=True) as confirm, patch.object(
+        with patch("agentdeck_theme.confirm", return_value=True) as confirm, patch.object(
                 hub_install, "remove_legacy_hooks", wraps=hub_install.remove_legacy_hooks) as remove, patch.object(
                 hub_install, "apply", wraps=hub_install.apply) as install:
             calls = Mock()
@@ -541,7 +541,7 @@ class ApplicationTests(unittest.TestCase):
         self.assertFalse(self.prefs.path.exists())
 
     def test_global_backup_failure_does_not_continue_to_install(self):
-        with patch("tkinter.messagebox.askyesno", return_value=True), patch.object(
+        with patch("agentdeck_theme.confirm", return_value=True), patch.object(
                 hub_install, "remove_legacy_hooks", side_effect=OSError("backup failed")), patch.object(
                 hub_install, "apply") as install:
             with self.assertRaisesRegex(OSError, "backup failed"):
@@ -550,14 +550,14 @@ class ApplicationTests(unittest.TestCase):
 
     def test_legacy_removal_requires_user_confirmation(self):
         window = Mock()
-        with patch("tkinter.messagebox.askyesno", return_value=False), patch("hub_install.remove_legacy_hooks") as remove:
+        with patch("agentdeck_theme.confirm", return_value=False), patch("hub_install.remove_legacy_hooks") as remove:
             self.application.remove_legacy(window)
         remove.assert_not_called()
         window.destroy.assert_not_called()
 
     def test_legacy_removal_passes_explicit_confirmation_and_temp_home(self):
         window = Mock()
-        with patch("tkinter.messagebox.askyesno", return_value=True), patch("hub_install.remove_legacy_hooks", return_value=[]) as remove, patch.object(
+        with patch("agentdeck_theme.confirm", return_value=True), patch("hub_install.remove_legacy_hooks", return_value=[]) as remove, patch.object(
                 self.application, "diagnostics") as diagnostics:
             self.application.remove_legacy(window)
         remove.assert_called_once_with(home=self.home, confirmed=True)
@@ -591,10 +591,12 @@ class ApplicationTests(unittest.TestCase):
     def test_onboarding_global_button_closes_only_after_enable_succeeds(self):
         tk = MagicMock()
         tk.BooleanVar.return_value.get.return_value = False
-        with patch.dict(sys.modules, {"tkinter": tk}):
+        commands = {}
+        with patch.dict(sys.modules, {"tkinter": tk}), patch.object(
+                app.theme, "button", side_effect=lambda parent, text, command, kind="primary", **kw:
+                commands.setdefault(text, command) and MagicMock()):
             self.application.onboarding()
-        button = next(call.kwargs for call in tk.Button.call_args_list
-                      if call.kwargs.get("text") == "所有项目启用")
+        button = {"command": commands["所有项目启用"]}
         with patch.object(self.application, "global_action", return_value=False) as enable:
             button["command"]()
         enable.assert_called_once_with(True)
@@ -626,10 +628,11 @@ class ApplicationTests(unittest.TestCase):
         tk.BooleanVar.return_value.get.return_value = True
         with patch.dict(sys.modules, {"tkinter": tk}), patch("hub_doctor.installed_projects", return_value=[]):
             self.application.onboarding()
-        label = tk.Label.call_args.kwargs["text"]
-        self.assertIn("1. 所有项目启用", label)
-        self.assertIn("/hooks", label)
-        self.assertIn("3. 开始干活", label)
+        labels = [call.kwargs.get("text") for call in tk.Label.call_args_list]
+        self.assertEqual([t for t in labels if t in ("1", "2", "3")], ["1", "2", "3"])
+        self.assertIn("所有项目启用", labels)
+        self.assertTrue(any("/hooks" in str(t) for t in labels))
+        self.assertIn("开始干活", labels)
         close = tk.Toplevel.return_value.protocol.call_args.args[1]
         close()
         self.assertTrue(app.Preferences(self.home).values["onboarding_dismissed"])

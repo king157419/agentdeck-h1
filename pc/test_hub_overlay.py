@@ -9,6 +9,7 @@ import types
 import unittest
 from unittest.mock import Mock, patch
 
+import agentdeck_theme as theme
 from hub_overlay import (COLORS, FOREGROUND, BACKGROUND, TRANSLUCENT_ALPHA, OPAQUE_ALPHA,
                          NoActivateWindow, Overlay, POLL_MS, display_model)
 
@@ -178,9 +179,9 @@ class OverlayActionsTests(unittest.TestCase):
         self.overlay.risk.configure.assert_called_once_with(text="GATE · CRITICAL · press again",
                                                            fg=COLORS["ERR"])
         self.overlay.decision_buttons["approve"].configure.assert_called_once_with(
-            bg=COLORS["RUN"], cursor="hand2")
+            bg=COLORS["RUN"], fg=BACKGROUND, cursor="hand2")
         self.overlay.decision_buttons["deny"].configure.assert_called_once_with(
-            bg=COLORS["ERR"], cursor="hand2")
+            bg=theme.RAISED, fg=COLORS["ERR"], cursor="hand2")
 
     def test_slot_clicks_work_without_keyboard(self):
         self.overlay.model = display_model({"sessions": [{"slot": 4, "name": "app"}]})
@@ -387,7 +388,7 @@ class OverlayViewAndPrefsTests(unittest.TestCase):
         idle_model = display_model({"sessions": [{"slot": 1, "name": "app", "state": "idle"}]})
         self.assertEqual(idle_model["session_count"], 1)
         self.assertEqual(idle_model["pending_count"], 0)
-        self.assertEqual(idle_model["summary_text"], "1 个会话 / 0 个待批")
+        self.assertEqual(idle_model["summary_text"], "1 个会话")
         self.assertFalse(idle_model["expanded"])
 
         pending_model = display_model({
@@ -398,7 +399,7 @@ class OverlayViewAndPrefsTests(unittest.TestCase):
         })
         self.assertEqual(pending_model["session_count"], 2)
         self.assertEqual(pending_model["pending_count"], 1)
-        self.assertEqual(pending_model["summary_text"], "2 个会话 / 1 个待批")
+        self.assertEqual(pending_model["summary_text"], "1 待批")
         self.assertTrue(pending_model["expanded"])
 
     def test_render_collapses_body_when_not_expanded(self):
@@ -409,7 +410,7 @@ class OverlayViewAndPrefsTests(unittest.TestCase):
         self.overlay.model = display_model({"sessions": [{"slot": 1, "name": "app"}]})
         self.overlay._render()
         self.overlay.body.grid_remove.assert_called_once_with()
-        self.overlay.status_label.configure.assert_called_with(text="1 个会话 / 0 个待批", fg=FOREGROUND)
+        self.overlay.status_label.configure.assert_called_with(text="1 个会话", fg=FOREGROUND)
 
         self.overlay.body.reset_mock()
         self.overlay.model = display_model({
@@ -422,7 +423,7 @@ class OverlayViewAndPrefsTests(unittest.TestCase):
         self.overlay.decision_buttons = {"approve": Mock(), "deny": Mock()}
         self.overlay._render()
         self.overlay.body.grid.assert_called_once_with()
-        self.overlay.status_label.configure.assert_called_with(text="0 个会话 / 1 个待批", fg=COLORS["ASK"])
+        self.overlay.status_label.configure.assert_called_with(text="1 待批", fg=COLORS["ASK"])
 
     def test_prefs_save_and_load_position_and_translucency(self):
         self.assertTrue(self.overlay.translucent)
