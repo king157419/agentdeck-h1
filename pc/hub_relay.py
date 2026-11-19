@@ -110,12 +110,15 @@ def main(argv=None, *, stdin=None, stdout=None):
     parser.add_argument("--gate", action="store_true")
     args = parser.parse_args(argv)
     try:
-        event = json.load(sys.stdin if stdin is None else stdin)
+        source = sys.stdin if stdin is None else stdin
+        # Hooks send UTF-8; the console code page (cp1252/GBK) would corrupt Chinese text.
+        data = source.buffer.read() if hasattr(source, "buffer") else source.read()
+        event = json.loads(data.decode("utf-8-sig") if isinstance(data, bytes) else data)
         result = relay(event, args.agent, port=args.port,
                        approve_timeout=args.approve_timeout, home=args.home, gate=args.gate)
-    except Exception:
+    except Exception as error:
         result = None  # unparseable input: cannot classify, do not block
-        _log(args.home, args.agent, None, "invalid hook input or relay failure")
+        _log(args.home, args.agent, None, "invalid hook input or relay failure: %r" % error)
     try:
         if result is not None:
             output = sys.stdout if stdout is None else stdout
