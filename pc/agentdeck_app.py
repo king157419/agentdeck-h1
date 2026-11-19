@@ -1,6 +1,7 @@
 """Windows tray entry point. Importing it never starts Hub or native interfaces."""
 import argparse
 import errno
+import io
 import json
 import logging
 from logging.handlers import RotatingFileHandler
@@ -14,6 +15,7 @@ import sys
 import threading
 
 import hub
+import hub_install
 from hub_overlay import Overlay
 
 
@@ -277,8 +279,10 @@ class TrayApplication:
             item(lambda _: "显示浮窗" if self.overlay.hidden else "隐藏浮窗", self.enqueue("toggle"), default=True),
             item("会话", menu(sessions)), item("跳到等我的会话", self.enqueue("next_wait")),
             item("键位", self.enqueue("keys")), item("诊断", self.enqueue("diagnostics")),
-            menu.SEPARATOR, item("安装到项目…", self.enqueue("install")),
-            item("从项目卸载…", self.enqueue("uninstall")),
+            menu.SEPARATOR, item("所有项目启用", self.enqueue("global"),
+                                 checked=lambda _: hub_install.global_status(home=self.hub.home)["enabled"]),
+            item("单个项目", menu(item("安装到项目…", self.enqueue("install")),
+                                 item("从项目卸载…", self.enqueue("uninstall")))),
             item("开机自启", self.enqueue("autostart"), checked=lambda _: self.autostart_enabled),
             item("打开日志文件夹", self.enqueue("logs")), menu.SEPARATOR,
             item("退出", self.enqueue("quit")))
@@ -362,6 +366,8 @@ class TrayApplication:
             self.show_keys()
         elif action == "diagnostics":
             self.diagnostics()
+        elif action == "global":
+            self.global_action()
         elif action in ("install", "uninstall"):
             self.project_action(action)
         elif action == "autostart":
@@ -377,10 +383,22 @@ class TrayApplication:
         elif action == "report":
             self.show_report(payload)
 
+    def global_action(self, enabled=None):
+        from tkinter import messagebox
+        if enabled is None:
+            enabled = not hub_install.global_status(home=self.hub.home)["enabled"]
+        if enabled:
+            if not messagebox.askyesno("所有项目启用",
+                    "会先备份两份全局配置、换掉旧版 1602 钩子；AgentDeck 没开时 agent 照常在终端确认。",
+                    parent=self.overlay.root):
+                return False
+            hub_install.remove_legacy_hooks(home=self.hub.home, confirmed=True)
+        hub_install.apply("install" if enabled else "uninstall", home=self.hub.home, output=io.StringIO())
+        log.info("全局钩子：%s", "已启用" if enabled else "已停用")
+        return True
+
     def project_action(self, action):
         from tkinter import filedialog
-        import io
-        import hub_install
         folder = filedialog.askdirectory(title="选择要%s钩子的项目" % ("安装" if action == "install" else "卸载"),
                                          parent=self.overlay.root, mustexist=True)
         if not folder:
@@ -433,7 +451,6 @@ class TrayApplication:
 
     def remove_legacy(self, window):
         from tkinter import messagebox
-        import hub_install
         if not messagebox.askyesno("移除旧版钩子", "将先备份全局配置，再只删除 agent_lcd.py 钩子。\n其他配置保持不变。是否继续？",
                                    parent=window):
             return
@@ -444,13 +461,14 @@ class TrayApplication:
 
     def onboarding(self):
         import hub_doctor
-        if self.prefs.values.get("onboarding_dismissed") or any(
-                project["agents"] for project in hub_doctor.installed_projects(self.prefs.projects)):
+        if (self.prefs.values.get("onboarding_dismissed")
+                or hub_install.global_status(home=self.hub.home)["enabled"] or any(
+                project["agents"] for project in hub_doctor.installed_projects(self.prefs.projects))):
             return
         import tkinter as tk
         window = tk.Toplevel(self.overlay.root)
         window.title("欢迎使用 AgentDeck")
-        tk.Label(window, text="1. 安装到项目\n\n2. 在项目的 Codex 中输入 /hooks，审核并信任钩子\n\n3. 开始干活，用宏键盘管理会话",
+        tk.Label(window, text="1. 所有项目启用\n\n2. 在 Codex 中输入 /hooks，审核并信任钩子\n\n3. 开始干活，用宏键盘管理会话",
                  justify="left", padx=24, pady=20).pack()
         dismissed = tk.BooleanVar(window, value=False)
         tk.Checkbutton(window, text="不再提示", variable=dismissed).pack(anchor="w", padx=24)
@@ -460,9 +478,31 @@ class TrayApplication:
             self.prefs.save()
             window.destroy()
 
-        tk.Button(window, text="安装到项目…", command=lambda: self.project_action("install")).pack(pady=10)
+        def enable():
+            try:
+                if self.global_action(True):
+                    close()
+            except Exception as error:
+                log.exception("全局钩子启用失败")
+                self.message("AgentDeck 操作失败", str(error), error=True)
+
+        tk.Button(window, text="所有项目启用", command=enable).pack(pady=10)
         tk.Button(window, text="开始使用", command=close).pack(pady=10)
         window.protocol("WM_DELETE_WINDOW", close)
+
+
+def repair_global_hooks(home):
+    if not getattr(sys, "frozen", False):
+        return False
+    try:
+        if not hub_install.global_status(home=home)["needs_repair"]:
+            return False
+        hub_install.apply("install", home=home, output=io.StringIO())
+        log.info("全局钩子 relay 路径已修复：%s", Path(sys.executable).resolve().with_name("AgentDeck-relay.exe"))
+        return True
+    except Exception:
+        log.exception("全局钩子 relay 路径修复失败")
+        return False
 
 
 def configure_logging(home=None):
@@ -492,6 +532,7 @@ def main(argv=None):
         prefs = Preferences(home)
         profile = args.profile or prefs.values.get("profile", "default")
         keymap_model(hub.load_json(keys), profile)  # Validate before listeners/native inputs.
+        repair_global_hooks(home)
         return hub.main(["--backend", "usb,hotkey", "--overlay", "--require-nonce",
                          "--home", str(home), "--keys", str(keys), "--prompts", str(prompts),
                          "--profile", profile],

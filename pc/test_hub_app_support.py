@@ -1,6 +1,7 @@
 """Offline tray installer and diagnostics checks; no hardware or real user files."""
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -10,6 +11,132 @@ from unittest.mock import patch
 import hub_doctor
 import hub_install
 import install as legacy_install
+
+
+class GlobalStatusTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.home = Path(self.temp.name)
+        real_home = patch.object(Path, "home", side_effect=AssertionError("real home access"))
+        real_home.start()
+        self.addCleanup(real_home.stop)
+        self.relay = self.home / "中文 软件" / "AgentDeck-relay.exe"
+
+    def write_hook(self, agent, *, relay=None, command_agent=None):
+        path = self.home.joinpath(*hub_install.TARGETS[agent])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        entry = {"type": "command", "command": subprocess.list2cmdline(
+            [str(self.relay if relay is None else relay), "--agent", command_agent or agent])}
+        path.write_text(json.dumps({"theme": "keep", "hooks": {"Stop": [{"hooks": [entry]}]}}), encoding="utf-8")
+        return path
+
+    def test_empty_and_partial_global_install_are_disabled_without_writes(self):
+        self.assertEqual(hub_install.global_status(home=self.home),
+                         {"enabled": False, "missing_paths": [], "needs_repair": False, "errors": []})
+        self.assertEqual(list(self.home.iterdir()), [])
+        self.write_hook("cc")
+        with patch.object(hub_install.sys, "frozen", True, create=True), patch.object(
+                hub_install.sys, "executable", str(self.home / "new" / "AgentDeck.exe")):
+            status = hub_install.global_status(home=self.home)
+        self.assertFalse(status["enabled"])
+        self.assertFalse(status["needs_repair"])
+
+    def test_both_configs_require_their_corresponding_agent(self):
+        self.write_hook("cc")
+        path = self.write_hook("cx", command_agent="cc")
+        self.assertFalse(hub_install.global_status(home=self.home)["enabled"])
+        self.write_hook("cx")
+        self.assertTrue(hub_install.global_status(home=self.home)["enabled"])
+        path.unlink()
+        self.assertFalse(hub_install.global_status(home=self.home)["enabled"])
+
+    def test_current_frozen_paths_with_spaces_and_chinese_are_enabled_and_read_only(self):
+        self.relay.parent.mkdir()
+        self.relay.write_bytes(b"placeholder")
+        for agent in hub_install.TARGETS:
+            self.write_hook(agent)
+        before = {path: path.read_bytes() for path in self.home.rglob("*") if path.is_file()}
+        with patch.object(hub_install.sys, "frozen", True, create=True), patch.object(
+                hub_install.sys, "executable", str(self.relay.with_name("AgentDeck.exe"))):
+            self.assertEqual(hub_install.global_status(home=self.home),
+                             {"enabled": True, "missing_paths": [], "needs_repair": False, "errors": []})
+        self.assertEqual(before, {path: path.read_bytes() for path in self.home.rglob("*") if path.is_file()})
+
+    def test_missing_relay_keeps_enabled_and_reports_each_path_once(self):
+        for agent in hub_install.TARGETS:
+            path = self.write_hook(agent)
+            data = json.loads(path.read_text(encoding="utf-8"))
+            data["hooks"]["SessionStart"] = data["hooks"]["Stop"]
+            path.write_text(json.dumps(data), encoding="utf-8")
+        status = hub_install.global_status(home=self.home)
+        self.assertTrue(status["enabled"])
+        self.assertEqual(status["missing_paths"], [str(self.relay)])
+
+    def test_frozen_folder_move_requires_repair_even_if_old_relay_still_exists(self):
+        self.relay.parent.mkdir()
+        self.relay.write_bytes(b"placeholder")
+        for agent in hub_install.TARGETS:
+            self.write_hook(agent)
+        with patch.object(hub_install.sys, "frozen", True, create=True), patch.object(
+                hub_install.sys, "executable", str(self.home / "new folder" / "AgentDeck.exe")):
+            status = hub_install.global_status(home=self.home)
+        self.assertTrue(status["enabled"])
+        self.assertTrue(status["needs_repair"])
+        self.assertEqual(status["missing_paths"], [])
+        with patch.object(hub_install.sys, "frozen", False, create=True):
+            self.assertFalse(hub_install.global_status(home=self.home)["needs_repair"])
+
+    def test_one_stale_hook_or_source_hook_requires_frozen_repair(self):
+        for agent in hub_install.TARGETS:
+            self.write_hook(agent)
+        path = self.home.joinpath(*hub_install.TARGETS["cx"])
+        with patch.object(hub_install.sys, "frozen", False, create=True):
+            source = hub_install.command("cx")
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["hooks"]["Stop"][0]["hooks"].append({"type": "command", "command": source})
+        path.write_text(json.dumps(data), encoding="utf-8")
+        with patch.object(hub_install.sys, "frozen", True, create=True), patch.object(
+                hub_install.sys, "executable", str(self.relay.with_name("AgentDeck.exe"))):
+            self.assertTrue(hub_install.global_status(home=self.home)["needs_repair"])
+
+    @unittest.skipUnless(os.name == "nt", "Windows paths ignore case and slash direction")
+    def test_frozen_windows_path_comparison_ignores_case_and_slash_direction(self):
+        for agent in hub_install.TARGETS:
+            self.write_hook(agent, relay=str(self.relay).upper().replace("\\", "/"))
+        with patch.object(hub_install.sys, "frozen", True, create=True), patch.object(
+                hub_install.sys, "executable", str(self.relay.with_name("AgentDeck.exe"))):
+            self.assertFalse(hub_install.global_status(home=self.home)["needs_repair"])
+
+    def test_invalid_global_config_is_disabled_and_reports_error(self):
+        self.write_hook("cc")
+        path = self.write_hook("cx")
+        for text in ("{bad", "[]", '{"hooks":[]}', '{"hooks":{"Stop":{}}}',
+                     '{"hooks":{"Stop":[{}]}}', '{"hooks":{"Stop":[{"hooks":"bad"}]}}'):
+            with self.subTest(text=text):
+                path.write_text(text, encoding="utf-8")
+                status = hub_install.global_status(home=self.home)
+                self.assertFalse(status["enabled"])
+                self.assertEqual(len(status["errors"]), 1)
+                self.assertIn(str(path), status["errors"][0])
+                self.assertEqual(path.read_text(encoding="utf-8"), text)
+
+    def test_app_report_includes_global_disabled_enabled_and_invalid_path_states(self):
+        def report():
+            with patch.object(hub_doctor, "doctor", return_value=0):
+                return hub_doctor.app_report(home=self.home,
+                    usb_probe=lambda: {"connected": False}, serial_probe=lambda home: "未确认")
+
+        self.assertIn("全局钩子：未启用", report()["text"])
+        for agent in hub_install.TARGETS:
+            self.write_hook(agent)
+        self.assertIn("全局钩子：路径失效", report()["text"])
+        self.relay.parent.mkdir()
+        self.relay.write_bytes(b"placeholder")
+        self.assertIn("全局钩子：已启用", report()["text"])
+        with patch.object(hub_install.sys, "frozen", True, create=True), patch.object(
+                hub_install.sys, "executable", str(self.home / "new" / "AgentDeck.exe")):
+            self.assertIn("全局钩子：路径失效", report()["text"])
 
 
 class AppSupportTests(unittest.TestCase):

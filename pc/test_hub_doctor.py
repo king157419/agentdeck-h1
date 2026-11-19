@@ -149,6 +149,24 @@ class DoctorTests(unittest.TestCase):
         self.assertEqual(before, {path.relative_to(self.home): path.read_bytes()
                                  for path in self.home.rglob("*") if path.is_file()})
 
+    def test_cli_reports_global_enabled_disabled_and_invalid_path_states(self):
+        relay = self.home / "软件目录" / "AgentDeck-relay.exe"
+        relay.parent.mkdir()
+        relay.touch()
+        with patch.object(hub_install.sys, "frozen", True, create=True), patch.object(
+                hub_install.sys, "executable", str(relay.with_name("AgentDeck.exe"))):
+            hub_install.apply("install", home=self.home, output=io.StringIO())
+            self.run_doctor()
+            self.assertIn("全局钩子：已启用", self.output.getvalue())
+            relay.unlink()
+            self.output = io.StringIO()
+            self.run_doctor()
+            self.assertIn("全局钩子：路径失效", self.output.getvalue())
+            hub_install.apply("uninstall", home=self.home, agents=("cx",), output=io.StringIO())
+            self.output = io.StringIO()
+            self.run_doctor()
+            self.assertIn("全局钩子：未启用", self.output.getvalue())
+
     def test_empty_home_advice_without_creating_files_or_logging_in(self):
         self.home = self.home / "missing home"
         self.responses["/health"] = OSError("offline")

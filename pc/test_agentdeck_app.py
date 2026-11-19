@@ -1,5 +1,6 @@
 """Offline tray behavior checks: all OS, registry, sockets and GUI effects replaced."""
 import errno
+import io
 import json
 from pathlib import Path
 from queue import SimpleQueue
@@ -310,6 +311,9 @@ class ApplicationTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.home = Path(self.temp.name)
+        self.home_guard = patch.object(Path, "home", side_effect=AssertionError("real home access"))
+        self.home_guard.start()
+        self.addCleanup(self.home_guard.stop)
         self.engine = Mock(home=self.home)
         self.engine.lock = threading.RLock()
         self.engine.state.return_value = {"sessions": []}
@@ -328,11 +332,18 @@ class ApplicationTests(unittest.TestCase):
         menu = self.application.menu(SimpleNamespace(Menu=Menu, MenuItem=MenuItem))
         rows = [r for r in menu.children() if isinstance(r, MenuItem)]
         by_name = {r.text: r for r in rows if isinstance(r.text, str)}
-        for label, action in (("键位", "keys"), ("诊断", "diagnostics"), ("安装到项目…", "install"),
-                              ("从项目卸载…", "uninstall"), ("打开日志文件夹", "logs"),
+        for label, action in (("键位", "keys"), ("诊断", "diagnostics"), ("所有项目启用", "global"),
+                              ("打开日志文件夹", "logs"),
                               ("跳到等我的会话", "next_wait"), ("退出", "quit")):
             by_name[label].action()
             self.assertEqual(self.queue.get_nowait(), (action, None))
+        self.assertNotIn("安装到项目…", by_name)
+        self.assertNotIn("从项目卸载…", by_name)
+        for row, action in zip(by_name["单个项目"].action.children(), ("install", "uninstall")):
+            row.action()
+            self.assertEqual(self.queue.get_nowait(), (action, None))
+        self.assertEqual([row.text for row in by_name["单个项目"].action.children()],
+                         ["安装到项目…", "从项目卸载…"])
         self.engine.action.assert_not_called()
         self.overlay.show.assert_not_called()
 
@@ -470,6 +481,73 @@ class ApplicationTests(unittest.TestCase):
         install.assert_not_called()
         self.assertFalse(self.prefs.path.exists())
 
+    def test_global_checkmark_reads_both_configs_each_time_instead_of_preferences(self):
+        self.prefs.values["global_enabled"] = True
+        menu = self.application.menu(SimpleNamespace(Menu=Menu, MenuItem=MenuItem))
+        row = next(row for row in menu.children() if isinstance(row, MenuItem) and row.text == "所有项目启用")
+        checked = row.options["checked"]
+        self.assertFalse(checked(row))
+        hub_install.apply("install", home=self.home, agents=("cc",), output=io.StringIO())
+        self.assertFalse(checked(row))
+        hub_install.apply("install", home=self.home, agents=("cx",), output=io.StringIO())
+        self.assertTrue(checked(row))
+        hub_install.apply("uninstall", home=self.home, agents=("cc",), output=io.StringIO())
+        self.assertFalse(checked(row))
+
+    def test_global_enable_cancel_leaves_home_untouched(self):
+        with patch("tkinter.messagebox.askyesno", return_value=False) as confirm, patch.object(
+                hub_install, "remove_legacy_hooks") as remove, patch.object(hub_install, "apply") as install:
+            self.application.dispatch("global")
+        confirm.assert_called_once()
+        text = confirm.call_args.args[1]
+        for phrase in ("备份两份全局配置", "旧版 1602 钩子", "AgentDeck 没开", "终端确认"):
+            self.assertIn(phrase, text)
+        remove.assert_not_called()
+        install.assert_not_called()
+        self.assertEqual(list(self.home.iterdir()), [])
+
+    def test_global_enable_migrates_legacy_with_backups_and_disable_does_not_restore_it(self):
+        before = {}
+        foreign = {"type": "command", "command": "echo keep"}
+        for agent, folders in hub_install.TARGETS.items():
+            path = self.home.joinpath(*folders)
+            path.parent.mkdir(parents=True)
+            data = {"custom": True, "hooks": {"Stop": [{"hooks": [foreign,
+                    {"type": "command", "command": "python old/agent_lcd.py hook " + agent}]}]}}
+            path.write_text(json.dumps(data), encoding="utf-8")
+            before[path] = data
+        with patch("tkinter.messagebox.askyesno", return_value=True) as confirm, patch.object(
+                hub_install, "remove_legacy_hooks", wraps=hub_install.remove_legacy_hooks) as remove, patch.object(
+                hub_install, "apply", wraps=hub_install.apply) as install:
+            calls = Mock()
+            calls.attach_mock(remove, "remove")
+            calls.attach_mock(install, "apply")
+            self.application.dispatch("global")
+            self.assertEqual([call[0] for call in calls.mock_calls], ["remove", "apply"])
+            remove.assert_called_once_with(home=self.home, confirmed=True)
+            self.assertEqual(install.call_args.args, ("install",))
+            self.assertEqual(install.call_args.kwargs["home"], self.home)
+            self.assertTrue(hub_install.global_status(home=self.home)["enabled"])
+            self.application.dispatch("global")
+            confirm.assert_called_once()
+            remove.assert_called_once()
+            self.assertEqual(install.call_args.args, ("uninstall",))
+        self.assertFalse(hub_install.global_status(home=self.home)["enabled"])
+        for path, original in before.items():
+            self.assertIn(original, [json.loads(backup.read_text(encoding="utf-8"))
+                          for backup in path.parent.glob(path.name + ".bak-agentdeck-*")])
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")),
+                             {"custom": True, "hooks": {"Stop": [{"hooks": [foreign]}]}})
+        self.assertFalse(self.prefs.path.exists())
+
+    def test_global_backup_failure_does_not_continue_to_install(self):
+        with patch("tkinter.messagebox.askyesno", return_value=True), patch.object(
+                hub_install, "remove_legacy_hooks", side_effect=OSError("backup failed")), patch.object(
+                hub_install, "apply") as install:
+            with self.assertRaisesRegex(OSError, "backup failed"):
+                self.application.global_action()
+        install.assert_not_called()
+
     def test_legacy_removal_requires_user_confirmation(self):
         window = Mock()
         with patch("tkinter.messagebox.askyesno", return_value=False), patch("hub_install.remove_legacy_hooks") as remove:
@@ -503,6 +581,34 @@ class ApplicationTests(unittest.TestCase):
             self.application.onboarding()
         tk.Toplevel.assert_called_once()
 
+    def test_global_installation_skips_onboarding_without_registered_projects(self):
+        hub_install.apply("install", home=self.home, output=io.StringIO())
+        with patch("tkinter.Toplevel") as window, patch("hub_doctor.installed_projects") as installed:
+            self.application.onboarding()
+        window.assert_not_called()
+        installed.assert_not_called()
+
+    def test_onboarding_global_button_closes_only_after_enable_succeeds(self):
+        tk = MagicMock()
+        tk.BooleanVar.return_value.get.return_value = False
+        with patch.dict(sys.modules, {"tkinter": tk}):
+            self.application.onboarding()
+        button = next(call.kwargs for call in tk.Button.call_args_list
+                      if call.kwargs.get("text") == "所有项目启用")
+        with patch.object(self.application, "global_action", return_value=False) as enable:
+            button["command"]()
+        enable.assert_called_once_with(True)
+        tk.Toplevel.return_value.destroy.assert_not_called()
+        with patch.object(self.application, "global_action", side_effect=OSError("backup failed")), self.assertLogs(
+                app.log, level="ERROR"):
+            button["command"]()
+        self.application.message.assert_called_once_with("AgentDeck 操作失败", "backup failed", error=True)
+        tk.Toplevel.return_value.destroy.assert_not_called()
+        with patch.object(self.application, "global_action", return_value=True) as enable:
+            button["command"]()
+        enable.assert_called_once_with(True)
+        tk.Toplevel.return_value.destroy.assert_called_once()
+
     def test_diagnostics_queues_report_for_gui_thread(self):
         report = {"text": "USB 未连接", "legacy_count": 0}
 
@@ -521,7 +627,7 @@ class ApplicationTests(unittest.TestCase):
         with patch.dict(sys.modules, {"tkinter": tk}), patch("hub_doctor.installed_projects", return_value=[]):
             self.application.onboarding()
         label = tk.Label.call_args.kwargs["text"]
-        self.assertIn("1. 安装到项目", label)
+        self.assertIn("1. 所有项目启用", label)
         self.assertIn("/hooks", label)
         self.assertIn("3. 开始干活", label)
         close = tk.Toplevel.return_value.protocol.call_args.args[1]
@@ -550,15 +656,86 @@ class ApplicationTests(unittest.TestCase):
         self.overlay.root.after.assert_called_with(300, self.application.pump)
 
 
+class GlobalRepairTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.home = Path(self.temp.name)
+        self.old = self.home / "旧目录" / "AgentDeck.exe"
+        self.current = self.home / "新目录 with spaces" / "AgentDeck.exe"
+        self.current.parent.mkdir()
+        self.current.with_name("AgentDeck-relay.exe").touch()
+        guard = patch.object(Path, "home", side_effect=AssertionError("real home access"))
+        guard.start()
+        self.addCleanup(guard.stop)
+
+    def install_at(self, executable, agents=("cc", "cx")):
+        with patch.object(sys, "frozen", True, create=True), patch.object(sys, "executable", str(executable)):
+            hub_install.apply("install", home=self.home, agents=agents, output=io.StringIO())
+
+    def test_moved_bundle_repairs_both_configs_once_without_confirmation(self):
+        self.install_at(self.old)
+        before = {self.home.joinpath(*folders): self.home.joinpath(*folders).read_bytes()
+                  for folders in hub_install.TARGETS.values()}
+        with patch.object(sys, "frozen", True, create=True), patch.object(sys, "executable", str(self.current)), patch(
+                "tkinter.messagebox.askyesno") as confirm, patch.object(
+                hub_install, "remove_legacy_hooks") as remove, self.assertLogs(app.log, level="INFO") as logs:
+            self.assertTrue(app.repair_global_hooks(self.home))
+            self.assertFalse(app.repair_global_hooks(self.home))
+            self.assertTrue(hub_install.global_status(home=self.home)["enabled"])
+            self.assertFalse(hub_install.global_status(home=self.home)["needs_repair"])
+        confirm.assert_not_called()
+        remove.assert_not_called()
+        self.assertIn("全局钩子 relay 路径已修复", "\n".join(logs.output))
+        for path, raw in before.items():
+            backups = list(path.parent.glob(path.name + ".bak-agentdeck-*"))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(backups[0].read_bytes(), raw)
+            data = json.loads(path.read_text(encoding="utf-8"))
+            for groups in data["hooks"].values():
+                for group in groups:
+                    for entry in group["hooks"]:
+                        self.assertEqual(Path(hub_install.relay_info(entry)["paths"][0]),
+                                         self.current.with_name("AgentDeck-relay.exe"))
+
+    def test_partial_or_absent_installation_is_not_enabled_automatically(self):
+        with patch.object(sys, "frozen", True, create=True), patch.object(sys, "executable", str(self.current)):
+            self.assertFalse(app.repair_global_hooks(self.home))
+        self.install_at(self.old, agents=("cc",))
+        with patch.object(sys, "frozen", True, create=True), patch.object(sys, "executable", str(self.current)), patch.object(
+                hub_install, "apply") as install:
+            self.assertFalse(app.repair_global_hooks(self.home))
+        install.assert_not_called()
+        self.assertFalse(self.home.joinpath(*hub_install.TARGETS["cx"]).exists())
+
+    def test_source_launch_never_rewrites_global_paths(self):
+        self.install_at(self.old)
+        with patch.object(sys, "frozen", False, create=True), patch.object(hub_install, "global_status") as status, patch.object(
+                hub_install, "apply") as install:
+            self.assertFalse(app.repair_global_hooks(self.home))
+        status.assert_not_called()
+        install.assert_not_called()
+
+    def test_repair_failure_is_logged_without_interrupting_startup(self):
+        self.install_at(self.old)
+        with patch.object(sys, "frozen", True, create=True), patch.object(sys, "executable", str(self.current)), patch.object(
+                hub_install, "apply", side_effect=OSError("read only")), self.assertLogs(app.log, level="ERROR") as logs:
+            self.assertFalse(app.repair_global_hooks(self.home))
+        self.assertIn("路径修复失败", "\n".join(logs.output))
+        self.assertIn("read only", "\n".join(logs.output))
+
+
 class EntryPointTests(unittest.TestCase):
     def test_secondary_launch_never_loads_configuration_or_starts_hub(self):
         instance = Mock()
         instance.acquire.return_value = False
-        with patch.object(app, "SingleInstance", return_value=instance), patch.object(app, "prepare_configs") as configs, patch.object(
-                app.hub, "main") as main:
-            self.assertEqual(app.main([]), 0)
+        with tempfile.TemporaryDirectory() as directory, patch.object(app, "SingleInstance", return_value=instance), patch.object(
+                app, "prepare_configs") as configs, patch.object(app.hub, "main") as main, patch.object(
+                app, "repair_global_hooks") as repair:
+            self.assertEqual(app.main(["--home", directory]), 0)
         configs.assert_not_called()
         main.assert_not_called()
+        repair.assert_not_called()
         instance.close.assert_called_once()
 
     def test_primary_launch_calls_in_process_hub_with_required_inputs_and_ui_factory(self):
@@ -577,8 +754,10 @@ class EntryPointTests(unittest.TestCase):
                 return 0
 
             with patch.object(app, "SingleInstance", return_value=instance), patch.object(app, "TrayApplication", return_value=controller) as tray, patch.object(
+                    app, "repair_global_hooks") as repair, patch.object(
                     app.hub, "main", side_effect=run_hub):
                 self.assertEqual(app.main(["--home", directory, "--profile", "v2_emulation"]), 0)
+            repair.assert_called_once_with(Path(directory).resolve())
             self.assertEqual(tray.call_args.args, (engine,))
             self.assertEqual(tray.call_args.kwargs["profile"], "v2_emulation")
             self.assertTrue((Path(directory) / ".agentdeck" / "logs" / "app.log").exists())

@@ -65,6 +65,11 @@ def _logged_in(result):
     return isinstance(data, dict) and data.get("loggedIn") is True
 
 
+def _global_label(status):
+    return ("未启用" if not status["enabled"] else
+            "路径失效" if status["missing_paths"] or status["needs_repair"] else "已启用")
+
+
 def doctor(*, port=47800, home=None, stdout=None, connection_factory=None,
            runner=None, wall_time=None, checks=None):
     """Print read-only checks (two extra on macOS); return 0 only if healthy."""
@@ -103,6 +108,7 @@ def doctor(*, port=47800, home=None, stdout=None, connection_factory=None,
     check("Token file", bool(token), str(path) if token else
           "start Hub to create a nonempty token at %s" % path)
 
+    stdout.write("全局钩子：" + _global_label(hub_install.global_status(home=home)) + "\n")
     for agent, folders in hub_install.TARGETS.items():
         path = home.joinpath(*folders)
         try:
@@ -267,28 +273,25 @@ def app_report(*, home=None, projects=(), port=47800, usb_probe=None, serial_pro
         usb = {"connected": None, "driver": None}
         lines.append("键盘 USB / 接口 0 驱动：无法确认（%s）" % error)
     lines.append("COM4 占用：" + ((serial_probe or serial_log_status)(home)))
+    global_hooks = hub_install.global_status(home=home)
+    lines.append("全局钩子：" + _global_label(global_hooks))
+    lines.extend(global_hooks["errors"])
     legacy_count = 0
-    global_missing = []
+    global_missing = global_hooks["missing_paths"]
     for folders in hub_install.TARGETS.values():
         path = home.joinpath(*folders)
         try:
             entries = _entries(path)
         except FileNotFoundError:
             continue
-        except (OSError, ValueError, UnicodeError) as error:
-            lines.append("无法读取全局配置 %s：%s" % (path, error))
+        except (OSError, ValueError, UnicodeError):
             continue
         legacy_count += sum(hub_install.is_legacy(entry) for entry in entries)
-        for entry in entries:
-            info = hub_install.relay_info(entry)
-            if info:
-                global_missing.extend(target for target in info["paths"]
-                                      if not Path(target).is_file() and not shutil.which(target))
     lines.append("全局旧版 agent_lcd.py 钩子：%s 条（仅在点击移除并确认后备份、删除）" % legacy_count)
     lines.append("项目钩子：")
     installed = [project for project in projects if project["agents"]]
     if not installed:
-        lines.append("尚无已登记且安装钩子的项目，请用托盘“安装到项目…”选择文件夹")
+        lines.append("尚无已登记且安装钩子的项目")
     for project in projects:
         names = ["Claude" if agent == "cc" else "Codex" for agent in project["agents"]]
         lines.append("%s：%s" % (project["path"], "、".join(names) if names else "未发现 AgentDeck 钩子"))
@@ -299,4 +302,5 @@ def app_report(*, home=None, projects=(), port=47800, usb_probe=None, serial_pro
         lines.append("全局钩子路径已失效：%s；请检查原安装位置" % target)
     lines.append("Codex 需要在项目里输入 /hooks 信任；安装或修改钩子后请重开会话并再次信任。")
     return {"text": "\n".join(lines), "legacy_count": legacy_count, "projects": projects,
-            "usb": usb, "checks": checks, "global_missing_paths": global_missing}
+            "usb": usb, "checks": checks, "global_missing_paths": global_missing,
+            "global_hooks": global_hooks}

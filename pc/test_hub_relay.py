@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -179,14 +180,14 @@ class RelayTests(unittest.TestCase):
 
     def test_main_preserves_text_and_silences_failures(self):
         output = io.StringIO()
-        with patch.object(hub_relay, "relay", return_value=b'{ "a": 1 }\n'):
-            self.assertEqual(hub_relay.main(["--agent", "cc"], stdin=io.StringIO("{}"),
+        with tempfile.TemporaryDirectory() as directory, patch.object(hub_relay, "relay", return_value=b'{ "a": 1 }\n'):
+            self.assertEqual(hub_relay.main(["--agent", "cc", "--home", directory], stdin=io.StringIO("{}"),
                                            stdout=output), 0)
         self.assertEqual(output.getvalue(), '{ "a": 1 }\n')
         for value in ("bad json", "{}"):
             output = io.StringIO()
-            with patch.object(hub_relay, "relay", side_effect=TimeoutError):
-                self.assertEqual(hub_relay.main(["--agent", "cc"], stdin=io.StringIO(value),
+            with tempfile.TemporaryDirectory() as directory, patch.object(hub_relay, "relay", side_effect=TimeoutError):
+                self.assertEqual(hub_relay.main(["--agent", "cc", "--home", directory], stdin=io.StringIO(value),
                                                stdout=output), 0)
             self.assertEqual(output.getvalue(), "")
 
@@ -208,11 +209,19 @@ class RelayTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             (home / ".agentdeck").mkdir()
-            (home / ".agentdeck" / "token").write_text("secret")
-            process = subprocess.run(["D:/conda/miniconda3/python.exe", str(Path(hub_relay.__file__)),
-                                      "--agent", "cc", "--home", str(home), "--port", "0"],
-                                     input="{}", capture_output=True, text=True, timeout=5)
-            self.assertEqual((process.returncode, process.stdout, process.stderr), (0, "", ""))
+            token = home / ".agentdeck" / "token"
+            for has_token in (False, True):
+                if has_token:
+                    token.write_text("secret", encoding="utf-8")
+                for agent in ("cc", "cx"):
+                    with self.subTest(has_token=has_token, agent=agent):
+                        start = time.perf_counter()
+                        process = subprocess.run(["D:/conda/miniconda3/python.exe", str(Path(hub_relay.__file__)),
+                                                  "--agent", agent, "--home", str(home), "--port", "0"],
+                            input=json.dumps({"hook_event_name": "PermissionRequest", "session_id": "offline"}),
+                            capture_output=True, text=True, timeout=5)
+                        self.assertEqual((process.returncode, process.stdout, process.stderr), (0, "", ""))
+                        self.assertLess(time.perf_counter() - start, 1.5)
 
     def run_gate_process(self, stdin, home):
         return subprocess.run(["D:/conda/miniconda3/python.exe", str(Path(hub_relay.__file__)),

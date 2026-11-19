@@ -103,6 +103,51 @@ def is_gate(entry):
     return is_ours(entry) and "--gate" in split_command(entry["command"])
 
 
+def global_status(*, home=None):
+    """Read both global configs; presence and relay path health are separate."""
+    root = Path.home() if home is None else Path(home)
+    present, missing, errors = [], [], []
+    moved = False
+    expected = (Path(sys.executable).resolve().with_name("AgentDeck-relay.exe")
+                if getattr(sys, "frozen", False) else None)
+    for agent, folders in TARGETS.items():
+        path = root.joinpath(*folders)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
+            if not isinstance(data, dict) or not isinstance(data.get("hooks", {}), dict):
+                raise ValueError("hook configuration must contain an object")
+            entries = []
+            for groups in data.get("hooks", {}).values():
+                if not isinstance(groups, list):
+                    raise ValueError("event hooks must be lists")
+                for group in groups:
+                    if not isinstance(group, dict) or not isinstance(group.get("hooks"), list):
+                        raise ValueError("each matcher group must contain a hooks list")
+                    entries.extend(group["hooks"])
+        except FileNotFoundError:
+            present.append(False)
+            continue
+        except (OSError, ValueError, UnicodeError) as error:
+            errors.append("无法读取全局配置 %s：%s" % (path, error))
+            present.append(False)
+            continue
+        infos = [info for entry in entries if (info := relay_info(entry)) is not None]
+        present.append(any(info["agent"] == agent for info in infos))
+        for info in infos:
+            for target in info["paths"]:
+                candidate = Path(target)
+                exists = candidate.is_file() if candidate.is_absolute() else bool(shutil.which(target))
+                if not exists and target not in missing:
+                    missing.append(target)
+            if expected is not None:
+                moved |= (len(info["paths"]) != 1 or
+                          os.path.normcase(os.path.abspath(info["paths"][0])) !=
+                          os.path.normcase(str(expected)))
+    enabled = all(present)
+    return {"enabled": enabled, "missing_paths": missing,
+            "needs_repair": enabled and moved, "errors": errors}
+
+
 def is_legacy(entry):
     """Only the old Python LCD hook invocation, not mentions inside another hook."""
     if not isinstance(entry, dict) or entry.get("type") != "command":
