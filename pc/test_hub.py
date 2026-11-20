@@ -44,7 +44,7 @@ class Desktop:
         self.calls.append(("focus", session["session_id"]))
         return (1, "codex.exe", "project")
 
-    def interrupt(self, session, sessions):
+    def interrupt(self, session, sessions, layer=None):
         self.calls.append(("interrupt", session["session_id"]))
 
     def voice(self, session, sessions):
@@ -764,12 +764,13 @@ class HubTests(unittest.TestCase):
                 callback = hub.USBKeys(self.engine, monotonic=self.clock)
                 if backend == "raw":
                     reader = RawKeys(callback, monotonic=self.clock)
-                    reader({"kind": "keyboard", "device": 1, "vkey": 0x48, "down": True})
+                    reader({"kind": "keyboard", "device": 1, "vkey": 0x11, "down": True})
+                    reader({"kind": "keyboard", "device": 1, "vkey": 0x56, "down": True})  # Ctrl+V
                 else:
                     reader = KeyboardInput(callback, monotonic=self.clock,
                                            usb_factory=lambda *a, **kw: None,
                                            raw_factory=lambda *a, **kw: None)
-                    for event in ReportState().feed(bytes([0, 0, 0x0B, 0, 0, 0, 0, 0])):
+                    for event in ReportState().feed(bytes([1, 0, 0x19, 0, 0, 0, 0, 0])):  # Ctrl+V
                         event["t"] = self.clock.value
                         reader(event)
                 self.assertTrue(desktop.voice_active)
@@ -1045,8 +1046,8 @@ class HubTests(unittest.TestCase):
         self.engine.action({"action": "approve"})
         thread, result = self.permission(command="sudo test")
         callback = hub.USBKeys(self.engine, monotonic=self.clock)
-        event = {"down": True, "keys": ["hid:0x0A"], "pressed": [0x0A],
-                 "modifiers": (), "t": self.clock()}
+        event = {"down": True, "keys": ["hid:0x2B"], "pressed": [0x2B],
+                 "modifiers": (), "t": self.clock()}  # v9: Tab = approve
         callback(event)
         self.assertEqual(len(self.engine.audit.recent()), 1)  # Arming is not a decision.
         callback(event)
@@ -1101,22 +1102,25 @@ class HubTests(unittest.TestCase):
                 callback(event)
 
         thread, result = self.permission()
-        feed([0, 0, 0x0A, 0, 0, 0, 0, 0])
+        feed([0, 0, 0x2B, 0, 0, 0, 0, 0])  # v9: Tab = approve
         thread.join(1)
         self.decision(result, "allow")
         before = len(self.desktop.calls)
-        feed([0, 0, 0x0A, 0, 0, 0, 0, 0])
+        feed([0, 0, 0x2B, 0, 0, 0, 0, 0])
         feed([0, 0, 0, 0, 0, 0, 0, 0])
-        feed([1, 0, 0x0B, 0, 0, 0, 0, 0])  # Ctrl+H must not become voice.
+        feed([1, 0, 0x0B, 0, 0, 0, 0, 0])  # Ctrl+H is unbound and must not become voice.
         self.assertEqual(len(self.desktop.calls), before)
         feed([0, 0, 0, 0, 0, 0, 0, 0])
-        feed([0, 0, 0x0B, 0, 0, 0, 0, 0])
+        feed([0, 0, 0x19, 0, 0, 0, 0, 0])  # Plain V is the knob-3 press, not voice.
+        self.assertEqual(len(self.desktop.calls), before)
+        feed([0, 0, 0, 0, 0, 0, 0, 0])
+        feed([1, 0, 0x19, 0, 0, 0, 0, 0])  # v9: Ctrl+V = voice
         self.assertEqual(self.desktop.calls[-1][0], "voice_down")
         before = len(self.desktop.calls)
-        stale = {"down": True, "keys": ["hid:0x0B"], "pressed": [0x0B],
-                 "modifiers": (), "t": self.clock() - 2}
+        stale = {"down": True, "keys": ["ctrl+hid:0x19"], "pressed": [0x19],
+                 "modifiers": ("ctrl",), "new_modifiers": ("ctrl",), "t": self.clock() - 2}
         callback(stale)
-        callback(dict(stale, t=self.clock(), pressed=[0x0B, 0x08]))
+        callback(dict(stale, t=self.clock(), pressed=[0x19, 0x08]))
         self.assertEqual(len(self.desktop.calls), before)
 
     def test_usb_pairs_release_even_after_modifiers_and_pressed_keys_change(self):
@@ -1139,8 +1143,9 @@ class HubTests(unittest.TestCase):
     def test_usb_voice_release_cannot_be_lost_to_a_stale_timestamp(self):
         self.event("SessionStart")
         callback = hub.USBKeys(self.engine, monotonic=self.clock)
-        event = {"down": True, "usage": 0x0B, "keys": ["hid:0x0B"], "pressed": [0x0B],
-                 "modifiers": (), "t": self.clock()}
+        event = {"down": True, "usage": 0x19, "keys": ["ctrl+hid:0x19"], "pressed": [0x19],
+                 "modifiers": ("ctrl",), "new_modifiers": ("ctrl",),
+                 "t": self.clock()}  # v9: Ctrl+V = voice
         callback(event)
         callback(event)  # A repeated callback cannot start a second guard.
         self.clock.value += 2
@@ -1151,8 +1156,8 @@ class HubTests(unittest.TestCase):
     def test_usb_unaccepted_press_has_no_release_action(self):
         self.event("SessionStart")
         callback = hub.USBKeys(self.engine, monotonic=self.clock)
-        event = {"down": True, "usage": 0x0B, "keys": ["hid:0x0B"], "pressed": [0x0B, 0x08],
-                 "modifiers": (), "t": self.clock()}
+        event = {"down": True, "usage": 0x19, "keys": ["ctrl+hid:0x19"], "pressed": [0x19, 0x08],
+                 "modifiers": ("ctrl",), "new_modifiers": ("ctrl",), "t": self.clock()}
         callback(event)
         self.engine.action({"action": "voice_down"})  # Independently started via HTTP.
         callback(dict(event, down=False, pressed=[]))

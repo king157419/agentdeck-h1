@@ -6,6 +6,7 @@ The Windows tests briefly create real Tk windows and call GetMessageW directly.
 import ctypes
 import io
 import logging
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -353,7 +354,8 @@ class VirtualDeviceWakeTests(unittest.TestCase):
         self.check_lifecycle(fail_setup=True)
 
 
-@unittest.skipUnless(sys.platform == "win32", "Windows GetMessageW notifier regression")
+@unittest.skipUnless(sys.platform == "win32" and os.environ.get("AGENTDECK_LIVE_TESTS") == "1",
+                     "Set AGENTDECK_LIVE_TESTS=1 for real Windows GetMessageW checks")
 class WindowsMessageWakeTests(unittest.TestCase):
     def setUp(self):
         from ctypes import wintypes

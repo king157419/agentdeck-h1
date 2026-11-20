@@ -189,7 +189,8 @@ class WatchdogWiringTests(unittest.TestCase):
         self.assertIn("UI 已恢复", text)
 
 
-@unittest.skipUnless(sys.platform == "win32", "Windows window styles")
+@unittest.skipUnless(sys.platform == "win32" and os.environ.get("AGENTDECK_LIVE_TESTS") == "1",
+                     "Set AGENTDECK_LIVE_TESTS=1 for real Windows overlay checks")
 class LiveOverlayTests(unittest.TestCase):
     """F3 + F6 with real Tk: tool-window bits survive alpha; no false stall."""
 
@@ -263,6 +264,8 @@ class NoRegistry:
         return False
 
 
+@unittest.skipUnless(os.environ.get("AGENTDECK_LIVE_TESTS") == "1",
+                     "Set AGENTDECK_LIVE_TESTS=1 for real Tk windows")
 class RealTkWindowTests(unittest.TestCase):
     """The status window, driver guide and overlay menu build with real Tk."""
 

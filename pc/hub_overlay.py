@@ -38,6 +38,80 @@ ANSWER_HINTS = {"AskUserQuestion": "需回答", "ExitPlanMode": "确认计划"}
 PREVIEW_COLS = 46
 PREVIEW_ROWS = 8
 ACTIVITY_CHARS = 20
+STRIP_WIDTH, STRIP_ROW_HEIGHT = 28, 22
+CARD_WIDTH = 340
+FEEDBACK_WIDTH, FEEDBACK_HEIGHT = 220, 28
+FEEDBACK_SECONDS = .9
+LAYER_NAMES = {"agent": "Agent", "chat": "聊天", "browser": "浏览器",
+               "video": "视频", "default": "默认"}
+ROW2_LABELS = {"agent": ("继续", "跑测试", "总结", "到最新"),
+               "chat": ("未读（待实现）", "找人", "填入收到", "到最新"),
+               "browser": ("后退", "地址栏", "关标签", "刷新"),
+               "video": ("播放/暂停", "上一条", "下一条", "全屏"),
+               "default": ("后退", "Tab", "关闭", "到底")}
+
+
+def _v9_display(state, sessions, request, now):
+    """Pure v9 presentation data; selection and all application I/O stay in Hub."""
+    pending = list(state.get("pending", ())) + list(state.get("locked", ()))
+    approval_sessions = {(item.get("agent"), item.get("session_id")) for item in pending}
+    order = state.get("session_card", {}).get("order") or state.get("display_order")
+    if not isinstance(order, list):
+        def priority(session):
+            identity = (session.get("agent"), session.get("session_id"))
+            if identity in approval_sessions or session.get("state") == "locked":
+                rank = 0
+            elif session.get("needs_answer") or session.get("state") == "wait":
+                rank = 1
+            else:
+                rank = {"error": 2, "done": 3, "think": 4, "tool": 4}.get(session.get("state"), 5)
+            return rank, -session.get("last_updated", 0), session.get("slot", 0)
+        order = [session["slot"] for session in sorted(sessions.values(), key=priority)]
+    order = list(dict.fromkeys(number for number in order if number in sessions))
+    selected = state.get("session_card", {}).get("selected_slot", state.get("selected_slot"))
+    opening = state.get("session_card", {}).get("opening_slot")
+    entries = []
+    for number in order:
+        session = sessions[number]
+        approval = ((session.get("agent"), session.get("session_id")) in approval_sessions
+                    or session.get("state") == "locked")
+        word = ("批" if approval else "问" if session.get("needs_answer") or session.get("state") == "wait"
+                else {"error": "错", "done": "完", "think": "跑", "tool": "跑"}.get(session.get("state"), "闲"))
+        color = COLORS["ASK"] if word in ("批", "问") else COLORS[STATES.get(session.get("state"), "IDLE")]
+        title = session_label(session)
+        entries.append({"slot": number, "word": word, "color": color,
+                        "title": title[:18] + ("…" if len(title) > 18 else ""),
+                        "selected": selected == number, "opening": opening == number})
+    session_card, list_card = state.get("session_card", {}), state.get("list_card", {})
+    help_open = state.get("overlay_help") is True
+    question = next((session for session in sessions.values() if session.get("needs_answer")), None)
+    mode = ("help" if help_open else "sessions" if session_card.get("open") else
+            "list" if list_card.get("open") else "approval" if request is not None else
+            "question" if question else None)
+    approval = None
+    if request is not None:
+        raw = next((item for item in pending if item.get("id") == request["id"]), {})
+        owner = next((session for session in sessions.values() if
+                      (session.get("agent"), session.get("session_id")) ==
+                      (raw.get("agent"), raw.get("session_id"))), None)
+        title = session_label(owner) if owner else str(raw.get("session_title") or raw.get("name") or "会话")
+        first_line = str(raw.get("summary", "")).splitlines()[0] if raw.get("summary") else ""
+        text = " · ".join(part for part in (title, str(raw.get("tool_name") or raw.get("tool") or ""), first_line) if part)
+        approval = {"text": text[:59] + "…" if len(text) > 60 else text,
+                    "position": "%d/%d" % (pending.index(raw) + 1, len(pending)) if raw in pending else "",
+                    "request": request}
+    layer = state.get("layer", "default")
+    row2 = (("选项 1", "选项 2", "选项 3", "选项 4") if layer == "agent" and question
+            else ROW2_LABELS.get(layer, ROW2_LABELS["default"]))
+    help_rows = [("Claude/Codex", "微信", "飞书", "浏览器"), row2,
+                 ("上个窗口", "复制", "粘贴", "浮窗/帮助"),
+                 ("打断/Esc", "截图", "发送", "清空"), ("批准", "拒绝", "语音", "空")]
+    return {"strip_entries": entries[:6], "card_entries": entries[:7], "card_mode": mode,
+            "approval": approval, "question": question, "help_rows": help_rows,
+            "list_card": list_card, "layer": layer, "layer_name": LAYER_NAMES.get(layer, layer),
+            "layer_notice": (now is not None and isinstance(state.get("layer_changed_at"), (int, float))
+                             and 0 <= now - state["layer_changed_at"] < 1),
+            "panes": state.get("panes", {}), "strip_visible": state.get("overlay_visible", True)}
 
 
 class TkWaker:
@@ -268,9 +342,12 @@ def display_model(state, now=None):
     last = state.get("last_input")
     feedback = None
     if (isinstance(last, dict) and isinstance(last.get("text"), str) and now is not None
-            and isinstance(last.get("at"), (int, float)) and 0 <= now - last["at"] < INPUT_NOTICE_SECONDS):
+            and isinstance(last.get("at"), (int, float))
+            and 0 <= now - last["at"] < (FEEDBACK_SECONDS if "layer" in state else INPUT_NOTICE_SECONDS)):
         feedback = {"text": last["text"], "ok": last.get("ok") is not False,
                     "compact": last.get("compact") is True}
+        if "layer" in state or "kind" in last:
+            feedback["kind"] = last.get("kind", "success" if last.get("ok") is not False else "error")
     reader = state.get("input_reader")
     return {
         "slots": slots,
@@ -289,7 +366,99 @@ def display_model(state, now=None):
                    "宏键盘未连接 · 批准请在应用里点" if state.get("deck_connected") is False else
                    ABSENT_NOTICE if reader == "absent" else ""),
         "notice_action": reader == "raw",
+        **_v9_display(state, sessions, detail, now),
     }
+
+
+def _clip_columns(text, columns):
+    text = str(text)
+    if _text_width(text) <= columns:
+        return text
+    while text and _text_width(text) + 1 > columns:
+        text = text[:-1]
+    return text + "…"
+
+
+def paint_strip(canvas, model, *, dual=False):
+    """Canvas-only drawing also runs against the offline preview adapter."""
+    entries = model["strip_entries"]
+    width = CARD_WIDTH if dual else STRIP_WIDTH
+    height = max(1, len(entries)) * STRIP_ROW_HEIGHT
+    canvas.configure(width=width, height=height, bg=BACKGROUND)
+    canvas.delete("all")
+    canvas.create_rectangle(0, 0, width - 1, height - 1, outline=theme.BORDER)
+    for index, entry in enumerate(entries):
+        y = index * STRIP_ROW_HEIGHT + STRIP_ROW_HEIGHT // 2
+        canvas.create_oval(3, y - 2, 7, y + 2, fill=entry["color"], outline="")
+        text = (entry["word"] + "  " + entry["title"]) if dual else entry["word"]
+        canvas.create_text(10, y, text=text, anchor="w", fill=FOREGROUND, font=theme.font(9))
+    if not entries:
+        canvas.create_text(14 if not dual else 10, 11, text="闲" if not dual else "暂无会话",
+                           anchor="center" if not dual else "w", fill=theme.MUTED, font=theme.font(9))
+    return width, height
+
+
+def paint_card(canvas, model):
+    mode = model["card_mode"]
+    entries = model["card_entries"]
+    title = {"help": model["layer_name"] + " · 键位", "sessions": "会话 · 按旋钮打开",
+             "list": model["list_card"].get("title", "列表 · 按旋钮确认"),
+             "approval": "等待批准", "question": "Agent 在提问"}.get(mode, "")
+    if mode == "help":
+        height = 218
+    elif mode == "sessions":
+        height = 36 + max(1, len(entries)) * 26
+    elif mode == "list":
+        height = 36 + max(1, min(7, len(model["list_card"].get("items", [])))) * 26
+    else:
+        height = 116
+    canvas.configure(width=CARD_WIDTH, height=height, bg=BACKGROUND)
+    canvas.delete("all")
+    canvas.create_rectangle(0, 0, CARD_WIDTH - 1, height - 1, outline=theme.BORDER)
+    canvas.create_text(12, 17, text=title, anchor="w", fill=theme.MUTED, font=theme.font(9, True))
+    if mode == "help":
+        for row, labels in enumerate(model["help_rows"]):
+            for column, label in enumerate(labels):
+                x, y = 10 + column * 81, 36 + row * 26
+                canvas.create_rectangle(x, y, x + 77, y + 22, fill=theme.SURFACE, outline=theme.BORDER)
+                canvas.create_text(x + 38, y + 11, text=label, fill=FOREGROUND, font=theme.font(8))
+        canvas.create_text(12, 182, text="旋钮  1 窗口  2 会话  3 滚动  4 列表", anchor="w",
+                           fill=theme.MUTED, font=theme.font(9))
+        canvas.create_text(12, 202, text="按住帮助转旋钮移动 · 松手保存", anchor="w",
+                           fill=theme.MUTED, font=theme.font(9))
+    elif mode == "sessions":
+        for index, entry in enumerate(entries):
+            y = 36 + index * 26
+            if entry["selected"]:
+                canvas.create_rectangle(6, y - 1, CARD_WIDTH - 7, y + 23, fill=theme.RAISED, outline="")
+            canvas.create_oval(12, y + 8, 18, y + 14, fill=entry["color"], outline="")
+            text = "正在打开…" if entry["opening"] else entry["word"] + "  " + entry["title"]
+            canvas.create_text(26, y + 11, text=text, anchor="w", fill=FOREGROUND, font=theme.font(10))
+        if not entries:
+            canvas.create_text(12, 49, text="暂无会话", anchor="w", fill=theme.MUTED, font=theme.font(10))
+    elif mode == "list":
+        items = model["list_card"].get("items", [])
+        selected = model["list_card"].get("selected", 0)
+        start = max(0, selected - 6)
+        for index, item in enumerate(items[start:start + 7], start):
+            y = 36 + (index - start) * 26
+            if index == selected:
+                canvas.create_rectangle(6, y - 1, CARD_WIDTH - 7, y + 23, fill=theme.RAISED, outline="")
+            label = item.get("label", item.get("title", "")) if isinstance(item, dict) else item
+            canvas.create_text(12, y + 11, text=_clip_columns(label, 38), anchor="w",
+                               fill=FOREGROUND, font=theme.font(10))
+    elif mode == "approval" and model["approval"]:
+        approval = model["approval"]
+        canvas.create_text(CARD_WIDTH - 12, 17, text=approval["position"], anchor="e",
+                           fill=COLORS["ASK"], font=theme.font(9))
+        text = "\n".join(wrap_tail(approval["text"], cols=38, rows=4))
+        canvas.create_text(12, 38, text=text, anchor="nw", fill=FOREGROUND, font=theme.font(10))
+    elif mode == "question":
+        question = model["question"] or {}
+        text = str(question.get("last_text") or question.get("question") or "请在应用中查看问题")
+        canvas.create_text(12, 38, text="\n".join(wrap_tail(plain_text(text), cols=38, rows=4)),
+                           anchor="nw", fill=FOREGROUND, font=theme.font(10))
+    return CARD_WIDTH, height
 
 
 class NoActivateWindow:
@@ -299,8 +468,9 @@ class NoActivateWindow:
     WM_MOUSEACTIVATE with MA_NOACTIVATE, preserving the click for label controls.
     """
 
-    def __init__(self, user=None):
+    def __init__(self, user=None, *, transparent=False):
         self.user = ctypes.WinDLL("user32", use_last_error=True) if user is None else user
+        self.transparent = transparent
         pointer = ctypes.c_ssize_t
         self.proc_type = getattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE)(
             pointer, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
@@ -394,7 +564,7 @@ class NoActivateWindow:
         if not self.hwnd:
             return False
         style = self.get_long(self.hwnd, -20)
-        wanted = (style | 0x08000000 | 0x80) & ~0x40000
+        wanted = (style | 0x08000000 | 0x80 | (0x20 if self.transparent else 0)) & ~0x40000
         if wanted == style:
             return False
         self._set(-20, wanted)
@@ -412,7 +582,7 @@ class NoActivateWindow:
         if not self.hwnd:
             return False
         style = self.get_long(self.hwnd, -20)
-        wanted = (style | 0x80000 | 0x08000000 | 0x80) & ~0x40000  # LAYERED + tool + noactivate
+        wanted = (style | 0x80000 | 0x08000000 | 0x80 | (0x20 if self.transparent else 0)) & ~0x40000
         if wanted != style:
             self._set(-20, wanted)
         layered = getattr(self.user, "SetLayeredWindowAttributes", None)
@@ -425,7 +595,7 @@ class NoActivateWindow:
     def apply(self, child):
         self.hwnd = self.user.GetAncestor(child, 2) or child  # GA_ROOT
         style = self.get_long(self.hwnd, -20)
-        self._set(-20, (style | 0x08000000 | 0x80) & ~0x40000)
+        self._set(-20, (style | 0x08000000 | 0x80 | (0x20 if self.transparent else 0)) & ~0x40000)
         self.proc = self.proc_type(self._message)
         self.old_proc = self._set(-4, ctypes.cast(self.proc, ctypes.c_void_p).value)
         if not self.user.SetWindowPos(self.hwnd, wintypes.HWND(-1), 0, 0, 0, 0,
@@ -433,6 +603,8 @@ class NoActivateWindow:
             raise ctypes.WinError(ctypes.get_last_error())
 
     def _message(self, hwnd, message, wparam, lparam):
+        if message == 0x84 and self.transparent:  # WM_NCHITTEST / HTTRANSPARENT
+            return -1
         if message == 0x21:  # WM_MOUSEACTIVATE
             self.remember()
             return 3  # MA_NOACTIVATE: deliver the click, keep foreground unchanged
@@ -536,6 +708,222 @@ class Overlay:
         self._tasks = self._completed = self._worker = None
         self._worker_stop = threading.Event()
         self._state_pending = False
+        self._v9_ready = False
+        self._v9_state = {}
+        self._v9_now = 0.
+        self._v9_windows = {}
+        self._v9_outlines = []
+        self._strip_visible = True
+        self._dock = 0
+        self._dock_explicit = False
+        self._move_seen = self._save_seen = 0
+        self._approval_card_until = float("-inf")
+        self._last_feedback = None
+        self._feedback_seen = {}
+
+    def _new_v9_window(self, *, outline=False):
+        import tkinter as tk
+        top = tk.Toplevel(self.root)
+        top.withdraw()
+        top.overrideredirect(True)
+        top.attributes("-topmost", True)
+        background = "#ff00ff" if outline else BACKGROUND
+        top.configure(bg=background)
+        if outline and os.name == "nt":
+            top.attributes("-transparentcolor", background)
+        canvas = tk.Canvas(top, bg=background, highlightthickness=0, bd=0, takefocus=False)
+        canvas.pack(fill="both", expand=True)
+        top.update_idletasks()
+        native = NoActivateWindow(transparent=True) if os.name == "nt" else None
+        if native is not None:
+            native.apply(top.winfo_id())
+            if not outline:
+                native.set_alpha(1.0)
+        return top, canvas, native
+
+    def _build(self):
+        import tkinter as tk
+        self.root.overrideredirect(True)
+        self.root.attributes("-topmost", True)
+        self.root.configure(bg=BACKGROUND)
+        self._strip_canvas = tk.Canvas(self.root, width=STRIP_WIDTH, height=STRIP_ROW_HEIGHT,
+                                       bg=BACKGROUND, highlightthickness=0, bd=0, takefocus=False)
+        self._strip_canvas.pack(fill="both", expand=True)
+        self._v9_windows = {kind: self._new_v9_window() for kind in ("card", "feedback")}
+        self._v9_ready = True
+
+    @staticmethod
+    def _popup_place(popup, x, y, width, height):
+        top, canvas, native = popup
+        if native is not None:
+            top.geometry("%dx%d" % (width, height))
+            top.update_idletasks()
+            native.place(int(x), int(y), width, height)
+        else:
+            # Positive origins are usual outside Windows; native placement above
+            # keeps signed monitor coordinates absolute on Windows.
+            top.geometry("%dx%d%+d%+d" % (width, height, x, y))
+        top.deiconify()
+        if native is not None:
+            native.show()
+
+    def _dock_bounds(self, areas, width, height):
+        monitor, position = divmod(self._dock % (6 * len(areas)), 6)
+        left, top, right, bottom = areas[monitor]
+        x = right - width if position < 3 else left
+        # Top docks sit below a maximized window's title bar so its close/restore buttons stay visible.
+        y = ((top + bottom - height) // 2 if position % 3 == 0 else
+             min(top + 56, bottom - height) if position % 3 == 1 else bottom - height)
+        return int(x), int(y), (left, top, right, bottom)
+
+    def move_dock(self, direction=1, *, save=False):
+        areas = self._work_areas()
+        if areas:
+            self._dock = (self._dock + direction) % (6 * len(areas))
+        self._dock_explicit = True
+        if save:
+            self._save_prefs()
+
+    def _render_v9(self):
+        state, now = self._v9_state, self._v9_now
+        areas = self._work_areas()
+        if not areas:
+            return
+        if not self._dock_explicit:
+            primary = next((i for i, area in enumerate(areas)
+                            if area[0] <= 0 < area[2] and area[1] <= 0 < area[3]), 0)
+            secondary = next((i for i in range(len(areas)) if i != primary), primary)
+            self._dock = 6 * secondary + (1 if len(areas) > 1 else 0)
+        moves, saves = state.get("overlay_move_requests", 0), state.get("overlay_save_requests", 0)
+        if type(moves) is int and moves != self._move_seen:
+            self.move_dock(moves - self._move_seen)
+            self._move_seen = moves
+        if type(saves) is int and saves != self._save_seen:
+            self._save_prefs()
+            self._save_seen = saves
+        self._strip_visible = self.model["strip_visible"]
+        width, height = paint_strip(self._strip_canvas, self.model, dual=len(areas) > 1)
+        x, y, area = self._dock_bounds(areas, width, height)
+        bounds = (x, y, width, height)
+        if getattr(self, "_v9_bounds", None) != bounds:
+            self.width, self._height = width, height
+            self._pos, self._areas = (x, y), areas
+            if callable(getattr(type(self.window), "place", None)):
+                self.root.geometry("%dx%d" % (width, height))
+                self.root.update_idletasks()
+                self.window.place(x, y, width, height)
+            else:
+                self.root.geometry("%dx%d%+d%+d" % bounds)
+            self._v9_bounds = bounds
+        if self._strip_visible:
+            if self.hidden:
+                self.show(transient=False)
+        elif not self.hidden:
+            self._withdraw()
+        mode = self.model["card_mode"]
+        if mode == "approval" and not self._strip_visible and now >= self._approval_card_until:
+            mode = None
+        card = self._v9_windows["card"]
+        card_visible = mode is not None
+        if card_visible:
+            card_width, card_height = paint_card(card[1], self.model)
+            px = x - card_width - 6 if x > (area[0] + area[2]) // 2 else x + width + 6
+            px = max(area[0], min(px, area[2] - card_width))
+            py = max(area[1], min(y, area[3] - card_height))
+            self._popup_place(card, px, py, card_width, card_height)
+            self._v9_card_bottom = py + card_height
+        else:
+            card[0].withdraw()
+            self._v9_card_bottom = y
+        request = self.model.get("request")
+        if card_visible and mode == "approval" and request is not None:
+            self._display_call(lambda: self.hub.record_rendered(request["id"], request.get("nonce"), source="overlay"))
+        else:
+            self._display_call(lambda: self.hub.hide_display("overlay"))
+        self._render_v9_feedback(now, x, y, width, area)
+        self._render_v9_panes(now)
+
+    def _render_v9_feedback(self, now, x, y, width, area):
+        feedback = self.model.get("feedback")
+        if feedback and feedback.get("kind") == "noop":
+            signature = feedback["text"]
+            at = self._v9_state.get("last_input", {}).get("at")
+            key = (signature, at)
+            if key != self._last_feedback:
+                previous = self._feedback_seen.get(signature, float("-inf"))
+                self._suppressed_feedback = now - previous < 3
+                if not self._suppressed_feedback:
+                    self._feedback_seen[signature] = at if isinstance(at, (int, float)) else now
+                self._last_feedback = key
+            if getattr(self, "_suppressed_feedback", False):
+                feedback = None
+        popup = self._v9_windows["feedback"]
+        if feedback:
+            text = feedback["text"]
+            color = {"success": COLORS["RUN"], "noop": theme.MUTED,
+                     "error": COLORS["ERR"], "pending": theme.MUTED}.get(feedback.get("kind"), theme.MUTED)
+        elif self.model["layer_notice"]:
+            text, color = self.model["layer_name"], theme.MUTED
+        else:
+            popup[0].withdraw()
+            return
+        canvas = popup[1]
+        canvas.configure(width=FEEDBACK_WIDTH, height=FEEDBACK_HEIGHT, bg=BACKGROUND)
+        canvas.delete("all")
+        canvas.create_rectangle(0, 0, FEEDBACK_WIDTH - 1, FEEDBACK_HEIGHT - 1, outline=theme.BORDER)
+        canvas.create_text(8, FEEDBACK_HEIGHT // 2, text=_clip_columns(text, 29), anchor="w",
+                           fill=color, font=theme.font(9))
+        px = x - FEEDBACK_WIDTH - 6 if x > (area[0] + area[2]) // 2 else x + width + 6
+        px = max(area[0], min(px, area[2] - FEEDBACK_WIDTH))
+        py = min(area[3] - FEEDBACK_HEIGHT,
+                 max(y + (self._height or 22), getattr(self, "_v9_card_bottom", y)) + 4)
+        self._popup_place(popup, px, py, FEEDBACK_WIDTH, FEEDBACK_HEIGHT)
+
+    def _render_v9_panes(self, now):
+        panes = self.model.get("panes") or {}
+        items = panes.get("items", []) if isinstance(panes, dict) else []
+        if not (isinstance(panes.get("until"), (int, float)) and now < panes["until"]):
+            items = []
+        while len(self._v9_outlines) < min(4, len(items)):
+            self._v9_outlines.append(self._new_v9_window(outline=True))
+        for index, popup in enumerate(self._v9_outlines):
+            if index >= len(items):
+                popup[0].withdraw()
+                continue
+            item = items[index]
+            rect = item.get("rect")
+            if not isinstance(rect, (tuple, list)) or len(rect) != 4:
+                popup[0].withdraw()
+                continue
+            left, top, right, bottom = map(int, rect)
+            if right <= left or bottom <= top:
+                popup[0].withdraw()
+                continue
+            canvas = popup[1]
+            canvas.delete("all")
+            width, height = right - left, bottom - top
+            canvas.configure(width=width, height=height)
+            selected = panes.get("selected") == index
+            color = COLORS["RUN"] if selected else theme.MUTED
+            canvas.create_rectangle(2, 2, width - 3, height - 3, outline=color, width=3 if selected else 1)
+            canvas.create_rectangle(6, 6, 110, 29, fill=BACKGROUND, outline="")
+            name = item.get("name") or ("左" if index == 0 else "右" if index == len(items) - 1 else "中")
+            canvas.create_text(12, 17, text="%s %d" % (name, index + 1), anchor="w", fill=color, font=theme.font(10))
+            self._popup_place(popup, left, top, width, height)
+
+    def _poll_v9(self):
+        if self._tasks is None:
+            state = self.hub.state()
+        else:
+            self._drain_completed()
+            state = self.state
+        self._v9_state, self._v9_now = state, time.time()
+        active = self._request_ids(state)
+        if active - self._active_ids:
+            self._approval_card_until = self._v9_now + 3
+        self._active_ids = active
+        self.model = display_model(state, self._v9_now)
+        self._render_v9()
 
     def _start_background(self):
         """Keep Hub locks and native desktop work out of Tk callbacks."""
@@ -744,12 +1132,17 @@ class Overlay:
         if type(data.get("corner")) is int and 0 <= data["corner"] < 4:
             self.corner = data["corner"]
         self._corner_anchored = data.get("corner_anchored") is True
+        if type(data.get("dock")) is int and data["dock"] >= 0:
+            self._dock = data["dock"]
+            self._dock_explicit = True
 
     def _save_prefs(self):
         if self.state_path is None:
             return
         data = {"translucent": self.translucent, "corner": self.corner,
                 "corner_anchored": self._corner_anchored}
+        if self._dock_explicit:
+            data["dock"] = self._dock
         if self._pos is not None:
             data["x"], data["y"] = int(self._pos[0]), int(self._pos[1])
         try:
@@ -780,6 +1173,8 @@ class Overlay:
                 return None
             payload["request_id"] = request_id
             payload["nonce"] = nonce
+            if self._v9_ready:
+                payload["card_guard"] = True
         if self._tasks is not None:
             if received_at is None:
                 received_at = self.hub.monotonic()
@@ -971,7 +1366,7 @@ class Overlay:
         if enabled:
             self.dispatch(action, request_id, nonce, received_at=pressed_at)
 
-    def _build(self):
+    def _build_legacy(self):
         import tkinter as tk
         pad, gap = theme.S3, theme.S2
         self.width = self._panel_width()
@@ -1095,6 +1490,8 @@ class Overlay:
         self.note.grid(row=8, column=0, sticky="ew", pady=(gap, 0))
 
     def _render(self):
+        if self._v9_ready:
+            return self._render_v9()
         feedback = self.model.get("feedback")
         compact = feedback and feedback.get("compact")
         if self.status_label is not None:
@@ -1215,42 +1612,45 @@ class Overlay:
         previous_active = set(self._active_ids)
         previous_dismissed = set(self._dismissed_requests)
         try:
-            if self._tasks is None:
-                state = self.hub.state()
+            if self._v9_ready:
+                self._poll_v9()
             else:
-                self._drain_completed()
-                state = self.state
-            active_ids = self._request_ids(state)
-            self._active_ids = active_ids
-            self._dismissed_requests &= active_ids
-            now = time.time()
-            visible = self._should_show(state, now)
-            self.model = display_model(state, now=now)
-            self._render()
-            self.root.update_idletasks()
-            compact = (self.model.get("feedback") or {}).get("compact")
-            previous_compact = (previous_model.get("feedback") or {}).get("compact")
-            if self._height is not None and not (compact or previous_compact):
-                height = self.root.winfo_reqheight()
-                if height != self._height or self._work_areas() != self._areas:
-                    anchor = (self.root.winfo_y() + self._height
-                              if self._anchor_bottom is None else self._anchor_bottom)
-                    x = self._runtime_x if self._runtime_x is not None else self.root.winfo_x()
-                    y = (self._pos[1] if self._corner_anchored and self.corner in (1, 2)
-                         and self._pos is not None else anchor - height)
-                    self._place(x, y, height)
-            if visible and self.hidden:
-                self.show(transient=False)
-            elif not visible and not self.hidden:
-                self._withdraw()
-            request = self.model["request"]
-            # Startup and hidden states keep the window withdrawn; acknowledge only visible pixels.
-            if not self.hidden and self.root.state() != "withdrawn":
-                self._display_call(lambda: self.hub.record_rendered(
-                    request["id"] if request else None,
-                    request.get("nonce") if request else None, source="overlay"))
-            elif self.hidden:
-                self._display_call(lambda: self.hub.hide_display('overlay'))
+                if self._tasks is None:
+                    state = self.hub.state()
+                else:
+                    self._drain_completed()
+                    state = self.state
+                active_ids = self._request_ids(state)
+                self._active_ids = active_ids
+                self._dismissed_requests &= active_ids
+                now = time.time()
+                visible = self._should_show(state, now)
+                self.model = display_model(state, now=now)
+                self._render()
+                self.root.update_idletasks()
+                compact = (self.model.get("feedback") or {}).get("compact")
+                previous_compact = (previous_model.get("feedback") or {}).get("compact")
+                if self._height is not None and not (compact or previous_compact):
+                    height = self.root.winfo_reqheight()
+                    if height != self._height or self._work_areas() != self._areas:
+                        anchor = (self.root.winfo_y() + self._height
+                                  if self._anchor_bottom is None else self._anchor_bottom)
+                        x = self._runtime_x if self._runtime_x is not None else self.root.winfo_x()
+                        y = (self._pos[1] if self._corner_anchored and self.corner in (1, 2)
+                             and self._pos is not None else anchor - height)
+                        self._place(x, y, height)
+                if visible and self.hidden:
+                    self.show(transient=False)
+                elif not visible and not self.hidden:
+                    self._withdraw()
+                request = self.model["request"]
+                # Startup and hidden states keep the window withdrawn; acknowledge only visible pixels.
+                if not self.hidden and self.root.state() != "withdrawn":
+                    self._display_call(lambda: self.hub.record_rendered(
+                        request["id"] if request else None,
+                        request.get("nonce") if request else None, source="overlay"))
+                elif self.hidden:
+                    self._display_call(lambda: self.hub.hide_display('overlay'))
         except KeyboardInterrupt:
             self._interrupted = True
             self.stop()
@@ -1292,7 +1692,7 @@ class Overlay:
         try:
             import tkinter as tk
             if self.window is None and os.name == "nt":
-                self.window = NoActivateWindow()
+                self.window = NoActivateWindow(transparent=True)
             if callable(getattr(type(self.window), "begin_dpi", None)):
                 self.window.begin_dpi()
             self.root = tk.Tk()
@@ -1302,21 +1702,24 @@ class Overlay:
                 self._waker = TkWaker(int(self.root.winfo_id()))
                 self._waker.start()
             self._build()
+            if self._v9_ready and self.window is not None:
+                self.window.apply(self.root.winfo_id())
             self._start_background()
             self._starting = True
             self._poll()
             self.root.update_idletasks()
-            height = self.root.winfo_reqheight()
-            if self.window is not None:
-                self.window.apply(self.root.winfo_id())
-            areas = self._work_areas()
-            if self._pos is not None:
-                x, y = self._pos
-            else:
-                _, _, right, bottom = next((a for a in areas if a[0] <= 0 < a[2]
-                                           and a[1] <= 0 < a[3]), areas[0])
-                x, y = right - self.width - 24, bottom - height - 24
-            self._place(x, y, height)
+            if not self._v9_ready:
+                height = self.root.winfo_reqheight()
+                if self.window is not None:
+                    self.window.apply(self.root.winfo_id())
+                areas = self._work_areas()
+                if self._pos is not None:
+                    x, y = self._pos
+                else:
+                    _, _, right, bottom = next((a for a in areas if a[0] <= 0 < a[2]
+                                               and a[1] <= 0 < a[3]), areas[0])
+                    x, y = right - self.width - 24, bottom - height - 24
+                self._place(x, y, height)
             self._apply_alpha()
             if callable(getattr(type(self.window), "reapply", None)):
                 self.window.reapply()  # tool-window bits must be in place before first show
@@ -1337,6 +1740,12 @@ class Overlay:
                 self._waker.stop()
                 self._waker = None
             self._stop_background()
+            for top, canvas, native in list(self._v9_windows.values()) + self._v9_outlines:
+                if native is not None:
+                    native.close()
+                top.destroy()
+            self._v9_windows.clear()
+            self._v9_outlines.clear()
             try:
                 if self.window is not None:
                     self.window.close()

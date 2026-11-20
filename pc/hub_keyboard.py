@@ -22,7 +22,7 @@ KNOB_ROTATIONS = {
 
 
 class KnobDetents:
-    """Drop fast reverse pulses and optionally combine pulses into one step."""
+    """Give the free-spinning encoders detents without queuing delayed steps."""
 
     def __init__(self, dividers=None):
         dividers = {} if dividers is None else dividers
@@ -30,8 +30,8 @@ class KnobDetents:
                 or any(key not in ("1", "2", "3", "4") or type(value) is not int or value < 1
                        for key, value in dividers.items())):
             raise ValueError("knob_divider needs knob numbers 1..4 and positive integer values")
-        self.dividers = {int(key): value for key, value in dividers.items()}
-        self._steps = {}
+        self.dividers = {1: 4, 2: 3, 4: 3}
+        self.dividers.update({int(key): value for key, value in dividers.items()})
         self._pulses = {}
 
     def accept(self, binding, received_at):
@@ -39,17 +39,68 @@ class KnobDetents:
         if rotation is None:
             return True
         knob, direction = rotation
-        previous = self._steps.get(knob)
-        if previous is not None and direction != previous[0] and received_at < previous[1] + .120:
+        state = self._pulses.get(knob)
+        if state is None or received_at - state["last"] >= .250:
+            state = {"direction": direction, "count": 0, "first": True,
+                     "reverse_at": None, "step_at": float("-inf")}
+            self._pulses[knob] = state
+        state["last"] = received_at
+        if direction != state["direction"]:
+            reverse_at = state["reverse_at"]
+            if reverse_at is None or received_at - reverse_at > .100:
+                state["reverse_at"] = received_at
+                return False
+            state.update(direction=direction, count=0, reverse_at=None)
+        else:
+            state["reverse_at"] = None
+        if knob == 3:
+            return True
+        state["count"] += 1
+        threshold = 2 if state["first"] else self.dividers[knob]
+        if state["count"] < threshold:
             return False
-        pulse_direction, count = self._pulses.get(knob, (direction, 0))
-        count = count + 1 if pulse_direction == direction else 1
-        if count < self.dividers.get(knob, 1):
-            self._pulses[knob] = (direction, count)
+        state["count"] -= threshold
+        state["first"] = False
+        if received_at - state["step_at"] < .090:
             return False
-        self._pulses[knob] = (direction, 0)
-        self._steps[knob] = (direction, received_at)
+        state["step_at"] = received_at
         return True
+
+
+class ModifierTaps:
+    """Recognize isolated USB modifier releases, never the prefix of a chord."""
+
+    NAMES = {0xE0: "ctrl", 0xE4: "ctrl", 0xE1: "shift", 0xE5: "shift",
+             0xE2: "alt", 0xE6: "alt"}
+
+    def __init__(self):
+        self.held = {}
+
+    def feed(self, event):
+        if event.get("reader", "USB") != "USB":
+            self.held.clear()
+            return None
+        usage, down = event.get("usage"), event.get("down")
+        if event.get("cancelled"):
+            self.held.clear()
+            return None
+        if not event.get("modifier", usage is not None and usage >= 0xE0):
+            if down or event.get("pressed"):
+                for held in self.held.values():
+                    held[1] = False
+            return None
+        timestamp = event.get("t", 0)
+        if down:
+            isolated = not self.held and not event.get("pressed")
+            for held in self.held.values():
+                held[1] = False
+            self.held[usage] = [timestamp, isolated]
+            return None
+        held = self.held.pop(usage, None)
+        if (held is not None and held[1] and not event.get("pressed")
+                and 0 <= timestamp - held[0] <= .600 + 1e-9):
+            return self.NAMES.get(usage)
+        return None
 
 
 # Windows virtual keys to USB keyboard usages. No mapping file is rewritten.
@@ -249,7 +300,7 @@ class KeyboardInput:
         held, self.usb_pressed = self.usb_pressed, {}
         context = capture(self.callback, self.monotonic)
         for event in held.values():
-            event.update(context, down=False, pressed=frozenset())
+            event.update(context, down=False, pressed=frozenset(), cancelled=True)
             self.callback(dict(event, reader="USB"))
 
     def stop(self):

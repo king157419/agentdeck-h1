@@ -92,9 +92,11 @@ class NonceIntegrationTests(unittest.TestCase):
         self.clock.value += .4
         self.assertTrue(self.key())
         second = self.request('second2')
-        keys = hub.USBKeys(self.engine, mapping={'bindings': {'hid:0x09': 'deny'}})
-        keys(dict(down=True, usage=9, keys=['hid:0x09'], pressed=[9],
-                  modifiers=[], new_modifiers=[], t=self.clock()))
+        # v9 deny is Ctrl+C. (hid:0x09 is now the knob-1 clockwise pulse, which the
+        # detent filter deliberately swallows until the second pulse.)
+        keys = hub.USBKeys(self.engine, mapping={'bindings': {'ctrl+hid:0x06': 'deny'}})
+        keys(dict(down=True, usage=6, keys=['ctrl+hid:0x06'], pressed=[6],
+                  modifiers=['ctrl'], new_modifiers=['ctrl'], t=self.clock()))
         self.assertNotIn(first['id'], self.engine.pending)
         self.assertNotIn(second['id'], self.engine.pending)
 
@@ -303,12 +305,74 @@ class NonceIntegrationTests(unittest.TestCase):
         self.assertIn(record['id'], self.engine.pending)
         self.assertEqual(self.engine.audit.recent(1)[0]['reason'], 'switch_guard')
 
-    def test_measured_idle_keys_decode_into_real_hub_effects_in_both_profiles(self):
+    def test_measured_idle_keys_decode_into_real_hub_effects_in_default_v9_profile(self):
+        class V9Desktop(Desktop):
+            def copy(self, session, sessions):
+                self.calls.append(('copy',))
+                return True
+
+            def paste(self, session, sessions):
+                self.calls.append(('paste',))
+                return True
+
+            def send(self, session, sessions, layer='agent'):
+                self.calls.append(('send', layer))
+                return True
+
+            def clear(self, session, sessions):
+                self.calls.append(('clear',))
+                return True
+
+        self.engine.desktop_enabled = True
+        desktop = self.engine.desktop = V9Desktop()
+        for sid in ('keymap1', 'keymap2'):
+            self.engine.event('cc', {'hook_event_name': 'SessionStart', 'session_id': sid, 'cwd': 'C:/app'})
+        decoder = ReportState()
+        keys = hub.USBKeys(self.engine)
+        def feed(report):
+            for event in decoder.feed(bytes.fromhex(report)):
+                event['t'] = self.clock()
+                keys(event)
+        release = '00 00 00 00 00 00 00 00'
+        # v9 measured positions: M copy, Ctrl+T paste, U send, X clear.
+        for report, effect in (('00 00 10 00 00 00 00 00', ('copy',)),
+                               ('01 00 17 00 00 00 00 00', ('paste',)),
+                               ('00 00 18 00 00 00 00 00', ('send', self.engine.controls.layers.current)),
+                               ('00 00 1B 00 00 00 00 00', ('clear',))):
+            feed(report)
+            self.assertEqual(desktop.calls[-1], effect)
+            feed(release)
+        # The old v8 prompt templates are not on any v9 key.
+        self.assertFalse([call for call in desktop.calls if call[0] == 'prompt'])
+        # Idle approve (Tab) and deny (Ctrl+C) have nothing to act on: no desktop effect, no audit.
+        count = len(desktop.calls)
+        for report in ('00 00 2B 00 00 00 00 00', '01 00 06 00 00 00 00 00'):
+            feed(report)
+            feed(release)
+        self.assertEqual(len(desktop.calls), count)
+        self.assertEqual(self.engine.audit.recent(), [])
+        # Knob 2 press (Q) jumps to the next session that waits for the user.
+        before = self.engine.selected
+        other = next(identity for identity in self.engine.sessions if identity != before)
+        self.engine.selected = other
+        self.engine.event('cc', {'hook_event_name': 'Notification', 'session_id': before[1],
+                                  'notification_type': 'permission_prompt'})
+        feed('00 00 14 00 00 00 00 00')
+        feed(release)
+        self.assertEqual(self.engine.selected, before)
+        # Ctrl+V is the push-to-talk voice key: down on press, up on release.
+        count = len(desktop.calls)
+        feed('01 00 19 00 00 00 00 00')
+        self.assertEqual(desktop.calls[count][0], 'voice_down')
+        feed(release)
+        self.assertEqual([call[0] for call in desktop.calls[count:]], ['voice_down', 'voice_up'])
+
+    def test_measured_idle_keys_decode_into_real_hub_effects_in_v2_emulation_profile(self):
         self.engine.desktop_enabled = True
         desktop = self.engine.desktop = Desktop()
         for sid in ('keymap1', 'keymap2'):
             self.engine.event('cc', {'hook_event_name': 'SessionStart', 'session_id': sid, 'cwd': 'C:/app'})
-        for profile in ('default', 'v2_emulation'):
+        for profile in ('v2_emulation',):
             decoder = ReportState()
             keys = hub.USBKeys(self.engine, profile=profile)
             def feed(report):

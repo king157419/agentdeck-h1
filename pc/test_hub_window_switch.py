@@ -3,7 +3,7 @@ import ctypes
 from types import SimpleNamespace
 import unittest
 
-from hub_window_switch import ALT, SHIFT, TAB, RELEASE_SECONDS, WindowSwitcher
+from hub_window_switch import ALT, SHIFT, TAB, ESC, RELEASE_SECONDS, WindowSwitcher
 
 
 class Clock:
@@ -66,13 +66,13 @@ class WindowSwitchTests(unittest.TestCase):
         self.assertTrue(self.switcher.release())
         self.assertEqual(len(self.events), 2)
 
-    def test_idle_timeout_is_1200ms_and_early_callback_rearms(self):
+    def test_idle_timeout_is_700ms_and_early_callback_rearms(self):
         self.switcher.step("next")
-        self.clock.value = 1.199
+        self.clock.value = .699
         self.timers[-1].callback()
         self.assertEqual(len(self.events), 1)
         self.assertAlmostEqual(self.timers[-1].seconds, 0.001)
-        self.clock.value = 1.2
+        self.clock.value = .7
         self.timers[-1].callback()
         self.assertEqual(self.events[-1], [(ALT, 2)])
         self.assertEqual(self.switcher._owned, [])
@@ -215,6 +215,73 @@ class WindowSwitchTests(unittest.TestCase):
         for value in (0, -1, True, "1200", float("inf"), float("nan")):
             with self.subTest(value=value), self.assertRaisesRegex(ValueError, "release_ms"):
                 WindowSwitcher(None, sender=lambda events: len(events), release_ms=value)
+
+    def test_position_clamps_at_original_and_last_window(self):
+        self.switcher.windows = SimpleNamespace(windows=lambda: [(1, "a", "A"), (2, "b", "B"), (3, "c", "C")])
+        self.assertTrue(self.switcher.step("prev"))
+        self.assertEqual(self.switcher.position, 1)
+        self.assertTrue(self.switcher.step("next"))
+        self.assertEqual(self.switcher.position, 2)
+        count = len(self.events)
+        self.assertFalse(self.switcher.step("next"))
+        self.assertEqual(len(self.events), count)
+        self.assertTrue(self.switcher.step("prev"))
+        self.assertTrue(self.switcher.step("prev"))
+        self.assertEqual(self.switcher.position, 0)
+        count = len(self.events)
+        self.assertFalse(self.switcher.step("prev"))
+        self.assertEqual(len(self.events), count)
+
+    def test_press_confirms_or_performs_one_complete_previous_window(self):
+        self.assertTrue(self.switcher.back())
+        self.assertFalse(self.switcher.active)
+        self.assertEqual(self.events, [[(ALT, 0), (TAB, 0), (TAB, 2)], [(ALT, 2)]])
+        self.switcher.step("next")
+        self.events.clear()
+        self.assertTrue(self.switcher.back())
+        self.assertEqual(self.events, [[(ALT, 2)]])
+
+    def test_cancel_esc_precedes_alt_release(self):
+        self.switcher.step("next")
+        self.events.clear()
+        self.assertTrue(self.switcher.cancel())
+        self.assertEqual(self.events, [[(ESC, 0), (ESC, 2)], [(ALT, 2)]])
+        self.assertFalse(self.switcher.active)
+
+    def test_continuous_rotation_cannot_extend_five_second_watchdog(self):
+        self.switcher.step("next")
+        for step in range(1, 10):
+            self.clock.value = step * .5
+            self.assertTrue(self.switcher.step("next"))
+        self.assertAlmostEqual(self.timers[-1].seconds, .5)
+        self.clock.value = 5
+        self.timers[-1].callback()
+        self.assertFalse(self.switcher.active)
+        self.assertEqual(self.events[-1], [(ALT, 2)])
+
+    def test_late_step_also_enforces_watchdog_without_timer_callback(self):
+        self.switcher.step("next")
+        self.clock.value = 5
+        self.assertFalse(self.switcher.step("next"))
+        self.assertFalse(self.switcher.active)
+
+    def test_no_second_window_means_no_injected_input(self):
+        self.switcher.windows = SimpleNamespace(windows=lambda: [(1, "a", "A")])
+        self.assertFalse(self.switcher.step("next"))
+        self.assertEqual(self.events, [])
+
+    def test_turning_at_boundary_renews_idle_without_wrapping(self):
+        self.switcher.windows = SimpleNamespace(windows=lambda: [(1, "a", "A"), (2, "b", "B")])
+        self.assertTrue(self.switcher.step("next"))
+        self.clock.value = .6
+        self.assertFalse(self.switcher.step("next"))
+        self.assertEqual(len(self.events), 1)
+        self.clock.value = .9
+        self.timers[-1].callback()
+        self.assertTrue(self.switcher.active)
+        self.clock.value = 1.3
+        self.timers[-1].callback()
+        self.assertFalse(self.switcher.active)
 
 
 class NativeShapeTests(unittest.TestCase):

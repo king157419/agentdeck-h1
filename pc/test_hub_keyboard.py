@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 import hub
 from deck_usb import ReportState
 import deck_input
-from hub_keyboard import KeyboardInput, KnobDetents, RawKeys, VKEY_USAGES
+from hub_keyboard import KeyboardInput, KnobDetents, ModifierTaps, RawKeys, VKEY_USAGES
 from test_deck_input import Backend
 
 
@@ -25,57 +25,71 @@ def ordinary(events):
 
 
 class KnobDetentTests(unittest.TestCase):
-    def test_each_knob_drops_a_fast_reverse_without_changing_the_last_step(self):
-        for clockwise, reverse, _ in hub.KNOBS:
-            with self.subTest(clockwise=clockwise):
+    def test_first_step_needs_two_pulses_then_configured_divider(self):
+        for binding, divider in (("hid:0x09", 4), ("hid:0x15", 3), ("hid:0x30", 3)):
+            with self.subTest(binding=binding):
                 detents = KnobDetents()
-                self.assertTrue(detents.accept(clockwise, 0.0))
-                self.assertTrue(detents.accept(clockwise, .05))
-                self.assertFalse(detents.accept(reverse, .15))
-                self.assertTrue(detents.accept(clockwise, .16))
-                self.assertFalse(detents.accept(reverse, .27))
-                self.assertTrue(detents.accept(reverse, .28))
+                self.assertFalse(detents.accept(binding, 0.0))
+                self.assertTrue(detents.accept(binding, .02))
+                for pulse in range(divider - 1):
+                    self.assertFalse(detents.accept(binding, .12 + pulse * .02))
+                self.assertTrue(detents.accept(binding, .12 + (divider - 1) * .02))
 
-    def test_reverse_at_exactly_120ms_is_allowed(self):
-        detents = KnobDetents()
-        self.assertTrue(detents.accept("hid:0x15", 0.0))
-        self.assertFalse(detents.accept("hid:0x13", .119))
-        self.assertTrue(detents.accept("hid:0x13", .120))
-
-    def test_each_knob_has_independent_direction_and_divider(self):
-        detents = KnobDetents({"1": 2, "2": 3})
-        self.assertFalse(detents.accept("hid:0x09", 0.0))
-        self.assertFalse(detents.accept("hid:0x15", .01))
-        self.assertTrue(detents.accept("hid:0x30", .02))
-        self.assertTrue(detents.accept("hid:0x09", .03))
-        self.assertFalse(detents.accept("hid:0x15", .04))
-        self.assertTrue(detents.accept("hid:0x15", .05))
-        self.assertFalse(detents.accept("hid:0x09", .06))
-        self.assertTrue(detents.accept("hid:0x09", .07))
-
-    def test_divider_resets_partial_count_when_direction_changes(self):
+    def test_reverse_requires_two_consecutive_pulses_within_100ms(self):
         detents = KnobDetents({"2": 2})
         self.assertFalse(detents.accept("hid:0x15", 0.0))
-        self.assertFalse(detents.accept("hid:0x13", .01))
-        self.assertTrue(detents.accept("hid:0x13", .02))
-        self.assertFalse(detents.accept("hid:0x15", .13))
-        self.assertFalse(detents.accept("hid:0x15", .15))
-        self.assertTrue(detents.accept("hid:0x15", .16))
+        self.assertTrue(detents.accept("hid:0x15", .02))
+        self.assertFalse(detents.accept("hid:0x13", .12))
+        self.assertFalse(detents.accept("hid:0x13", .23))
+        self.assertFalse(detents.accept("hid:0x13", .24))
+        self.assertTrue(detents.accept("hid:0x13", .25))
 
-    def test_buttons_and_modifier_chords_are_not_filtered(self):
-        detents = KnobDetents({"1": 4, "2": 4, "3": 4, "4": 4})
-        bindings = [keys[2] for keys in hub.KNOBS]
-        bindings += ["hid:0x08", "ctrl+hid:0x09", "ctrl+hid:0x13", "F13"]
-        for binding in bindings:
-            with self.subTest(binding=binding):
-                self.assertTrue(detents.accept(binding, 0.0))
-                self.assertTrue(detents.accept(binding, .01))
-
-    def test_shared_p_key_is_filtered_as_knob_two(self):
+    def test_forward_pulse_cancels_pending_reverse(self):
         detents = KnobDetents({"2": 2})
-        self.assertFalse(detents.accept("hid:0x13", 0.0))
-        self.assertTrue(detents.accept("hid:0x13", .01))
-        self.assertFalse(detents.accept("hid:0x15", .02))
+        for direction, seconds in (("15", 0), ("15", .02), ("13", .12),
+                                   ("15", .13), ("13", .14), ("15", .15)):
+            accepted = detents.accept("hid:0x" + direction, seconds)
+        self.assertTrue(accepted)
+        self.assertEqual(detents._pulses[2]["direction"], 1)
+
+    def test_idle_leaks_partial_pulses_and_restores_first_threshold(self):
+        detents = KnobDetents()
+        self.assertFalse(detents.accept("hid:0x15", 0))
+        self.assertFalse(detents.accept("hid:0x15", .250))
+        self.assertTrue(detents.accept("hid:0x15", .27))
+        self.assertFalse(detents.accept("hid:0x15", .52))
+        self.assertTrue(detents.accept("hid:0x15", .54))
+
+    def test_rate_limit_drops_steps_without_queuing(self):
+        detents = KnobDetents({"1": 1})
+        self.assertFalse(detents.accept("hid:0x09", 0))
+        self.assertTrue(detents.accept("hid:0x09", .01))
+        self.assertFalse(detents.accept("hid:0x09", .02))
+        self.assertFalse(detents.accept("hid:0x09", .03))
+        self.assertTrue(detents.accept("hid:0x09", .11))
+        self.assertFalse(detents.accept("hid:0x09", .12))
+
+    def test_scroll_only_direction_locks_and_never_divides(self):
+        detents = KnobDetents({"3": 99})
+        self.assertTrue(detents.accept("hid:0x2D", 0))
+        self.assertTrue(detents.accept("hid:0x2D", .001))
+        self.assertFalse(detents.accept("hid:0x2E", .002))
+        self.assertTrue(detents.accept("hid:0x2E", .003))
+        self.assertTrue(detents.accept("hid:0x2D", .300))
+
+    def test_each_knob_has_independent_state_and_buttons_are_unfiltered(self):
+        detents = KnobDetents()
+        for binding in ("hid:0x09", "hid:0x15", "hid:0x30"):
+            self.assertFalse(detents.accept(binding, 0))
+        for binding in ("hid:0x09", "hid:0x15", "hid:0x30"):
+            self.assertTrue(detents.accept(binding, .01))
+        for binding in [keys[2] for keys in hub.KNOBS] + ["ctrl+hid:0x09", "alt", "F13"]:
+            self.assertTrue(detents.accept(binding, .02))
+
+    def test_one_shared_p_key_pulse_is_inert(self):
+        detents = KnobDetents()
+        self.assertFalse(detents.accept("hid:0x13", 0))
+        self.assertFalse(detents.accept("hid:0x13", 1))
 
     def test_invalid_dividers_fail_before_input_is_read(self):
         for config in ([], 1, {"0": 2}, {"5": 2}, {"1": 0}, {"2": -1},
@@ -84,11 +98,54 @@ class KnobDetentTests(unittest.TestCase):
                 KnobDetents(config)
 
 
+class ModifierTapTests(unittest.TestCase):
+    def setUp(self):
+        self.taps = ModifierTaps()
+        self.state = ReportState()
+
+    def feed(self, packet, timestamp, reader="USB", **extra):
+        return [binding for event in self.state.feed(packet)
+                if (binding := self.taps.feed(dict(event, t=timestamp, reader=reader, **extra))) is not None]
+
+    def test_both_sides_trigger_only_on_short_isolated_release(self):
+        for bits, name in ((1, "ctrl"), (2, "shift"), (4, "alt"),
+                           (0x10, "ctrl"), (0x20, "shift"), (0x40, "alt")):
+            with self.subTest(bits=bits):
+                self.assertEqual(self.feed(report(bits=bits), 0), [])
+                self.assertEqual(self.feed(report(), .599), [name])
+
+    def test_modifier_first_macro_never_triggers_interrupt_or_tap(self):
+        self.assertEqual(self.feed(report(bits=1), 0), [])
+        self.assertEqual(self.feed(report(0x1D, bits=1), .02), [])
+        self.assertEqual(self.feed(report(bits=1), .04), [])
+        self.assertEqual(self.feed(report(), .06), [])
+
+    def test_main_key_present_in_modifier_release_report_cancels(self):
+        self.feed(report(bits=1), 0)
+        self.assertEqual(self.feed(report(0x1D), .02), [])
+
+    def test_exact_600ms_release_is_included(self):
+        self.feed(report(bits=1), 1)
+        self.assertEqual(self.feed(report(), 1.6), ["ctrl"])
+
+    def test_multiple_modifiers_long_holds_and_raw_input_never_trigger(self):
+        self.feed(report(bits=3), 0)
+        self.assertEqual(self.feed(report(), .1), [])
+        self.feed(report(bits=1), 1)
+        self.assertEqual(self.feed(report(), 1.601), [])
+        self.feed(report(bits=4), 2, reader="Raw Input")
+        self.assertEqual(self.feed(report(), 2.1, reader="Raw Input"), [])
+
+    def test_synthetic_disconnect_release_never_becomes_a_tap(self):
+        self.feed(report(bits=1), 0)
+        self.assertEqual(self.feed(report(), .1, cancelled=True), [])
+
+
 class AdapterTests(unittest.TestCase):
     def test_all_actual_bindings_and_function_keys_match_usb(self):
         config = hub.load_json(Path(__file__).with_name("hub_keys.json"))
         usages = {int(key.split(":")[-1], 16) for section in
-                  (config, config["v2_emulation"]) for key in section["bindings"]}
+                  (config, config["v2_emulation"]) for key in section["bindings"] if "hid:" in key}
         usages.update(range(0x68, 0x74))
         inverse = {usage: key for key, usage in VKEY_USAGES.items()}
         for usage in sorted(usages):
@@ -149,7 +206,8 @@ class AdapterTests(unittest.TestCase):
         actions, shown, now = [], {"request_id": "before", "nonce": "n"}, [10.]
         engine = SimpleNamespace(monotonic=lambda: now[0], input_snapshot=lambda received_at=None: dict(shown),
                                  action=lambda payload, **kw: actions.append((payload, kw)))
-        callback = hub.USBKeys(engine)
+        callback = hub.USBKeys(engine, {"bindings": {"hid:0x0B": {
+            "down": "voice_down", "up": "voice_up"}}})
         events = []
 
         class Capture:
@@ -173,7 +231,7 @@ class AdapterTests(unittest.TestCase):
         actions = []
         engine = SimpleNamespace(monotonic=lambda: 10., input_snapshot=lambda received_at=None: {},
                                  action=lambda payload, **kw: actions.append(payload))
-        adapter = RawKeys(hub.USBKeys(engine), engine.monotonic)
+        adapter = RawKeys(hub.USBKeys(engine, {"bindings": {"hid:0x08": "slot 1"}}), engine.monotonic)
         adapter(raw_event(0xFE))  # unmapped key must count in single-key guard
         adapter(raw_event(0x45))
         self.assertEqual(actions, [])

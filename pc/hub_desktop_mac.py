@@ -314,8 +314,14 @@ class MacDesktopEffects(DesktopEffects):
         if not self.windows.guarded(commands, expected):
             raise RuntimeError("foreground changed or paste failed")
 
-    def interrupt(self, session, sessions):
-        return self._attempt("interrupt", super().interrupt, session, sessions)
+    def interrupt(self, session, sessions, layer=None):
+        # The Claude UIA "Stop" button path is Windows-only: macOS focuses the
+        # selected session window and always sends Esc, as before v9.
+        return self._attempt("interrupt", self._interrupt, session, sessions)
+
+    def _interrupt(self, session, sessions):
+        self._key(0x1B, self._focus(session, sessions))
+        return True
 
     def nav(self, session, sessions, key):
         return False  # not implemented on macOS yet: the Hub reports "unavailable"

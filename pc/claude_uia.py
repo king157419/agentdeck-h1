@@ -5,6 +5,7 @@ owns a bounded wait, and a failed command is never replayed (especially Invoke).
 """
 import json
 import logging
+import math
 from pathlib import Path
 import queue
 import subprocess
@@ -50,6 +51,37 @@ class ClaudeUIA:
         if type(index) is not int or index < 0:
             raise ValueError("UIA index must be a nonnegative integer")
         return self._command("invoke", hwnd=hwnd, title=title, index=index)
+
+    def panes(self, hwnd):
+        """Validated physical-pixel rectangles, ordered from left to right."""
+        result = self._command("panes", hwnd=hwnd)
+        if result is None or not isinstance(result.get("panes"), list):
+            return None
+        panes = []
+        for item in result["panes"]:
+            rect = item.get("rect") if isinstance(item, dict) else None
+            if (not isinstance(rect, list) or len(rect) != 4
+                    or any(type(value) not in (int, float) or not math.isfinite(value) for value in rect)
+                    or rect[2] <= rect[0] or rect[3] <= rect[1]):
+                return None
+            panes.append(dict(item, rect=[int(value) for value in rect]))
+        return dict(result, panes=sorted(panes[:4], key=lambda item: item["rect"][0]))
+
+    def prompt_text(self, hwnd):
+        result = self._command("prompt_text", hwnd=hwnd)
+        return result.get("text") if isinstance(result, dict) and isinstance(result.get("text"), str) else None
+
+    def focus_prompt(self, hwnd):
+        return self._command("focus_prompt", hwnd=hwnd)
+
+    def click(self, name, hwnd):
+        if not isinstance(name, str) or not name or len(name) > 256:
+            raise ValueError("UIA button name must be a nonempty string of at most 256 characters")
+        return self._command("click", hwnd=hwnd, name=name)
+
+    def focused_editable(self, hwnd):
+        result = self._command("focused_editable", hwnd=hwnd)
+        return isinstance(result, dict) and result.get("editable") is True
 
     def _command(self, command, *, hwnd=None, **fields):
         if hwnd is not None and (type(hwnd) is not int or not 0 < hwnd < 2**64):

@@ -10,3 +10,13 @@ header#title-block-header { display: none; }
 /* 使用说明书专用：表格和行内代码不低于 10pt（14px = 10.5pt）。 */
 table { font-size: 14px; }
 code { font-family: Consolas, "Microsoft YaHei", monospace; font-size: 14px; }
+/* 短表与小节不拆散；20颗键的首张长表允许分页。 */
+h2, h3 { break-after: avoid-page; }
+tr { break-inside: avoid; }
+table { break-inside: avoid; }
+table:first-of-type { break-inside: auto; }
+table:first-of-type th:nth-child(1) { width: 28%; }
+table:first-of-type th:nth-child(2) { width: 20%; }
+table:first-of-type th:nth-child(3) { width: 52%; }
+pre { break-inside: avoid-page; white-space: pre-wrap; }
+p, li { orphans: 2; widows: 2; }

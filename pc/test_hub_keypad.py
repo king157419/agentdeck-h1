@@ -134,31 +134,37 @@ class RawInputGuardTests(HubCase):
         self.assertEqual(model["notice"], hub.LEAK_TEXT)
         self.assertEqual(display_model({"input_reader": "usb"})["notice"], "")
 
-    def test_dangerous_keys_are_marked_in_keymap_window_docs_and_manual(self):
+    def test_raw_input_risks_are_explained_in_keymap_window_docs_and_manual(self):
         self.assertEqual(set(app.DANGER_KEYS), {"Ctrl+C", "Ctrl+D", "Ctrl+V"})
         names = {name for row in app.KEY_ROWS for name, _ in row}
         self.assertLessEqual(set(app.DANGER_KEYS), names)
         keys_md = (HERE / "hub_keys.md").read_text(encoding="utf-8")
         manual = (HERE.parent / "agentdeck" / "使用说明书.md").read_text(encoding="utf-8")
         for text in (keys_md, manual):
+            self.assertIn("Raw Input", text)
+            self.assertIn("WinUSB", text)
+            self.assertIn("漏进", text)
             for key in ("Ctrl+C", "Ctrl+D", "Ctrl+V"):
-                self.assertRegex(text, re.escape(key) + r"[^\n]*危险")
+                self.assertIn(key, text)
 
     def test_docs_follow_the_measured_layout(self):
         keys_md = (HERE / "hub_keys.md").read_text(encoding="utf-8")
         manual = (HERE.parent / "agentdeck" / "使用说明书.md").read_text(encoding="utf-8")
         self.assertNotIn("Ctrl+0", manual)
         self.assertNotIn("印的字母就是", manual)
-        self.assertIn("按位置", manual)
+        self.assertIn("实测位置", manual)
         for text in (keys_md, manual):
-            self.assertRegex(text, r"旋钮 4 按下 \| C")
             self.assertNotRegex(text, r"旋钮 4 按下 \| Ctrl\+0")
             self.assertNotIn("无信号", text)
             for row, key in (("第 2 排第 4 颗", "Alt"), ("第 4 排第 1 颗", "Ctrl"), ("第 4 排第 2 颗", "Shift")):
                 if text is manual:
-                    self.assertRegex(text, re.escape(row) + r" \| " + key + r"（只发修饰键[^\n]*不绑定")
+                    self.assertRegex(text, re.escape(row) + r" \| (?:单独 )?" + key + r"[^\n]*")
+        self.assertIn("600", manual)
+        self.assertIn("USB", manual)
         self.assertIn("第 4 排第 3 颗 | U", manual)
         self.assertIn("第 4 排第 4 颗 | X", manual)
+        self.assertRegex(manual, r"旋钮 4[^\n]*列表[\s\S]*?按下发 C")
+        self.assertRegex(keys_md, r"4 列表[^\n]*`hid:0x06`")
 
 
 class WindowBindingTests(HubCase):
@@ -332,14 +338,21 @@ class DesktopFocusTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "窗口已关闭或找不到"):
             effects.focus(dict(SESSION), [dict(SESSION)])
 
-    def test_nav_keys_and_scroll_go_through_focus(self):
+    def test_nav_focuses_but_scroll_keeps_the_foreground_window(self):
         effects = self.effects([TERMINAL])
         session = dict(SESSION, hwnd=0x1234)
         for key, code in (("up", 0x26), ("down", 0x28), ("enter", 0x0D)):
             effects.nav(session, [session], key)
             self.assertEqual(self.windows.keys[-1], code)
-        self.assertTrue(effects.scroll(session, [session], -3))
-        self.assertEqual(self.windows.wheels, [(0x1234, -3)])
+        self.windows.wheel_delta = lambda *args: True
+        effects._pane_selection = SimpleNamespace(snapshot=lambda *args, **kwargs: {
+            "panes": [{"rect": [100, 200, 1100, 900]}], "selected": 0})
+        pulses = []
+        effects._smooth_scroll = SimpleNamespace(pulse=lambda *args: pulses.append(args) or True)
+        activated = list(self.windows.activated)
+        self.assertTrue(effects.scroll(dict(session, hwnd=999), [session], -3))
+        self.assertEqual(pulses, [(-3, self.windows.foreground, (1084, 550))])
+        self.assertEqual(self.windows.activated, activated)
         with self.assertRaises(ValueError):
             effects.scroll(session, [session], 0)
 
@@ -565,42 +578,52 @@ class NavScrollActionTests(HubCase):
         self.assertEqual(hub.describe_input("scroll -1", {"status": "sent"})[0], "已滚动")
 
     def test_default_keymap_knobs_three_and_four_from_usb_reports(self):
-        self.event("SessionStart")
-        self.event("PreToolUse", tool_name="AskUserQuestion", tool_input={"questions": []})
         parser = ReportState()
         clock = [self.engine.monotonic()]
         self.engine.monotonic = lambda: clock[0]
         callback = hub.USBKeys(self.engine)
 
-        def press(report):
-            clock[0] += .13  # Intentional reversal, outside the 120 ms bounce window.
+        def press(usage, delay=.02):
+            clock[0] += delay
+            report = [0, 0, usage, 0, 0, 0, 0, 0]
             for event in parser.feed(bytes(report)):
                 callback(dict(event, t=self.engine.monotonic()))
             for event in parser.feed(bytes(8)):
                 callback(dict(event, t=self.engine.monotonic()))
 
-        for usage in (0x2D, 0x2E, 0x19, 0x30, 0x2F):
-            press([0, 0, usage, 0, 0, 0, 0, 0])
-        press([1, 0, 0, 0, 0, 0, 0, 0])
-        press([1, 0, 0x27, 0, 0, 0, 0, 0])  # alternate keypad Ctrl+0
-        press([0, 0, 0x06, 0, 0, 0, 0, 0])  # measured knob 4 press: C
-        self.assertEqual(self.desktop.calls, [
-            ("scroll", SID, 1), ("scroll", SID, -1), ("scroll", SID, 100),
-            ("nav", SID, "down"), ("nav", SID, "up"), ("nav", SID, "enter"),
-            ("nav", SID, "enter")])
+        # The USB decoder and shipped bindings are exercised together, while
+        # the Hub action itself is substituted to avoid window or UIA effects.
+        with patch.object(self.engine, "action", return_value={"status": "ignored"}) as action:
+            press(0x2D)
+            press(0x2E, .3)
+            press(0x19)
+            press(0x30)
+            self.assertEqual(action.call_count, 3, "first list pulse is below the detent threshold")
+            press(0x30)
+            press(0x2F, .3)
+            press(0x2F)
+            press(0x06)
+        self.assertEqual([call.args[0]["action"] for call in action.call_args_list],
+                         ["scroll 1", "scroll -1", "pane next", "ctx next", "ctx prev", "ctx select"])
 
     def test_shipped_keymap_and_upgrade_from_v3_and_v4(self):
         shipped = json.loads((HERE / "hub_keys.json").read_text(encoding="utf-8"))
-        self.assertEqual(shipped["version"], 8)
+        self.assertEqual(shipped["version"], 9)
         bindings = shipped["bindings"]
-        self.assertEqual({key: bindings[key] for key in app.V4_CHANGED}, {
-            "hid:0x06": "nav enter", "hid:0x16": "window prev", "hid:0x09": "window next",
-            "hid:0x2D": "scroll 1", "hid:0x2E": "scroll -1", "hid:0x19": "scroll end",
-            "hid:0x30": "nav down", "hid:0x2F": "nav up", "ctrl+hid:0x27": "nav enter"})
-        for name in ("hid:0x15", "hid:0x13", "hid:0x1B"):
-            self.assertTrue(bindings[name].startswith("cycle "))
+        self.assertEqual({key: bindings[key] for key in (
+            "hid:0x06", "hid:0x16", "hid:0x09", "hid:0x2D", "hid:0x2E",
+            "hid:0x19", "hid:0x30", "hid:0x2F")}, {
+            "hid:0x06": "ctx select", "hid:0x16": "window prev", "hid:0x09": "window next",
+            "hid:0x2D": "scroll 1", "hid:0x2E": "scroll -1", "hid:0x19": "pane next",
+            "hid:0x30": "ctx next", "hid:0x2F": "ctx prev"})
+        self.assertEqual(bindings["hid:0x15"], "session next")
+        self.assertEqual(bindings["hid:0x13"], "session prev")
+        self.assertEqual(bindings["hid:0x1B"], "clear")
+        self.assertEqual([bindings[name] for name in ("alt", "ctrl", "shift")],
+                         ["ctx 4", "interrupt", "screenshot"])
+        self.assertNotIn("ctrl+hid:0x27", bindings)
         instructions = " ".join(shipped["_instructions"])
-        for text in ("scroll 1", "scroll end", "nav down", "nav enter", "Ctrl+D"):
+        for text in ("pane", "ctx", "700 ms", "250 ms", "90 ms"):
             self.assertIn(text, instructions)
         self.assertNotIn("Ctrl+0", instructions)
         self.assertNotIn("cycle +1, counterclockwise = -> cycle -1", instructions)
@@ -609,10 +632,11 @@ class NavScrollActionTests(HubCase):
         for version, changed in app.OLD_DEFAULTS.items():
             with self.subTest(version=version), tempfile.TemporaryDirectory() as directory:
                 target = Path(directory) / "hub_keys.json"
-                old_bindings = {key: value for key, value in dict(bindings, **changed).items()
+                old_bindings = {key: value for key, value in dict(app.V8_BINDINGS, **changed).items()
                                 if value is not None}
-                target.write_text(json.dumps(dict(shipped, version=version,
-                                                  bindings=old_bindings)), encoding="utf-8")
+                old = dict({key: value for key, value in shipped.items() if key != "layers"},
+                           version=version, bindings=old_bindings)
+                target.write_text(json.dumps(old), encoding="utf-8")
                 old_bytes = target.read_bytes()
                 self.assertTrue(app.upgrade_keymap(target, HERE / "hub_keys.json"))
                 self.assertEqual(json.loads(target.read_text(encoding="utf-8"))["bindings"], bindings)
@@ -624,7 +648,7 @@ class NavScrollActionTests(HubCase):
                 self.assertEqual(backup.read_bytes(), b"keep existing backup")
                 if version in (5, 6):
                     old_bindings["hid:0x08"] = "slot 6"
-                    edited = json.dumps(dict(shipped, version=version, bindings=old_bindings), indent=3).encode("utf-8")
+                    edited = json.dumps(dict(old, bindings=old_bindings), indent=3).encode("utf-8")
                     target.write_bytes(edited)
                     self.assertFalse(app.upgrade_keymap(target, HERE / "hub_keys.json"))
                     self.assertEqual(target.read_bytes(), edited)
@@ -766,7 +790,9 @@ class OverlayRenderTests(unittest.TestCase):
         overlay.root = self.root
         for child in self.root.winfo_children():
             child.destroy()
-        overlay._build()
+        # These cases exercise the retained preview renderer. v9 strip/cards
+        # have their own model and renderer coverage in test_hub_keymap_v9_overlay.
+        overlay._build_legacy()
         return overlay
 
     def state(self, **extra):

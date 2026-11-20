@@ -34,7 +34,7 @@ COLORS = {"idle": theme.STATUS["IDLE"], "running": theme.STATUS["RUN"],
 STATES = {"idle": "空闲", "think": "思考", "tool": "运行", "wait": "待批",
           "locked": "终端确认", "error": "出错", "done": "完成"}
 TOOLS = {"cc": "Claude", "cx": "Codex"}
-# Measured physical positions, including unbound modifier-only keys.
+# Measured physical positions, including USB modifier taps.
 KEY_ROWS = hub.KEY_ROWS
 KNOBS = hub.KNOBS
 NOTIFY_KEY = r"Control Panel\NotifyIconSettings"
@@ -51,15 +51,27 @@ GUIDE_FALLBACK = """让宏键盘不再打字：装 WinUSB 驱动
 4. 驱动选 WinUSB，点 Replace Driver。
 5. AgentDeck 会自己改成 USB 直读，浮窗上的黄色提示随之消失。
 """
-# Default bindings of earlier keymap versions, as changes from the shipped
-# default; None means absent in that version. User edits are never upgraded.
+# Keep this baseline independent of the current map: v9 moved most keys.
+# Earlier versions are patches over v8; None means absent in that version.
+V8_BINDINGS = {
+    "hid:0x08": "slot 1", "hid:0x05": "slot 2", "ctrl+hid:0x1D": "slot 3",
+    "hid:0x0A": "approve", "ctrl+hid:0x09": "deny", "hid:0x2C": "interrupt",
+    "hid:0x0B": {"down": "voice_down", "up": "voice_up"}, "hid:0x0F": "screenshot",
+    "hid:0x10": "prompt continue", "ctrl+hid:0x17": "prompt tests",
+    "ctrl+hid:0x07": "prompt summary", "hid:0x18": "prompt commit",
+    "hid:0x1B": "cycle +1", "hid:0x2B": "next_wait", "hid:0x16": "window prev",
+    "hid:0x09": "window next", "hid:0x15": "cycle +1", "hid:0x13": "cycle -1",
+    "hid:0x2D": "scroll 1", "hid:0x2E": "scroll -1", "hid:0x30": "nav down",
+    "hid:0x2F": "nav up", "hid:0x14": "show", "hid:0x19": "scroll end",
+    "ctrl+hid:0x27": "nav enter", "hid:0x06": "nav enter",
+}
 V7_CHANGED = {"hid:0x16": "app prev", "hid:0x09": "app next"}
 V6_CHANGED = {"hid:0x16": "cycle -1", "hid:0x09": "cycle +1"}
 V5_CHANGED = dict(V6_CHANGED, **{"hid:0x06": None, "hid:0x16": "cycle +1", "hid:0x09": "cycle -1"})
 V4_CHANGED = dict(V5_CHANGED, **{"hid:0x2D": "cycle +1", "hid:0x2E": "cycle -1", "hid:0x30": "cycle +1",
               "hid:0x2F": "cycle -1", "hid:0x19": "prompt summary", "ctrl+hid:0x27": "prompt continue"})
 V3_CHANGED = dict(V4_CHANGED, **{"hid:0x14": "prompt tests"})
-OLD_DEFAULTS = {3: V3_CHANGED, 4: V4_CHANGED, 5: V5_CHANGED, 6: V6_CHANGED, 7: V7_CHANGED}
+OLD_DEFAULTS = {3: V3_CHANGED, 4: V4_CHANGED, 5: V5_CHANGED, 6: V6_CHANGED, 7: V7_CHANGED, 8: {}}
 # Keys whose own letters are harmful when they leak into an agent window (Raw Input).
 DANGER_KEYS = {"Ctrl+C": "危险：漏键会打断", "Ctrl+D": "危险：连按两次会退出",
                "Ctrl+V": "危险：漏键会粘贴"}
@@ -132,12 +144,16 @@ def upgrade_keymap(target, source):
         if (type(version) is not int or version not in OLD_DEFAULTS
                 or not isinstance(shipped, dict) or shipped.get("version", 0) <= version):
             return False
-        old_default = {key: value for key, value in dict(shipped["bindings"], **OLD_DEFAULTS[version]).items()
+        old_default = {key: value for key, value in dict(V8_BINDINGS, **OLD_DEFAULTS[version]).items()
                        if value is not None}
         if current.get("bindings") != old_default:
             return False  # the user edited it: never overwrite
+        # No earlier default had layers. Even an empty user layer override is
+        # an edit, and must not disappear during the upgrade.
+        if "layers" in current:
+            return False
         if version >= 6 and any(current.get(key) != shipped.get(key) for key in
-                                (set(current) | set(shipped)) - {"version", "bindings", "_instructions"}):
+                                (set(current) | set(shipped)) - {"version", "bindings", "_instructions", "layers"}):
             return False  # custom hotkeys/profiles are user edits too
         backup = target.with_name(target.name + ".bak-v%d" % version)
         if not backup.exists():
@@ -223,11 +239,15 @@ def session_label(session):
                            or session.get("cwd", ""))[:48])
 
 
-def keymap_model(config, profile="default"):
+def keymap_model(config, profile="default", layer="default"):
     selected = config if profile == "default" else config.get(profile)
     if not isinstance(selected, dict) or not isinstance(selected.get("bindings"), dict):
         raise ValueError("找不到键位 profile：%s" % profile)
-    mapping = selected["bindings"]
+    mapping = dict(selected["bindings"])
+    layers = selected.get("layers", {})
+    if not isinstance(layers, dict) or not isinstance(layers.get(layer, {}), dict):
+        raise ValueError("键位 layers 必须是按层的绑定对象")
+    mapping.update(layers.get(layer, {}))
 
     def action(code):
         value = mapping.get(code, "未绑定") if code else "修饰键，未绑定"
@@ -1005,12 +1025,25 @@ class TrayApplication:
 
     def show_keys(self):
         import tkinter as tk
-        model = keymap_model(hub.load_json(self.keys_path), self.profile)
-        window = theme.style_window(tk.Toplevel(self.overlay.root), "键位")
+        layer = self.state.get("layer", "default")
+        model = keymap_model(hub.load_json(self.keys_path), self.profile, layer)
+        layer_names = {"agent": "Agent", "chat": "聊天", "browser": "浏览器", "video": "视频", "default": "默认"}
+        context_names = {
+            "agent": ("继续 / 选项 1", "跑测试 / 选项 2", "总结 / 选项 3", "到最新 / 选项 4"),
+            "chat": ("下一个未读（暂未实现）", "找人", "填入收到，不发送", "到最新"),
+            "browser": ("后退", "地址栏", "关标签", "刷新"),
+            "video": ("播放 / 暂停", "上一条", "下一条", "全屏"),
+            "default": ("后退", "Tab", "关闭", "到底"),
+        }
+        window = theme.style_window(tk.Toplevel(self.overlay.root), "键位 · " + layer_names.get(layer, layer))
         grid = tk.Frame(window, bg=theme.BG, padx=theme.S5, pady=theme.S5)
         grid.pack()
         for y, row in enumerate(model["rows"]):
             for x, (key, action) in enumerate(row):
+                if y == 1 and action == "ctx %d" % (x + 1):
+                    action = context_names.get(layer, context_names["default"])[x]
+                elif y == 4 and x == 3:
+                    action = "空 · 与旋钮 2 逆时针同码"
                 unbound = "未绑定" in action
                 card = tk.Frame(grid, bg=theme.SURFACE, padx=theme.S3, pady=theme.S3, width=170, height=72)
                 card.grid(row=y, column=x, padx=theme.S1, pady=theme.S1, sticky="nsew")
@@ -1029,7 +1062,9 @@ class TrayApplication:
             card = tk.Frame(knobs, bg=theme.SURFACE, padx=theme.S3, pady=theme.S3)
             card.grid(row=0, column=number, padx=theme.S1, sticky="nsew")
             usage = (" · 切窗口" if (cw, ccw) == ("window next", "window prev") else
-                     " · 选会话 / 按下切过去" if (cw, ccw, press) == ("cycle +1", "cycle -1", "show") else "")
+                     " · 选会话 / 按下切过去" if (cw, ccw, press) == ("session next", "session prev", "session select") else
+                     " · 选栏滚动" if (cw, ccw, press) == ("scroll 1", "scroll -1", "pane next") else
+                     " · 当前应用列表" if (cw, ccw, press) == ("ctx next", "ctx prev", "ctx select") else "")
             theme.label(card, "旋钮 %d%s" % (number + 1, usage), color=theme.TEXT, size=10, bold=True,
                         bg=theme.SURFACE).pack(anchor="w")
             for mark, value in (("顺", cw), ("逆", ccw), ("按", press)):

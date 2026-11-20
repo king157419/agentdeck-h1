@@ -9,8 +9,10 @@ import time
 ALT = 0x12
 SHIFT = 0x10
 TAB = 0x09
-RELEASE_SECONDS = 1.2
-SCANS = {ALT: 0x38, SHIFT: 0x2A, TAB: 0x0F}
+ESC = 0x1B
+RELEASE_SECONDS = .7
+WATCHDOG_SECONDS = 5.0
+SCANS = {ALT: 0x38, SHIFT: 0x2A, TAB: 0x0F, ESC: 0x01}
 log = logging.getLogger("agentdeck.hub.window")
 
 
@@ -21,7 +23,7 @@ class WindowSwitcher:
     inserted. Tests can substitute it and ``timer_factory`` without native I/O.
     """
 
-    def __init__(self, windows, *, monotonic=None, timer_factory=None, sender=None, release_ms=1200):
+    def __init__(self, windows, *, monotonic=None, timer_factory=None, sender=None, release_ms=700):
         if (isinstance(release_ms, bool) or not isinstance(release_ms, (int, float))
                 or not math.isfinite(release_ms) or release_ms <= 0):
             raise ValueError("release_ms must be positive and finite")
@@ -36,7 +38,20 @@ class WindowSwitcher:
         self._timer = None
         self._generation = 0
         self._deadline = 0.0
+        self._started_at = 0.0
+        self.position = 0
+        self._maximum = None
         self._closed = False
+
+    @property
+    def active(self):
+        return ALT in self._owned
+
+    def _window_limit(self):
+        enumerate_windows = getattr(self.windows, "windows", None)
+        if callable(enumerate_windows):
+            return max(0, len(enumerate_windows()) - 1)
+        return None
 
     def _send(self, transitions):
         events = self.windows._events(transitions)
@@ -78,13 +93,32 @@ class WindowSwitcher:
                 raise RuntimeError("window switcher is closed")
             if any(key != ALT for key in self._owned) and not self.release():
                 return False
+            now = self.monotonic()
+            if self.active and now >= self._started_at + WATCHDOG_SECONDS:
+                self.release()
+                return False
             if not self._owned and self._native:
                 if getattr(self.windows, "_held_keys", ()) or any(
                         self.windows.user.GetAsyncKeyState(key) & 0x8000
                         for key in (SHIFT, 0x11, ALT, 0x5B, 0x5C, *range(0xA0, 0xA6))):
                     return False
-            self._cancel_timer()
             first = ALT not in self._owned
+            maximum = self._window_limit() if first else self._maximum
+            destination = 1 if first else self.position + (1 if direction == "next" else -1)
+            if destination < 0 or maximum is not None and destination > maximum:
+                if self.active:
+                    # A clamped turn is still activity: retain the chooser
+                    # until the user stops, subject to the total watchdog.
+                    self._cancel_timer()
+                    self._deadline = min(now + self.release_seconds,
+                                         self._started_at + WATCHDOG_SECONDS)
+                    try:
+                        self._arm(self._deadline - now)
+                    except BaseException:
+                        self.release()
+                        raise
+                return False
+            self._cancel_timer()
             transitions = [(ALT, 0)] if first else []
             reverse = direction == "prev" and not first
             if reverse:
@@ -111,13 +145,43 @@ class WindowSwitcher:
             if sent != len(transitions):
                 self.release()
                 return False
-            self._deadline = self.monotonic() + self.release_seconds
+            if first:
+                self._started_at = now
+                self._maximum = maximum
+            self.position = destination
+            self._deadline = min(now + self.release_seconds, self._started_at + WATCHDOG_SECONDS)
             try:
-                self._arm(self.release_seconds)
+                self._arm(self._deadline - now)
             except BaseException:
                 self.release()
                 raise
             return True
+
+    def back(self):
+        """Confirm an open switcher; otherwise perform one complete Alt+Tab."""
+        with self._lock:
+            if self.active:
+                return self.release()
+            if not self.step("next"):
+                return False
+            return self.release()
+
+    def cancel(self):
+        with self._lock:
+            if not self.active:
+                return True
+            # Keep possible Esc ownership if the native sender raises after a
+            # partial insertion, just as step() does for Tab and Shift.
+            self._owned.append(ESC)
+            try:
+                sent = self.sender([(ESC, 0), (ESC, 2)])
+                if sent == 2:
+                    self._owned.remove(ESC)
+            except BaseException:
+                self.release()
+                raise
+            released = self.release()
+            return sent == 2 and released
 
     def release(self):
         with self._lock:
@@ -125,6 +189,8 @@ class WindowSwitcher:
             for attempt in range(2):
                 keys = list(reversed(self._owned))
                 if not keys:
+                    self.position = 0
+                    self._maximum = None
                     return True
                 try:
                     sent = self.sender([(key, 2) for key in keys])
@@ -136,6 +202,9 @@ class WindowSwitcher:
                     self._owned.remove(key)
             if self._owned:
                 log.error("Window-switch key release incomplete: %s", self._owned)
+            else:
+                self.position = 0
+                self._maximum = None
             return not self._owned
 
     def close(self):

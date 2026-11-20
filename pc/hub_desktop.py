@@ -140,6 +140,30 @@ if sys.platform == "win32":
             finally:
                 self._restore_dpi(previous)
 
+        def rectangle(self, hwnd):
+            previous = self._dpi_aware()
+            try:
+                rect = wintypes.RECT()
+                self.user.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+                self.user.GetWindowRect.restype = wintypes.BOOL
+                if not self.user.GetWindowRect(hwnd, ctypes.byref(rect)):
+                    raise ctypes.WinError(ctypes.get_last_error())
+                return rect.left, rect.top, rect.right, rect.bottom
+            finally:
+                self._restore_dpi(previous)
+
+        def wheel_delta(self, expected, point, delta):
+            """Move into the chosen pane and leave the pointer there."""
+            previous = self._dpi_aware()
+            try:
+                if self()[0] != expected[0] or getattr(self, "_held_keys", ()):
+                    return False
+                screen = tuple(self.user.GetSystemMetrics(index) for index in (76, 77, 78, 79))
+                events = smooth_wheel_events(point, delta, screen)
+                return self.user.SendInput(len(events), events, ctypes.sizeof(INPUT)) == len(events)
+            finally:
+                self._restore_dpi(previous)
+
         def _send_owned(self, transitions):
             # Reserve ownership before native input: even an exception after
             # insertion must leave enough information to release our keys.
@@ -220,6 +244,15 @@ def wheel_events(target, cursor, notches, screen):
         dx, dy = absolute(point, screen) if point is not None else (0, 0)
         data = (-120 * notches) & 0xFFFFFFFF if point is None else 0
         event.mi = MOUSEINPUT(dx, dy, data, flags, 0, 0)
+    return events
+
+
+def smooth_wheel_events(target, delta, screen):
+    events = (INPUT * 2)()
+    x, y = absolute(target, screen)
+    events[0].type = events[1].type = 0
+    events[0].mi = MOUSEINPUT(x, y, 0, 0x0001 | 0x8000 | 0x4000, 0, 0)
+    events[1].mi = MOUSEINPUT(0, 0, (-delta) & 0xFFFFFFFF, 0x0800, 0, 0)
     return events
 
 
@@ -315,11 +348,15 @@ class DesktopEffects:
     def __init__(self, windows=None, *, clipboard=None, image_clipboard=None, capture=None,
                  shots_dir=None, now=None, sleeper=None, monotonic=None,
                  voice_wait=None, dictation_shortcut=None, claude_uia=None, window_switcher=None,
-                 window_switch_release_ms=1200):
+                 window_switch_release_ms=700, pane_selection=None, smooth_scroll=None):
         self._windows = windows
         self._claude_uia = claude_uia
         self._window_switcher = window_switcher
         self._closed = False
+        self._pane_selection = pane_selection
+        self._smooth_scroll = smooth_scroll
+        self._app_recency = {}
+        self._send_buttons = {}
         self.window_switch_release_ms = window_switch_release_ms
         self.clipboard = set_clipboard if clipboard is None else clipboard
         self.image_clipboard = set_image_clipboard if image_clipboard is None else image_clipboard
@@ -378,6 +415,12 @@ class DesktopEffects:
     def focus(self, session, sessions):
         return self._focus(session, sessions)
 
+    def foreground(self):
+        window = self.windows()
+        if window and window[0]:
+            self._app_recency[window[0]] = self.monotonic()
+        return window
+
     @property
     def claude_uia(self):
         with self._voice_commands:
@@ -408,24 +451,26 @@ class DesktopEffects:
         if not isinstance(title, str) or not title:
             return result
         try:
-            invoked = self.claude_uia.invoke(title, index=0, hwnd=window[0])
-            if not isinstance(invoked, dict) or invoked.get("ok") is not True:
-                return result
-            if invoked.get("matches", 0) > 1:
-                logging.getLogger("agentdeck.hub").warning(
-                    "Duplicate Claude sidebar title; using first: %s (%s matches)",
-                    title[:60].replace("\n", " ").replace("\r", " "), invoked["matches"])
-            deadline = self.monotonic() + 1.8
-            # Invoke returns before Claude finishes navigation. All reads are
-            # part of this explicit action, bounded even with a fake clock.
-            for attempt in range(4):
-                snapshot = self.claude_uia.list(hwnd=window[0])
-                if isinstance(snapshot, dict) and snapshot.get("current_title") == title:
-                    result["switched"] = True
-                    break
-                if snapshot is None or self.monotonic() >= deadline:
-                    break
-                self.sleep(0.15)
+            for retry in range(2):
+                if self.windows()[0] != window[0]:
+                    return result
+                invoked = self.claude_uia.invoke(title, index=0, hwnd=window[0])
+                if not isinstance(invoked, dict) or invoked.get("ok") is not True:
+                    return result
+                if invoked.get("matches", 0) > 1:
+                    logging.getLogger("agentdeck.hub").warning(
+                        "Duplicate Claude sidebar title; using first: %s (%s matches)",
+                        title[:60].replace("\n", " ").replace("\r", " "), invoked["matches"])
+                deadline = self.monotonic() + 2.0
+                # A bounded iteration count also handles a fake/nonadvancing clock.
+                for attempt in range(14):
+                    snapshot = self.claude_uia.list(hwnd=window[0])
+                    if isinstance(snapshot, dict) and snapshot.get("current_title") == title:
+                        result["switched"] = True
+                        return result
+                    if self.monotonic() >= deadline:
+                        break
+                    self.sleep(min(.15, max(0, deadline - self.monotonic())))
         except Exception as error:
             logging.getLogger("agentdeck.hub").warning("Claude sidebar switch failed: %s", error)
         return result
@@ -438,13 +483,21 @@ class DesktopEffects:
                 from hub_window_switch import WindowSwitcher
                 self._window_switcher = WindowSwitcher(self.windows, monotonic=self.monotonic,
                                                        release_ms=self.window_switch_release_ms)
+            if direction in ("back", "cancel"):
+                return getattr(self._window_switcher, direction)()
             return self._window_switcher.step(direction)
+
+    @property
+    def window_switch_active(self):
+        return self._window_switcher is not None and self._window_switcher.active
 
     def release_window_switch(self):
         return self._window_switcher is None or self._window_switcher.release()
 
     def app(self, session, sessions, direction):
         """Switch Claude's conversation without changing the Hub selection."""
+        if direction in ("claude", "wechat", "feishu", "browser"):
+            return self._app_target(direction)
         keys = {"next": 0xDD, "prev": 0xDB}
         if direction not in keys:
             raise ValueError("app needs next or prev")
@@ -466,6 +519,37 @@ class DesktopEffects:
                 raise RuntimeError("could not activate Claude desktop window")
             self._combo((0x11, 0x10, keys[direction]), window)
             return True
+
+    def _app_target(self, name):
+        if self.voice_active:
+            raise RuntimeError("release voice before switching apps")
+        current = self.foreground()
+        items = self.windows.windows()
+        def kind(window):
+            process = ntpath.basename(window[1] or "").casefold()
+            if process == "claude.exe":
+                return "claude"
+            if "codex" in process and not self.windows.is_terminal(window[0]):
+                return "codex"
+            return process
+        names = {"claude": {"claude", "codex"}, "wechat": {"weixin.exe", "wechat.exe"},
+                 "feishu": {"feishu.exe", "lark.exe"}, "browser": {"chrome.exe", "msedge.exe", "firefox.exe"}}
+        candidates = [window for window in items if kind(window) in names[name]]
+        if name == "claude" and kind(current) in names[name]:
+            other = [window for window in candidates if kind(window) != kind(current)]
+            if other:
+                candidates = other
+            else:
+                return self.window(None, [], "back")
+        elif any(window[0] == current[0] for window in candidates):
+            return self.window(None, [], "back")
+        if not candidates:
+            raise RuntimeError("没找到%s窗口" % {"claude": "Claude / Codex", "wechat": "微信", "feishu": "飞书", "browser": "浏览器"}[name])
+        target = max(candidates, key=lambda window: self._app_recency.get(window[0], 0))
+        if not self.windows.activate(target[0]) or self.windows()[0] != target[0]:
+            raise RuntimeError("窗口激活失败")
+        self._app_recency[target[0]] = self.monotonic()
+        return True
 
     @staticmethod
     def _bound_window(session, windows):
@@ -535,8 +619,125 @@ class DesktopEffects:
         names.update((key, "F%d" % (key - 0x6F)) for key in range(0x70, 0x88))
         return "+".join(names.get(key, "VK 0x%02X" % key) for key in self._dictation_keys)
 
-    def interrupt(self, session, sessions):
-        self._key(0x1B, self._focus(session, sessions))
+    def interrupt(self, session, sessions, layer=None):
+        if self.window_switch_active:
+            return self.window(session, sessions, "cancel")
+        expected = self.foreground()
+        if layer == "agent" or (layer is None and self._agent_desktop(expected)):
+            if not self.claude_uia.click("Stop", hwnd=expected[0]):
+                return {"noop": "没有在跑的任务"}
+            return True
+        self._key(0x1B, expected)
+        return True
+
+    @staticmethod
+    def _agent_desktop(window):
+        process = ntpath.basename(window[1] or "").casefold()
+        return process == "claude.exe" or "codex" in process
+
+    def send(self, session, sessions, layer="agent"):
+        expected = self.foreground()
+        if layer == "agent":
+            text = self.claude_uia.prompt_text(hwnd=expected[0])
+            if text is None:
+                return {"noop": "读不到输入框"}
+            if not text.strip():
+                return {"noop": "输入框是空的"}
+            if self.windows()[0] != expected[0] or not self.claude_uia.focus_prompt(hwnd=expected[0]):
+                raise RuntimeError("无法聚焦输入框")
+            if expected[0] not in self._send_buttons:
+                snapshot = self.claude_uia.list(hwnd=expected[0])
+                names = snapshot.get("buttons", []) if isinstance(snapshot, dict) else []
+                self._send_buttons[expected[0]] = next((name for name in names if name in
+                                                       ("Send", "Send message", "Send prompt")), None)
+            name = self._send_buttons[expected[0]]
+            if name:
+                if self.windows()[0] != expected[0] or not self.claude_uia.click(name, hwnd=expected[0]):
+                    raise RuntimeError("发送按钮操作失败")
+                return True
+        self._key(0x0D, expected)
+        return True
+
+    def clear(self, session, sessions):
+        expected = self.foreground()
+        if not self.claude_uia.focused_editable(hwnd=expected[0]):
+            return {"noop": "这里不是输入框"}
+        self._combo((0x11, 0x41), expected)
+        self._key(0x2E, expected)
+        return True
+
+    def copy(self, session, sessions):
+        self._combo((0x11, 0x43), self.foreground())
+        return True
+
+    def paste(self, session, sessions):
+        self._combo((0x11, 0x56), self.foreground())
+        return True
+
+    def context(self, session, sessions, layer, index):
+        if type(index) is not int or not 1 <= index <= 4:
+            raise ValueError("context needs index 1..4")
+        expected = self.foreground()
+        if layer == "agent":
+            if session and session.get("_permission_pending"):
+                return {"noop": "会话正在等批准"}
+            if session and session.get("needs_answer"):
+                choices = session.get("question_options", [])
+                if index > len(choices):
+                    return {"noop": "没有这个选项"}
+                label = choices[index - 1]
+                label = label.get("label", "") if isinstance(label, dict) else label
+                if not label or not self.claude_uia.click(label, hwnd=expected[0]):
+                    return {"noop": "没找到这个选项"}
+                return True
+            if index < 4:
+                return self.prompt(session, sessions, ("继续", "跑测试", "总结")[index - 1])
+            pane = self._panes().snapshot(expected, refresh=True)
+            rect = pane["panes"][pane["selected"]]["rect"]
+            move = getattr(self.windows, "move_pointer", None)
+            if move is not None and not move(expected, self._pane_point(rect)):
+                raise RuntimeError("foreground changed before scrolling")
+            if move is None:
+                # A zero wheel delta moves the pointer without scrolling.
+                wheel = getattr(self.windows, "wheel_delta", None)
+                if wheel is None or not wheel(expected, self._pane_point(rect), 0):
+                    raise RuntimeError("无法定位对话栏")
+            self._combo((0x11, 0x23), expected)
+            return True
+        if layer == "chat":
+            if index == 1:
+                return {"noop": "这一步还没做"}
+            if index == 2:
+                process = ntpath.basename(expected[1] or "").casefold()
+                self._combo((0x11, 0x4B if process in ("feishu.exe", "lark.exe") else 0x46), expected)
+            elif index == 3:
+                if not self.claude_uia.focused_editable(hwnd=expected[0]):
+                    return {"noop": "这里不是输入框"}
+                self._paste("收到", expected)
+            else:
+                self._combo((0x11, 0x23), expected)
+            return True
+        bindings = {
+            "browser": ((0x12, 0x25), (0x11, 0x4C), (0x11, 0x57), (0x74,)),
+            "video": ((0x20,), (0x26,), (0x28,), (0x46,)),
+            "default": ((0x12, 0x25), (0x09,), (0x11, 0x57), (0x11, 0x23)),
+        }
+        keys = bindings.get(layer, bindings["default"])[index - 1]
+        self._key(keys[0], expected) if len(keys) == 1 else self._combo(keys, expected)
+        return True
+
+    def context_list(self, session, sessions, layer, direction):
+        if direction not in ("prev", "next", "enter"):
+            raise ValueError("context list needs prev, next or enter")
+        if layer == "chat":
+            return {"noop": "这一步还没做"}
+        expected = self.foreground()
+        if layer == "browser" and direction != "enter":
+            self._combo((0x11, 0x21 if direction == "prev" else 0x22), expected)
+        else:
+            keys = {"video": {"prev": 0x25, "next": 0x27, "enter": 0x20},
+                    "default": {"prev": 0x26, "next": 0x28, "enter": 0x0D}}
+            self._key(keys.get(layer, keys["default"])[direction], expected)
         return True
 
     def nav(self, session, sessions, key):
@@ -545,20 +746,34 @@ class DesktopEffects:
         return True
 
     def scroll(self, session, sessions, notches):
-        """Mouse wheel over the agent window (positive notches scroll toward newer text).
-
-        Terminals scroll their scrollback, full-screen TUIs and editors handle the
-        wheel themselves; scrolling keys would mean different things per app.
-        """
+        """Scroll only the foreground pane; selection never activates a session."""
         if type(notches) is not int or not notches:
             raise ValueError("scroll needs a nonzero integer")
-        window = self._focus(session, sessions)  # foreground: works without "scroll inactive windows"
-        wheel = getattr(self.windows, "wheel", None)
-        if wheel is None:
+        window = self.foreground()
+        if not callable(getattr(self.windows, "wheel_delta", None)):
             raise RuntimeError("mouse wheel input unavailable")
-        if not wheel(window[0], notches, window):
-            raise RuntimeError("foreground changed or wheel input failed")
-        return True
+        pane = self._panes().snapshot(window, refresh=True)
+        point = self._pane_point(pane["panes"][pane["selected"]]["rect"])
+        if self._smooth_scroll is None:
+            from hub_scroll import SmoothScroll
+            self._smooth_scroll = SmoothScroll(lambda expected, point, delta: self.windows.wheel_delta(expected, point, delta),
+                                               self.windows, monotonic=self.monotonic)
+        return self._smooth_scroll.pulse(notches, window, point)
+
+    @staticmethod
+    def _pane_point(rect):
+        left, top, right, bottom = rect
+        return max(left + 1, right - 16), (top + bottom) // 2
+
+    def _panes(self):
+        if self._pane_selection is None:
+            from hub_scroll import PaneSelection
+            self._pane_selection = PaneSelection(lambda hwnd: self.claude_uia.panes(hwnd=hwnd),
+                                                  self.windows.rectangle, monotonic=self.monotonic)
+        return self._pane_selection
+
+    def next_pane(self, session, sessions):
+        return self._panes().snapshot(self.foreground(), advance=True, refresh=True)
 
     @property
     def voice_active(self):
@@ -746,6 +961,10 @@ class DesktopEffects:
     def close(self):
         with self._voice_commands:
             self._closed = True
+        if self._pane_selection is not None:
+            self._pane_selection.close()
+        if self._smooth_scroll is not None:
+            self._smooth_scroll.close()
         try:
             if self._window_switcher is not None and not self._window_switcher.close():
                 raise RuntimeError("could not release window-switch keys")
@@ -777,7 +996,19 @@ class DesktopEffects:
     def prompt(self, session, sessions, text):
         if not isinstance(text, str) or not text:
             raise ValueError("prompt text must be a nonempty string")
-        expected = self._focus(session, sessions)
+        if session and session.get("_permission_pending"):
+            return {"noop": "会话正在等批准"}
+        expected = self.foreground()
+        if self._agent_desktop(expected):
+            current = self.claude_uia.prompt_text(hwnd=expected[0])
+            if current is None:
+                return {"noop": "读不到输入框"}
+            if current.strip():
+                return {"noop": "输入框里已有内容"}
+            if self.windows()[0] != expected[0] or not self.claude_uia.focus_prompt(hwnd=expected[0]):
+                raise RuntimeError("无法聚焦输入框")
+        else:
+            expected = self._focus(session, sessions)
         self._paste(text, expected)
         self.sleep(0.05)
         self._key(0x0D, expected)

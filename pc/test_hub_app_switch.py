@@ -58,14 +58,30 @@ class AppSwitchTests(unittest.TestCase):
         self.engine.monotonic = lambda: clock[0]
         keys = hub.USBKeys(self.engine)
         for usage, direction, name in ((0x09, "next", "顺时针"), (0x16, "prev", "逆时针")):
-            clock[0] += .13  # A deliberate reversal, not an encoder bounce.
+            clock[0] += .5  # Rest: v9 clears the accumulator, so each direction is a fresh first step.
             event = next(iter(ReportState().feed(bytes([0, 0, usage, 0, 0, 0, 0, 0]))))
+            calls = len(self.desktop.window.call_args_list)
+            keys(dict(event, t=self.engine.monotonic()))
+            # v9: the first step after rest needs two pulses (threshold 2), so one pulse does nothing.
+            self.assertEqual(len(self.desktop.window.call_args_list), calls)
+            clock[0] += .05
             with self.assertLogs("agentdeck.hub", "INFO") as logs:
                 keys(dict(event, t=self.engine.monotonic()))
-            text = "旋钮 1 %s → 切到%s一个窗口" % (name, "下" if direction == "next" else "上")
-            self.assertEqual(self.engine.state()["last_input"]["text"], text)
+            # v9: a successful window switch shows no toast; only failures are reported.
+            self.assertIsNone(self.engine.state()["last_input"])
             self.assertIn("旋钮 1 " + name, "\n".join(logs.output))
+            self.assertEqual(len(self.desktop.window.call_args_list), calls + 1)
             self.assertEqual(self.desktop.window.call_args.args[-1], direction)
+        # A failed switch is still reported and names the physical control.
+        self.desktop.window.return_value = False
+        clock[0] += .5
+        event = next(iter(ReportState().feed(bytes([0, 0, 0x09, 0, 0, 0, 0, 0]))))
+        for _ in range(2):
+            clock[0] += .05
+            keys(dict(event, t=self.engine.monotonic()))
+        last = self.engine.state()["last_input"]
+        self.assertEqual(last["text"], "旋钮 1 顺时针 → 此操作不可用")
+        self.assertEqual((last["action"], last["kind"]), ("window next", "noop"), last)
 
     def test_window_dispatch_without_sessions_preserves_selection(self):
         for direction in ("next", "prev"):
@@ -90,7 +106,7 @@ class AppSwitchTests(unittest.TestCase):
             self.assertFalse(keys._dispatch(binding, "app " + direction, {}, self.engine.monotonic(), "Raw Input"))
             last = self.engine.state()["last_input"]
             self.assertEqual(last["text"], hub.control_name(binding) + " → " + hub.LEAK_TEXT)
-            self.assertFalse(last["ok"])
+            self.assertFalse(last["ok"], last)
         self.desktop.app.assert_not_called()
 
     def test_raw_input_refuses_both_window_directions(self):
@@ -99,7 +115,7 @@ class AppSwitchTests(unittest.TestCase):
             self.assertFalse(keys._dispatch(binding, "window " + direction, {}, self.engine.monotonic(), "Raw Input"))
             last = self.engine.state()["last_input"]
             self.assertEqual(last["text"], hub.control_name(binding) + " → " + hub.LEAK_TEXT)
-            self.assertFalse(last["ok"])
+            self.assertFalse(last["ok"], last)
         self.desktop.window.assert_not_called()
 
     def test_missing_window_error_uses_requested_feedback(self):
@@ -127,33 +143,53 @@ class AppSwitchTests(unittest.TestCase):
 
 
 class FeedbackLayoutTests(unittest.TestCase):
-    def test_long_shared_control_feedback_wraps_and_keeps_header_buttons_visible(self):
-        import tkinter as tk
-        from test_hub_ui_live import FakeHub
-        root = tk.Tk()
-        self.addCleanup(root.destroy)
-        root.withdraw()
-        overlay = Overlay(FakeHub())
-        overlay.root = root
-        overlay._build()
-        state = {"sessions": [{"slot": i, "name": "session", "state": "idle"} for i in range(1, 7)]}
-        overlay.model = display_model(state)
+    def test_long_shared_control_feedback_is_clipped_to_one_fixed_line_toast(self):
+        # v9 replaced the wrapping header label with a fixed 220x28 one-line toast
+        # beside the strip: a long physical-control name must be clipped there and
+        # must not resize or move the strip.
+        from unittest.mock import patch
+        from hub_overlay import FEEDBACK_HEIGHT, FEEDBACK_WIDTH, _clip_columns, _text_width
+        from test_hub_keymap_v9_overlay import Canvas, Native, sessions
+        fake = Mock()
+        native = Native()
+        overlay = Overlay(fake, window=native)
+        overlay.root = Mock()
+        overlay._v9_ready = True
+        overlay._strip_canvas = Canvas()
+        overlay._new_v9_window = lambda **kwargs: (Mock(), Canvas(), None)
+        overlay._v9_windows = {kind: (Mock(), Canvas(), None) for kind in ("card", "feedback")}
         text = hub.control_name("hid:0x13") + " → " + hub.describe_input(
             "cycle -1", {"status": "selected", "slot": 2, "shared_window": True})[0]
-        overlay.model["feedback"] = {"text": text, "ok": True}
-        overlay._render()
-        root.geometry("%dx480+60+60" % WIDTH)
-        root.deiconify()
-        root.update()
-        self.assertTrue(all(widget.winfo_ismapped() for widget in overlay.header.winfo_children()))
-        self.assertEqual(overlay.status_label.cget("text"), "6 个会话")
-        self.assertEqual(overlay.feedback_label.cget("text"), text)
-        self.assertGreaterEqual(overlay.feedback_label.winfo_width(), overlay.feedback_label.winfo_reqwidth())
-        self.assertGreater(overlay.feedback_label.winfo_height(), overlay.status_label.winfo_height())
-        overlay.model = display_model(state)
-        overlay._render()
-        root.update_idletasks()
-        self.assertFalse(overlay.feedback_label.winfo_ismapped())
+        self.assertGreater(_text_width(text), 29)
+        def render(state):
+            fake.state.return_value = dict({"layer": "agent", "sessions": sessions()}, **state)
+            with patch("hub_overlay.time.time", return_value=100):
+                overlay._poll_v9()
+        render({})
+        bounds = list(native.bounds)
+        render({"last_input": {"at": 100, "kind": "success", "text": text}})
+        self.assertEqual(native.bounds, bounds)
+        popup, canvas, _ = overlay._v9_windows["feedback"]
+        popup.deiconify.assert_called_once()
+        self.assertEqual((canvas.options["width"], canvas.options["height"]),
+                         (FEEDBACK_WIDTH, FEEDBACK_HEIGHT))
+        texts = [item[2]["text"] for item in canvas.shapes if item[0] == "text"]
+        self.assertEqual(texts, [_clip_columns(text, 29)])
+        self.assertTrue(texts[0].endswith("…"))
+        self.assertLessEqual(_text_width(texts[0]), 29)
+        self.assertIsNone(overlay.feedback_label)  # no wrapping header label in v9
+
+
+def old_default_bindings(version):
+    """The shipped bindings of an earlier keymap: v8 baseline patched per version (v9 moved most keys)."""
+    return {key: value for key, value in dict(app.V8_BINDINGS, **app.OLD_DEFAULTS[version]).items()
+            if value is not None}
+
+
+def old_keymap(shipped, version):
+    old = dict(shipped, version=version, bindings=old_default_bindings(version))
+    old.pop("layers", None)  # no earlier default had layers
+    return old
 
 
 class V8MigrationTests(unittest.TestCase):
@@ -163,12 +199,11 @@ class V8MigrationTests(unittest.TestCase):
             target = app.data_dir(home) / "hub_keys.json"
             target.parent.mkdir()
             shipped = hub.load_json(app.resource_dir() / "hub_keys.json")
-            original = json.dumps(dict(shipped, version=7,
-                                       bindings=dict(shipped["bindings"], **app.V7_CHANGED)), indent=3).encode("utf-8")
+            original = json.dumps(old_keymap(shipped, 7), indent=3).encode("utf-8")
             target.write_bytes(original)
             app.prepare_configs(home)
             self.assertEqual(hub.load_json(target), shipped)
-            self.assertEqual(shipped["version"], 8)
+            self.assertEqual(shipped["version"], 9)
             backup = target.with_name("hub_keys.json.bak-v7")
             self.assertEqual(backup.read_bytes(), original)
             app.prepare_configs(home)
@@ -179,9 +214,7 @@ class V8MigrationTests(unittest.TestCase):
         source = app.resource_dir() / "hub_keys.json"
         for section in ("bindings", "hotkey", "v2_emulation"):
             with self.subTest(section=section), tempfile.TemporaryDirectory() as directory:
-                old = hub.load_json(source)
-                old["version"] = 7
-                old["bindings"].update(app.V7_CHANGED)
+                old = old_keymap(hub.load_json(source), 7)
                 if section == "v2_emulation":
                     old[section]["bindings"]["hid:0x08"] = "slot 6"
                 else:
@@ -199,8 +232,7 @@ class V8MigrationTests(unittest.TestCase):
             target = app.data_dir(home) / "hub_keys.json"
             target.parent.mkdir()
             shipped = hub.load_json(app.resource_dir() / "hub_keys.json")
-            original = json.dumps(dict(shipped, version=6,
-                                       bindings=dict(shipped["bindings"], **app.V6_CHANGED)), indent=3).encode("utf-8")
+            original = json.dumps(old_keymap(shipped, 6), indent=3).encode("utf-8")
             target.write_bytes(original)
             app.prepare_configs(home)
             self.assertEqual(hub.load_json(target), shipped)
@@ -214,9 +246,7 @@ class V8MigrationTests(unittest.TestCase):
         source = app.resource_dir() / "hub_keys.json"
         for section in ("bindings", "hotkey", "v2_emulation"):
             with self.subTest(section=section), tempfile.TemporaryDirectory() as directory:
-                old = hub.load_json(source)
-                old["version"] = 6
-                old["bindings"].update(app.V6_CHANGED)
+                old = old_keymap(hub.load_json(source), 6)
                 if section == "v2_emulation":
                     old[section]["bindings"]["hid:0x08"] = "slot 6"
                 else:

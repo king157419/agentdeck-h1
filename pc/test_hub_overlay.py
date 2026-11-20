@@ -601,27 +601,21 @@ class OverlayViewAndPrefsTests(unittest.TestCase):
 
 
 class KeyBindingsAndNextWaitTests(unittest.TestCase):
-    def test_hub_keys_bindings_contain_all_idle_keys(self):
-        keys_path = Path(__file__).resolve().parent / "hub_keys.json"
-        data = json.loads(keys_path.read_text(encoding="utf-8"))
+    def test_hub_keys_bindings_match_v9_fixed_positions(self):
+        data = json.loads(Path(__file__).with_name("hub_keys.json").read_text(encoding="utf-8"))
         bindings = data["bindings"]
-
-        # 6 idle keys from brief
-        self.assertEqual(bindings.get("hid:0x10"), "prompt continue")
-        self.assertEqual(bindings.get("ctrl+hid:0x17"), "prompt tests")
-        self.assertEqual(bindings.get("ctrl+hid:0x07"), "prompt summary")
-        self.assertEqual(bindings.get("hid:0x18"), "prompt commit")
-        self.assertEqual(bindings.get("hid:0x1B"), "cycle +1")
-        self.assertEqual(bindings.get("hid:0x2B"), "next_wait")
-
-        # Ctrl+C and Ctrl+V left empty
-        self.assertNotIn("ctrl+hid:0x06", bindings)
-        self.assertNotIn("ctrl+hid:0x19", bindings)
-
-        # Knob 2 press shows the overlay (F5); knob 3 scrolls, knob 4 navigates (v5)
-        self.assertEqual(bindings.get("hid:0x14"), "show")
-        self.assertEqual(bindings.get("hid:0x19"), "scroll end")
-        self.assertEqual(bindings.get("ctrl+hid:0x27"), "nav enter")
+        self.assertEqual(data["version"], 9)
+        self.assertEqual(bindings["hid:0x10"], "copy")
+        self.assertEqual(bindings["ctrl+hid:0x17"], "paste")
+        self.assertEqual(bindings["ctrl+hid:0x07"], "overlay")
+        self.assertEqual(bindings["hid:0x18"], "send")
+        self.assertEqual(bindings["hid:0x1B"], "clear")
+        self.assertEqual(bindings["hid:0x2B"], "approve")
+        self.assertEqual(bindings["ctrl+hid:0x06"], "deny")
+        self.assertEqual(bindings["ctrl+hid:0x19"], {"down": "voice_down", "up": "voice_up"})
+        self.assertEqual(bindings["hid:0x14"], "session select")
+        self.assertEqual(bindings["hid:0x19"], "pane next")
+        self.assertEqual(bindings["hid:0x06"], "ctx select")
 
     def test_next_wait_action_cycles_waiting_sessions_and_reports_no_wait(self):
         import hub

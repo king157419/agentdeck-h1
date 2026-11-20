@@ -20,6 +20,13 @@ import hub_install
 import voice_shortcut_capture as shortcut_capture
 
 
+def legacy_keymap(shipped, version):
+    bindings = {key: value for key, value in dict(app.V8_BINDINGS, **app.OLD_DEFAULTS[version]).items()
+                if value is not None}
+    return dict({key: value for key, value in shipped.items() if key != "layers"},
+                version=version, bindings=bindings)
+
+
 class ExplodingOS:
     """A module-level tripwire: no test can use the real login configuration."""
     def __getattr__(self, name):
@@ -255,26 +262,23 @@ class ConfigTests(unittest.TestCase):
 
     def test_prepare_configs_upgrades_untouched_v5_and_keeps_original_backup(self):
         shipped = app.hub.load_json(app.resource_dir() / "hub_keys.json")
-        old_bindings = dict(shipped["bindings"], **{"hid:0x16": "cycle +1", "hid:0x09": "cycle -1"})
-        del old_bindings["hid:0x06"]
-        original = json.dumps(dict(shipped, version=5, bindings=old_bindings), indent=3).encode("utf-8")
+        original = json.dumps(legacy_keymap(shipped, 5), indent=3).encode("utf-8")
         target = app.data_dir(self.home) / "hub_keys.json"
         target.parent.mkdir()
         target.write_bytes(original)
         keys, _ = app.prepare_configs(home=self.home)
         self.assertEqual(keys, target)
         self.assertEqual(app.hub.load_json(keys), shipped)
-        self.assertEqual(shipped["version"], 8)
+        self.assertEqual(shipped["version"], 9)
         self.assertEqual(target.with_name("hub_keys.json.bak-v5").read_bytes(), original)
         app.prepare_configs(home=self.home)
         self.assertEqual(target.with_name("hub_keys.json.bak-v5").read_bytes(), original)
 
     def test_prepare_configs_keeps_edited_v5_byte_identical(self):
         shipped = app.hub.load_json(app.resource_dir() / "hub_keys.json")
-        old_bindings = dict(shipped["bindings"], **{"hid:0x16": "cycle +1", "hid:0x09": "cycle -1"})
-        del old_bindings["hid:0x06"]
-        old_bindings["hid:0x08"] = "slot 6"
-        original = json.dumps(dict(shipped, version=5, bindings=old_bindings), indent=3).encode("utf-8")
+        old = legacy_keymap(shipped, 5)
+        old["bindings"]["hid:0x08"] = "slot 6"
+        original = json.dumps(old, indent=3).encode("utf-8")
         target = app.data_dir(self.home) / "hub_keys.json"
         target.parent.mkdir()
         target.write_bytes(original)
@@ -311,15 +315,25 @@ class ConfigTests(unittest.TestCase):
         model = app.keymap_model(config)
         self.assertEqual([len(row) for row in model["rows"]], [4] * 5)
         self.assertEqual(len(model["knobs"]), 4)
-        self.assertEqual(model["rows"][0][0], ("E", "slot 1"))
-        self.assertEqual(model["rows"][1][3], ("Alt", "修饰键，未绑定"))
-        self.assertEqual(model["rows"][3][:2], [("Ctrl", "修饰键，未绑定"), ("Shift", "修饰键，未绑定")])
-        self.assertEqual(model["rows"][3][2:], [("U", "prompt commit"), ("X", "cycle +1")])
-        self.assertEqual(model["rows"][4][1], ("Ctrl+C", "未绑定"))
-        self.assertEqual(model["knobs"][0], ["window next", "window prev", "screenshot"])
-        self.assertEqual(model["knobs"][3], ["nav down", "nav up", "nav enter"])
-        self.assertIn("voice_down", model["rows"][1][2][1])
-        self.assertIn("voice_up", model["rows"][1][2][1])
+        self.assertEqual(model["rows"][0][0], ("E", "app claude"))
+        self.assertEqual(model["rows"][1][3], ("Alt", "ctx 4"))
+        self.assertEqual(model["rows"][3][:2], [("Ctrl", "interrupt"), ("Shift", "screenshot")])
+        self.assertEqual(model["rows"][3][2:], [("U", "send"), ("X", "clear")])
+        self.assertEqual(model["rows"][4][1], ("Ctrl+C", "deny"))
+        self.assertEqual(model["knobs"][0], ["window next", "window prev", "window back"])
+        self.assertEqual(model["knobs"][3], ["ctx next", "ctx prev", "ctx select"])
+        self.assertIn("voice_down", model["rows"][4][2][1])
+        self.assertIn("voice_up", model["rows"][4][2][1])
+
+    def test_keymap_layer_overrides_global_bindings(self):
+        config = {"bindings": {"hid:0x0A": "ctx 1", "hid:0x08": "app claude"},
+                  "layers": {"chat": {"hid:0x0A": "prompt custom"}}}
+        self.assertEqual(app.keymap_model(config, layer="chat")["rows"][1][0][1], "prompt custom")
+        self.assertEqual(app.keymap_model(config, layer="browser")["rows"][1][0][1], "ctx 1")
+        self.assertEqual(app.keymap_model(config, layer="chat")["rows"][0][0][1], "app claude")
+        config["layers"]["chat"] = []
+        with self.assertRaisesRegex(ValueError, "layers"):
+            app.keymap_model(config, layer="chat")
 
     def test_keymap_uses_selected_profile_and_live_user_values(self):
         config = {"bindings": {"hid:0x08": "slot 1"}, "alternate": {"bindings": {"hid:0x08": "slot 6"}}}
@@ -341,20 +355,51 @@ class KeymapUpgradeTests(unittest.TestCase):
     def test_untouched_v3_keymap_is_upgraded_and_edited_one_kept(self):
         source = app.resource_dir() / "hub_keys.json"
         shipped = json.loads(source.read_text(encoding="utf-8"))
-        self.assertEqual(shipped["bindings"]["hid:0x14"], "show")
-        old_bindings = {key: value for key, value in dict(shipped["bindings"], **app.V3_CHANGED).items()
-                        if value is not None}
-        old = dict(shipped, version=3, bindings=old_bindings)
+        self.assertEqual(shipped["bindings"]["hid:0x14"], "session select")
+        old = legacy_keymap(shipped, 3)
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "hub_keys.json"
             target.write_text(json.dumps(old), encoding="utf-8")
             self.assertTrue(app.upgrade_keymap(target, source))
-            self.assertEqual(json.loads(target.read_text(encoding="utf-8"))["bindings"]["hid:0x14"], "show")
+            self.assertEqual(json.loads(target.read_text(encoding="utf-8"))["bindings"]["hid:0x14"], "session select")
             self.assertTrue(target.with_name("hub_keys.json.bak-v3").exists())
             edited = dict(old, bindings=dict(old["bindings"], **{"hid:0x08": "slot 4"}))
             target.write_text(json.dumps(edited), encoding="utf-8")
             self.assertFalse(app.upgrade_keymap(target, source))
             self.assertEqual(json.loads(target.read_text(encoding="utf-8")), edited)
+
+    def test_v8_default_is_upgraded_with_exact_backup_and_custom_edits_are_kept(self):
+        source = app.resource_dir() / "hub_keys.json"
+        shipped = json.loads(source.read_text(encoding="utf-8"))
+        old = legacy_keymap(shipped, 8)
+        old["_instructions"] = ["the original v8 instructions"]
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "hub_keys.json"
+            original = json.dumps(old, ensure_ascii=False, indent=3).encode("utf-8")
+            target.write_bytes(original)
+            self.assertTrue(app.upgrade_keymap(target, source))
+            backup = target.with_name("hub_keys.json.bak-v8")
+            self.assertEqual(backup.read_bytes(), original)
+            self.assertEqual(json.loads(target.read_bytes()), shipped)
+            target.write_bytes(original)
+            backup.write_bytes(b"earlier backup")
+            self.assertTrue(app.upgrade_keymap(target, source))
+            self.assertEqual(backup.read_bytes(), b"earlier backup")
+            for field in ("bindings", "hotkey", "v2_emulation", "layers", "custom"):
+                with self.subTest(field=field):
+                    edited = json.loads(original)
+                    if field == "bindings":
+                        edited[field]["hid:0x08"] = "slot 6"
+                    elif field == "hotkey":
+                        edited[field]["F13"] = "slot 6"
+                    elif field == "v2_emulation":
+                        edited[field]["bindings"]["hid:0x08"] = "slot 6"
+                    else:
+                        edited[field] = {}
+                    raw = json.dumps(edited).encode("utf-8")
+                    target.write_bytes(raw)
+                    self.assertFalse(app.upgrade_keymap(target, source))
+                    self.assertEqual(target.read_bytes(), raw)
 
 
 class ShortcutRecordingTests(unittest.TestCase):

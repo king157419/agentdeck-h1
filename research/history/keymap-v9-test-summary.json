@@ -1,0 +1,107 @@
+[
+  {
+    "file": "test_agentdeck_app.py",
+    "exit_code": 0,
+    "seconds": 2.33
+  },
+  {
+    "file": "test_capture_etl.py",
+    "exit_code": 0,
+    "seconds": 2.53
+  },
+  {
+    "file": "test_claude_uia.py",
+    "exit_code": 0,
+    "seconds": 0.59
+  },
+  {
+    "file": "test_daemon.py",
+    "exit_code": 0,
+    "seconds": 0.61
+  },
+  {
+    "file": "test_deck.py",
+    "exit_code": 0,
+    "seconds": 2.07
+  },
+  {
+    "file": "test_deck_exclusive.py",
+    "exit_code": 0,
+    "seconds": 0.41
+  },
+  {
+    "file": "test_deck_input.py",
+    "exit_code": 0,
+    "seconds": 0.39
+  },
+  {
+    "file": "test_deck_keymap.py",
+    "exit_code": 0,
+    "seconds": 0.65
+  },
+  {
+    "file": "test_deck_probe.py",
+    "exit_code": 0,
+    "seconds": 0.43
+  },
+  {
+    "file": "test_deck_usb.py",
+    "exit_code": 0,
+    "seconds": 0.61
+  },
+  {
+    "file": "test_focus_lock.py",
+    "exit_code": 0,
+    "seconds": 0.78
+  },
+  {
+    "file": "test_hub.py",
+    "exit_code": 1,
+    "seconds": 10.43
+  },
+  {
+    "file": "test_hub_app_support.py",
+    "exit_code": 0,
+    "seconds": 1.16
+  },
+  {
+    "file": "test_hub_app_switch.py",
+    "exit_code": 1,
+    "seconds": 1.44
+  },
+  {
+    "file": "test_hub_daily_fixes.py",
+    "exit_code": 0,
+    "seconds": 0.76
+  },
+  {
+    "file": "test_hub_demo.py",
+    "exit_code": 0,
+    "seconds": 1.1
+  },
+  {
+    "file": "test_hub_desktop.py",
+    "exit_code": 0,
+    "seconds": 1.1
+  },
+  {
+    "file": "test_hub_desktop_mac.py",
+    "exit_code": 1,
+    "seconds": 0.84
+  },
+  {
+    "file": "test_hub_doctor.py",
+    "exit_code": 0,
+    "seconds": 0.94
+  },
+  {
+    "file": "test_hub_fixes.py",
+    "exit_code": 0,
+    "seconds": 5.66
+  },
+  {
+    "file": "test_hub_gate.py",
+    "exit_code": 0,
+    "seconds": 3.22
+  }
+]

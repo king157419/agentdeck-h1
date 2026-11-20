@@ -35,6 +35,7 @@ from deck import normalize_key
 from focus_lock import focus_lock
 from hub_audit import AuditError, AuditLog
 from hub_risk import PROTECTED_BRANCHES
+from hub_controls import Controls
 
 
 HOST = "127.0.0.1"
@@ -70,7 +71,8 @@ SCROLL_END = 100             # "scroll end": far enough to reach the bottom
 NAV_KEYS = ("up", "down", "enter")
 # Raw Input cannot stop the key itself from typing into the focused window, so a
 # paste/Enter action would send e.g. "m继续". Only USB direct reads may use these.
-RAW_INPUT_BLOCKED = ("prompt", "nav", "voice_down", "voice", "screenshot", "app", "window")
+RAW_INPUT_BLOCKED = ("prompt", "nav", "voice_down", "voice", "screenshot", "app", "window",
+                     "ctx", "send", "interrupt", "clear", "copy", "paste", "pane")
 LEAK_TEXT = "按键会漏进窗口：先用 Zadig 把接口 0 换成 WinUSB"
 log = logging.getLogger("agentdeck.hub")
 keylog = logging.getLogger("agentdeck.hub.keys")
@@ -81,9 +83,9 @@ SESSION_FIELDS = ("agent", "session_id", "slot", "cwd", "name", "title", "state"
 # Measured positions shared by key feedback and the tray's keymap window.
 KEY_ROWS = (
     (("E", "hid:0x08"), ("B", "hid:0x05"), ("Ctrl+Z", "ctrl+hid:0x1D"), ("Space", "hid:0x2C")),
-    (("G", "hid:0x0A"), ("Ctrl+F", "ctrl+hid:0x09"), ("H", "hid:0x0B"), ("Alt", None)),
+    (("G", "hid:0x0A"), ("Ctrl+F", "ctrl+hid:0x09"), ("H", "hid:0x0B"), ("Alt", "alt")),
     (("L", "hid:0x0F"), ("M", "hid:0x10"), ("Ctrl+T", "ctrl+hid:0x17"), ("Ctrl+D", "ctrl+hid:0x07")),
-    (("Ctrl", None), ("Shift", None), ("U", "hid:0x18"), ("X", "hid:0x1B")),
+    (("Ctrl", "ctrl"), ("Shift", "shift"), ("U", "hid:0x18"), ("X", "hid:0x1B")),
     (("Tab", "hid:0x2B"), ("Ctrl+C", "ctrl+hid:0x06"), ("Ctrl+V", "ctrl+hid:0x19"), ("P", "hid:0x13")),
 )
 KNOBS = (("hid:0x09", "hid:0x16", "hid:0x0F"), ("hid:0x15", "hid:0x13", "hid:0x14"),
@@ -227,6 +229,8 @@ def describe_input(action, result=None, error=None):
                 return message.format(slot=slot), False, lcd.format(slot=slot)
         return "操作失败：" + text[:40], False, "Key failed"
     result = result if isinstance(result, dict) else {}
+    if isinstance(result.get("noop"), str):
+        return result["noop"], True, None
     if isinstance(result.get("message"), str):
         return result["message"], result.get("switched") is not False, None
     status = result.get("status")
@@ -406,6 +410,8 @@ class Hub:
         self.sessions_write_at = float("-inf")
         self.sessions_warnings = set()
         self.unheld_since = None
+        self.controls = Controls(self)
+        self.noop_notices = {}
         self._load_sessions()
 
     @staticmethod
@@ -546,14 +552,26 @@ class Hub:
 
     def note_action(self, action, result=None, error=None, control=None):
         """Publish the same feedback metadata for keyboard and global hotkeys."""
+        if error is None and action.split()[0] in ("scroll", "window", "paste", "copy", "app", "pane"):
+            if not isinstance(result, dict) or result.get("status") not in ("noop", "error", "unavailable"):
+                return
         text, ok, lcd = describe_input(action, result, error)
         compact = ((isinstance(result, dict) and result.get("status") == "no_request")
                    or (action.startswith("nav ") and error is not None
                        and "only while the agent asks" in str(error)))
+        status = result.get("status") if isinstance(result, dict) else None
+        kind = ("error" if error is not None or status == "error" else
+                "noop" if status in ("noop", "no_request", "no_waiting_session", "unavailable", "locked")
+                else "success")
         with self.lock:
+            if kind == "noop":
+                now = self.monotonic()
+                if now - self.noop_notices.get((action, text), float("-inf")) < 3:
+                    return
+                self.noop_notices[(action, text)] = now
             self.note_input(text if compact or not control else control + " → " + text, ok, lcd)
             if self.last_input is not None:
-                self.last_input.update(compact=compact, action=action)
+                self.last_input.update(compact=compact, action=action, kind=kind)
 
     def _send(self, lines, focus=False, rendered=None):
         if not self.lcd_enabled:
@@ -1038,6 +1056,11 @@ class Hub:
                 # A bare allow cannot answer a question or accept a plan; the native
                 # UI does it. The approve key focuses this session's window instead.
                 session["needs_answer"] = tool_name
+                if isinstance(tool_input, dict):
+                    questions = tool_input.get("questions", [])
+                    if questions and isinstance(questions[0], dict):
+                        session["question_options"] = [str(option.get("label", "")) for option in
+                            questions[0].get("options", []) if isinstance(option, dict) and option.get("label")]
                 session["state"] = "wait"
                 self._publish(session)
                 if self.selected == identity:
@@ -1112,6 +1135,14 @@ class Hub:
                         state = "idle"
                 if name == "PreToolUse" and event.get("tool_name") == "AskUserQuestion":
                     state = "wait"
+                    session["needs_answer"] = "AskUserQuestion"
+                    if isinstance(tool_input, dict):
+                        questions = tool_input.get("questions", [])
+                        if questions and isinstance(questions[0], dict):
+                            session["question_options"] = [str(o["label"]) for o in questions[0].get("options", [])
+                                                           if isinstance(o, dict) and o.get("label")]
+                if name == "Stop":
+                    session["read"] = False
                 if any(p.session == identity for p in self.pending.values()):
                     state = "wait"
                 elif any(p.session == identity for p in self.locked.values()):
@@ -1159,7 +1190,7 @@ class Hub:
             selected = self.sessions.get(self.selected)
             reader = self._input_reader()
             connected = reader in ("usb", "raw")
-            return {"sessions": sessions, "pending": [p.public() for p in self.pending.values()],
+            return {**self.controls.snapshot(), "sessions": sessions, "pending": [p.public() for p in self.pending.values()],
                     "last_input": dict(self.last_input) if self.last_input else None,
                     "input_reader": reader if reader in ("usb", "raw", "absent") else None,
                     "deck_connected": connected, "hold_mode": self.hold_mode,
@@ -1186,6 +1217,10 @@ class Hub:
                 and payload.get('nonce') is None and source in ('key', 'hotkey')):
             return
         reason = None
+        if payload.get("card_guard") is True and request is not None:
+            rendered = self.rendered_at.get("overlay")
+            if rendered is not None and ("overlay" not in self.active_displays or received_at - rendered < .4):
+                reason = "switch_guard"
         if "nonce" in payload:
             nonce = payload["nonce"]
             if (type(nonce) is not int or not 0 <= nonce < 2**32 or request is None
@@ -1242,6 +1277,44 @@ class Hub:
             raise HubError("action must not be empty")
         command = parts[0]
         argument = parts[1] if len(parts) == 2 else None
+        contextual = (command in ("ctx", "session", "pane", "send", "clear", "copy", "paste", "overlay_down", "overlay_up")
+                      or command == "app" and argument in ("claude", "wechat", "feishu", "browser")
+                      or command == "window" and argument == "back"
+                      or command == "overlay" and argument == "move"
+                      or command == "interrupt" and (self.controls._switching()
+                          or self.displayed_request_id is None and not self.pending))
+        if contextual:
+            if command == "ctx" and argument not in ("1", "2", "3", "4", "next", "prev", "select"):
+                raise HubError("ctx needs 1..4, next, prev or select")
+            if command == "session" and argument not in ("next", "prev", "select"):
+                raise HubError("session needs next, prev or select")
+            if command == "pane" and argument not in (None, "next"):
+                raise HubError("pane needs next")
+            if command in ("send", "clear", "copy", "paste", "overlay_down", "overlay_up", "interrupt") and argument is not None:
+                raise HubError("unexpected action argument")
+            with self.lock:
+                if self.closed:
+                    raise HubError("hub is shutting down", 503)
+                if self.desktop is not None and self.desktop.voice_active and command not in ("overlay_up",):
+                    raise HubError("release voice before sending input", 409)
+            if command not in ("window", "interrupt", "overlay_down", "overlay_up") and self.desktop is not None:
+                release = getattr(self.desktop, "release_window_switch", None)
+                if callable(release) and release() is False:
+                    raise HubError("could not release window-switch keys", 409)
+            timer = None
+            if command in ("session", "send", "ctx", "clear", "app"):
+                timer = threading.Timer(.5, lambda: self._pending_feedback(command))
+                timer.daemon = True
+                timer.start()
+            try:
+                return self.controls.action(command, argument, received_at)
+            except HubError:
+                raise
+            except Exception as error:
+                raise HubError(str(error), 409) from error
+            finally:
+                if timer is not None:
+                    timer.cancel()
         if command not in ("slot", "cycle", "next_wait", "approve", "deny", "interrupt", "voice",
                            "voice_down", "voice_up", "screenshot", "prompt", "show", "scroll", "nav", "hold", "app", "window", "overlay"):
             raise HubError("unknown action")
@@ -1503,7 +1576,7 @@ class Hub:
                       "slot": self.sessions[selected]["slot"]}
             return result if command == "cycle" else self._focus_effect(command, selected, result)
         session = self.sessions.get(self.selected)
-        if session is None and command not in ("app", "window"):
+        if session is None and command not in ("app", "window", "scroll", "screenshot"):
             raise HubError("select a session first", 409)
         if command == "nav":
             identity = self.selected
@@ -1572,6 +1645,8 @@ class Hub:
                     completed = getattr(desktop, command)(session, sessions)
                 if sys.platform == "darwin" and completed is False:
                     return {"action": command, "status": "unavailable"}
+                if isinstance(completed, dict) and "noop" in completed:
+                    return {"action": command, "status": "noop", **completed}
             except HubError:
                 raise
             except Exception as error:
@@ -1598,6 +1673,7 @@ class Hub:
             return self.desktop
 
     def maintain(self):
+        self.controls.maintain()
         with self.lock:
             self._update_voice()
             self._expire()
@@ -1608,6 +1684,12 @@ class Hub:
                 self.lcd_retry_at = float('inf')
                 self._show()
         self._save_sessions()
+
+    def _pending_feedback(self, command):
+        with self.lock:
+            if not self.closed:
+                self.note_input("正在打开…" if command == "session" else "正在…")
+                self.last_input.update(kind="pending", action=command)
 
     def close(self):
         with self.lock:
@@ -1783,23 +1865,36 @@ def binding_label(binding):
 
 def control_name(binding):
     """All known physical positions that send this exact binding."""
-    return CONTROL_NAMES.get(normalize_key(binding), binding_label(binding))
+    return CONTROL_NAMES.get(normalize_binding(binding), binding_label(binding))
+
+
+def normalize_binding(binding):
+    if isinstance(binding, str) and binding.strip().lower() in ("alt", "ctrl", "shift"):
+        return binding.strip().lower()
+    return normalize_key(binding)
 
 
 class USBKeys:
     """Dispatch bindings and pair releases with the accepted physical press."""
 
     def __init__(self, hub, mapping=None, monotonic=None, profile="default", knob_divider=None):
-        from hub_keyboard import KnobDetents
+        from hub_keyboard import KnobDetents, ModifierTaps
         self.hub = hub
         self.detents = KnobDetents(knob_divider)
+        self.modifier_taps = ModifierTaps()
         config = load_json(Path(__file__).with_name("hub_keys.json")) if mapping is None else mapping
         if profile != "default":
             config = config.get(profile)
         if not isinstance(config, dict) or not isinstance(config.get("bindings"), dict):
             raise ValueError("key profile %r needs a bindings object" % profile)
-        self.mapping = {normalize_key(key): action for key, action in config["bindings"].items()}
-        for actions in self.mapping.values():
+        self.version = config.get("version", 0)
+        self.mapping = {normalize_binding(key): action for key, action in config["bindings"].items()}
+        layers = config.get("layers", {})
+        if not isinstance(layers, dict) or any(not isinstance(value, dict) for value in layers.values()):
+            raise ValueError("layers need binding objects")
+        self.layers = {name: {normalize_binding(key): action for key, action in value.items()}
+                       for name, value in layers.items()}
+        for actions in [*self.mapping.values(), *(a for layer in self.layers.values() for a in layer.values())]:
             if isinstance(actions, str):
                 continue
             if (not isinstance(actions, dict) or not actions or set(actions) - {"down", "up"}
@@ -1808,6 +1903,11 @@ class USBKeys:
                 raise ValueError("bindings need an action string or down/up action strings")
         self.held = {}
         self.monotonic = getattr(hub, 'monotonic', time.monotonic) if monotonic is None else monotonic
+
+    def lookup(self, binding):
+        controls = getattr(self.hub, "controls", None)
+        layer = controls.layers.current if isinstance(self.hub, Hub) else "default"
+        return self.layers.get(layer, {}).get(binding, self.mapping.get(binding))
 
     def snapshot(self):
         return self.hub.input_snapshot() if hasattr(self.hub, 'input_snapshot') else dict(self.hub.rendered_request)
@@ -1826,7 +1926,12 @@ class USBKeys:
                 or not math.isfinite(received_at)):
             return
         shown = dict(event['shown']) if isinstance(event.get('shown'), dict) else self.snapshot()
+        tap = self.modifier_taps.feed(dict(event, t=received_at))
         if event.get("modifier"):
+            if tap is not None and 0 <= self.monotonic() - received_at <= 1:
+                action = self.lookup(tap)
+                if isinstance(action, str):
+                    self._dispatch(tap, action, shown, received_at, reader)
             return
         # Releases may have no pressed keys, different modifiers or an aged
         # timestamp. An accepted voice press must still be stopped in each case.
@@ -1838,18 +1943,39 @@ class USBKeys:
             held = self.held.pop(physical, None)
             if held is not None:
                 binding, action = held
-                if action == "voice_up" or 0 <= self.monotonic() - event.get("t", float("-inf")) <= 1.0:
+                if action == "overlay_up" and event.get("cancelled") and isinstance(self.hub, Hub):
+                    self.hub.controls.help_down_at = None
+                    self.hub.controls.overlay_help = False
+                    return
+                if action in ("voice_up", "overlay_up") or 0 <= self.monotonic() - event.get("t", float("-inf")) <= 1.0:
                     self._dispatch(binding, action, shown, received_at, reader)
             return
         if not 0 <= self.monotonic() - event.get("t", float("-inf")) <= 1.0:
             return
+        controls = self.hub.controls if isinstance(self.hub, Hub) else None
+        from hub_keyboard import KNOB_ROTATIONS
+        rotation = "hid:0x%02X" % physical if type(physical) is int else physical
+        help_keys = {usage for usage, (_, release) in self.held.items() if release == "overlay_up"}
+        if (controls is not None and controls.help_down_at is not None and help_keys
+                and rotation in KNOB_ROTATIONS
+                and set(event.get("pressed", ())) <= help_keys | {physical}
+                and set(event.get("modifiers", ())) <= {"ctrl"}):
+            self._dispatch(rotation, "overlay move", shown, received_at, reader)
+            return
+        if controls is not None and controls._switching():
+            window_key = (len(event.get("pressed", ())) == 1 and not event.get("modifiers")
+                          and self.lookup(rotation) in ("window next", "window prev", "window back"))
+            if not window_key:
+                release = getattr(self.hub.desktop, "release_window_switch", None)
+                if callable(release) and release() is False:
+                    return
         if len(event.get("pressed", ())) != 1:
             return
         if physical in self.held:
             return
         for key in event.get("keys", ()):
             binding = normalize_key(key)
-            actions = self.mapping.get(binding)
+            actions = self.lookup(binding)
             if actions is None:
                 continue
             modifiers = tuple(binding.split("+")[:-1])
@@ -1859,6 +1985,8 @@ class USBKeys:
                 continue
             if not self.detents.accept(binding, received_at):
                 return
+            if actions == "overlay":
+                actions = {"down": "overlay_down", "up": "overlay_up"}
             action = actions.get("down") if isinstance(actions, dict) else actions
             if action is None or self._dispatch(binding, action, shown, received_at, reader):
                 if isinstance(actions, dict) and "up" in actions:
@@ -1873,8 +2001,10 @@ class USBKeys:
             payload = {"action": action}
             if action in ("approve", "deny"):
                 payload.update(shown)
+                if self.version >= 9:
+                    payload["card_guard"] = True
             elif action == "interrupt":
-                payload["request_id"] = shown["request_id"]
+                payload["request_id"] = shown.get("request_id")
             result = self.hub.action(payload, source="key", received_at=received_at)
             keylog.debug("Keyboard action reader=%s binding=%s control=%s action=%s result=%s",
                          reader, binding, control_name(binding), action, result)
