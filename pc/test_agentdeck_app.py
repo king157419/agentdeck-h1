@@ -75,6 +75,51 @@ class FakeRegistry:
         del self.values[name]
 
 
+class TrayRegistry:
+    """HKCU\\Control Panel\\NotifyIconSettings substitute; never the real registry."""
+    HKEY_CURRENT_USER = "HKCU"
+    KEY_SET_VALUE = 2
+    REG_DWORD = 4
+
+    def __init__(self, records=None):
+        self.records = {} if records is None else records
+        self.writes = []
+
+    class Key:
+        def __init__(self, path):
+            self.path = path
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def OpenKey(self, parent, path, reserved=0, rights=0):
+        base = parent.path + "\\" + path if isinstance(parent, self.Key) else path
+        if base != app.NOTIFY_KEY and base.rsplit("\\", 1)[-1] not in self.records:
+            raise FileNotFoundError(base)
+        if base == app.NOTIFY_KEY and not self.records:
+            raise FileNotFoundError(base)
+        return self.Key(base)
+
+    def EnumKey(self, key, index):
+        names = list(self.records)
+        if index >= len(names):
+            raise OSError("no more items")
+        return names[index]
+
+    def QueryValueEx(self, key, name):
+        values = self.records[key.path.rsplit("\\", 1)[-1]]
+        if name not in values:
+            raise FileNotFoundError(name)
+        return values[name], 1
+
+    def SetValueEx(self, key, name, reserved, kind, value):
+        self.writes.append((key.path, name, kind, value))
+        self.records[key.path.rsplit("\\", 1)[-1]][name] = value
+
+
 class StatusTests(unittest.TestCase):
     def test_empty_status_and_tooltip(self):
         self.assertEqual(app.tray_status({}), ("idle", "AgentDeck · 0 个会话 · 0 个待批"))
@@ -180,6 +225,24 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(app.keymap_model(config, "alternate")["rows"][0][0][1], "prompt my-template")
         with self.assertRaisesRegex(ValueError, "missing"):
             app.keymap_model(config, "missing")
+
+
+class KeymapUpgradeTests(unittest.TestCase):
+    def test_untouched_v3_keymap_is_upgraded_and_edited_one_kept(self):
+        source = app.resource_dir() / "hub_keys.json"
+        shipped = json.loads(source.read_text(encoding="utf-8"))
+        self.assertEqual(shipped["bindings"]["hid:0x14"], "show")
+        old = dict(shipped, version=3, bindings=dict(shipped["bindings"], **app.V3_CHANGED))
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "hub_keys.json"
+            target.write_text(json.dumps(old), encoding="utf-8")
+            self.assertTrue(app.upgrade_keymap(target, source))
+            self.assertEqual(json.loads(target.read_text(encoding="utf-8"))["bindings"]["hid:0x14"], "show")
+            self.assertTrue(target.with_name("hub_keys.json.bak-v3").exists())
+            edited = dict(old, bindings=dict(old["bindings"], **{"hid:0x08": "slot 4"}))
+            target.write_text(json.dumps(edited), encoding="utf-8")
+            self.assertFalse(app.upgrade_keymap(target, source))
+            self.assertEqual(json.loads(target.read_text(encoding="utf-8")), edited)
 
 
 class ShortcutRecordingTests(unittest.TestCase):
@@ -332,6 +395,18 @@ class AutostartTests(unittest.TestCase):
         self.assertFalse(self.start.enabled())
         self.start.set_enabled(True)
         self.assertTrue(self.start.enabled())
+
+    def test_login_registration_uses_background_and_upgrades_legacy_value(self):
+        registry = FakeRegistry()
+        executable = Path("D:/App folder/AgentDeck.exe")
+        with patch.object(sys, "frozen", True, create=True), patch.object(sys, "executable", str(executable)):
+            start = app.AutoStart(registry)
+            self.assertTrue(start.command.endswith("--background"))
+            registry.values["AgentDeck"] = app.launch_command()  # written by an older build
+            self.assertTrue(start.enabled())
+            self.assertTrue(start.upgrade())
+            self.assertEqual(registry.values["AgentDeck"], start.command)
+            self.assertFalse(start.upgrade())
 
     def test_frozen_launch_command_quotes_exe_without_python(self):
         executable = Path("D:/App folder/AgentDeck.exe")
@@ -611,7 +686,7 @@ class ApplicationTests(unittest.TestCase):
         self.application = app.TrayApplication(self.engine, commands=self.queue, prefs=self.prefs,
                                               keys_path=app.resource_dir() / "hub_keys.json",
                                               autostart=app.AutoStart(self.registry, "AgentDeck.exe"),
-                                              overlay=self.overlay)
+                                              overlay=self.overlay, registry=TrayRegistry())
         self.application.message = Mock()
 
     def test_menu_callbacks_enqueue_without_native_actions(self):
@@ -831,7 +906,9 @@ class ApplicationTests(unittest.TestCase):
         self.assertEqual(self.queue.get_nowait(), ("select", ("cc", "new-full-id")))
 
     def test_show_and_toggle_use_overlay_visibility_methods(self):
-        self.application.dispatch("show")
+        with patch.object(self.application, "show_status") as status:
+            self.application.dispatch("show")  # a second launch: overlay + status window
+        status.assert_called_once_with()
         self.overlay.show.assert_called_once()
         self.application.dispatch("toggle")
         self.overlay.hide.assert_called_once()
@@ -842,7 +919,7 @@ class ApplicationTests(unittest.TestCase):
     def test_select_and_next_wait_use_existing_hub_action(self):
         self.engine.state.return_value = {"sessions": [{"agent": "cc", "session_id": "abcdef-full", "slot": 3}]}
         self.application.dispatch("select", ("cc", "abcdef-full"))
-        self.engine.action.assert_called_once_with({"action": "slot 3"})
+        self.engine.action.assert_called_once_with({"action": "slot 3", "session": ["cc", "abcdef-full"]})
         self.application.dispatch("next_wait")
         self.engine.action.assert_called_with({"action": "next_wait"})
 
@@ -852,39 +929,40 @@ class ApplicationTests(unittest.TestCase):
             self.application.dispatch("select", ("cc", "abcdef-old"))
         self.engine.action.assert_not_called()
 
-    def test_selection_holds_identity_lock_until_action_finishes(self):
-        session = {"agent": "cc", "session_id": "original", "slot": 2}
-        attempted = threading.Event()
-        replaced = threading.Event()
-        workers = []
-
-        def replace_session():
-            attempted.set()
-            with self.engine.lock:
-                session["session_id"] = "replacement"
-                replaced.set()
-
-        def state():
-            worker = threading.Thread(target=replace_session)
-            workers.append(worker)
-            worker.start()
-            self.assertTrue(attempted.wait(1))
-            self.assertFalse(replaced.is_set())
-            return {"sessions": [dict(session)]}
+    def test_selection_does_not_hold_hub_lock_during_focus(self):
+        # H5: window focus can take seconds; hook events must not wait for it.
+        self.engine.state.return_value = {"sessions": [{"agent": "cc", "session_id": "original", "slot": 2}]}
+        held = []
 
         def action(payload):
-            self.assertFalse(replaced.is_set())
-            self.assertEqual(session["session_id"], "original")
-            self.assertEqual(payload, {"action": "slot 2"})
+            other = []
 
-        self.engine.state.side_effect = state
+            def probe():
+                acquired = self.engine.lock.acquire(timeout=0.2)
+                other.append(acquired)
+                if acquired:
+                    self.engine.lock.release()
+
+            worker = threading.Thread(target=probe)
+            worker.start()
+            worker.join(1)
+            held.append(other != [True])
+            self.assertEqual(payload, {"action": "slot 2", "session": ["cc", "original"]})
+
         self.engine.action.side_effect = action
-        try:
-            self.application.dispatch("select", ("cc", "original"))
-        finally:
-            for worker in workers:
-                worker.join(timeout=2)
-        self.assertTrue(replaced.is_set())
+        self.application.dispatch("select", ("cc", "original"))
+        self.assertEqual(held, [False])
+
+    def test_recycled_slot_is_rejected_by_hub_under_its_lock(self):
+        engine = app.hub.Hub(sender=lambda *args, **kwargs: None, desktop=Mock(voice_active=False),
+                             lcd_enabled=False, home=self.home, audit=Mock(), prompts={})
+        engine.event("cc", {"hook_event_name": "SessionStart", "session_id": "new-session", "cwd": "D:/p"})
+        with self.assertRaises(app.hub.HubError) as caught:
+            engine.action({"action": "slot 1", "session": ["cc", "old-session"]})
+        self.assertEqual(caught.exception.status, 409)
+        engine.desktop.focus.assert_not_called()
+        self.assertEqual(engine.action({"action": "slot 1", "session": ["cc", "new-session"]})["status"],
+                         "selected")
 
     def test_autostart_menu_toggles_registration_and_checkmark(self):
         self.application.dispatch("autostart")
@@ -1013,74 +1091,170 @@ class ApplicationTests(unittest.TestCase):
         window.destroy.assert_called_once()
         diagnostics.assert_called_once()
 
-    def build_onboarding(self):
+    def build_status(self):
         tk = MagicMock()
-        commands = {}
-        caption = Mock()
-        button = Mock()
+        buttons = {}
 
         def make_button(parent, text, command, kind="primary", **kwargs):
-            commands[text] = command
-            return button
+            buttons[text] = command
+            return MagicMock()
 
-        with patch.dict(sys.modules, {"tkinter": tk}), patch.object(app.theme, "label", return_value=caption) as label, patch.object(
-                app.theme, "button", side_effect=make_button), patch.object(
-                app.theme, "style_window", side_effect=lambda window, title: window), patch.object(app.theme, "center"):
-            self.application.onboarding()
-        return tk, commands, caption, label, button
+        with patch.dict(sys.modules, {"tkinter": tk}), patch.object(app.theme, "label", return_value=MagicMock()), \
+                patch.object(app.theme, "button", side_effect=make_button), patch.object(
+                app.theme, "style_window", side_effect=lambda window, title, **kwargs: window), patch.object(app.theme, "center"):
+            window = self.application.show_status()
+        return tk, window, buttons
 
-    def test_onboarding_skips_only_completed_initialization(self):
-        self.prefs.values["initialized"] = True
-        with patch("tkinter.Toplevel") as window, patch("hub_doctor.installed_projects") as installed:
-            self.application.onboarding()
-        window.assert_not_called()
-        installed.assert_not_called()
+    def test_manual_launch_opens_status_and_login_launch_stays_silent(self):
+        for background, initialized, expected in ((False, True, 1), (True, True, 0), (True, False, 1)):
+            with self.subTest(background=background, initialized=initialized):
+                self.application.background = background
+                self.prefs.values["initialized"] = initialized
+                with patch.object(self.application, "show_status") as status:
+                    self.application.startup()
+                self.assertEqual(status.call_count, expected)
 
-    def test_onboarding_is_one_line_and_one_button_even_with_legacy_dismissal_or_hooks(self):
-        self.prefs.values["onboarding_dismissed"] = True
-        hub_install.apply("install", home=self.home, output=io.StringIO())
-        tk, commands, caption, label, button = self.build_onboarding()
-        tk.Toplevel.assert_called_once_with(self.overlay.root)
-        label.assert_called_once()
-        self.assertNotIn("\n", label.call_args.args[1])
-        self.assertEqual(list(commands), ["开始使用"])
-        self.assertNotIn("initialized", self.prefs.values)
-        self.assertEqual(self.registry.writes, [])
+    def test_status_model_explains_setup_reader_and_tray(self):
+        self.application.state = {"sessions": [{"slot": 1}], "input_reader": "raw"}
+        model = self.application.status_model()
+        rows = {row[0]: row for row in model["rows"]}
+        self.assertFalse(model["complete"])
+        self.assertEqual(rows["钩子"][1:4], ("未启用", False, "修复"))
+        self.assertEqual(rows["开机自启"][3], "开启")
+        self.assertIn("按键会同时打字", rows["读键方式"][1])
+        self.assertEqual(rows["读键方式"][3], "装驱动说明")
+        self.assertIn("右下角 ^", rows["托盘图标"][1])
+        self.assertIn("重开", rows["会话"][1])
+        self.application.state = {"sessions": [], "input_reader": "usb"}
+        self.assertEqual({row[0]: row for row in self.application.status_model()["rows"]}["读键方式"][1:4],
+                         ("✓ USB 直读", True, None))
 
-    def test_onboarding_initializes_and_closes_without_preexisting_codex(self):
-        tk, commands, caption, label, button = self.build_onboarding()
-        commands["开始使用"]()
+    def test_status_window_start_button_initializes_and_has_done_button(self):
+        tk, window, buttons = self.build_status()
+        self.assertIn("开始使用", buttons)
+        self.assertIn("完成", buttons)
+        # Raised above the topmost overlay, then released.
+        window.lift.assert_called_once_with()
+        window.attributes.assert_any_call("-topmost", True)
+        window.focus_force.assert_called_once_with()
+        with patch.dict(sys.modules, {"tkinter": tk}), patch.object(app.theme, "label", return_value=MagicMock()), \
+                patch.object(app.theme, "button", return_value=MagicMock()), patch.object(
+                app.theme, "style_window", side_effect=lambda window, title, **kwargs: window), patch.object(app.theme, "center"):
+            buttons["开始使用"]()
         self.assertTrue(hub_install.global_status(home=self.home)["enabled"])
         self.assertTrue(self.application.autostart_enabled)
         self.assertTrue(app.Preferences(self.home).values["initialized"])
-        tk.Toplevel.return_value.destroy.assert_called_once()
-        self.application.message.assert_not_called()
+        self.assertTrue(self.application.status_model()["complete"])
+        buttons["完成"]()
+        window.destroy.assert_called()
 
-    def test_onboarding_displays_codex_trust_in_same_window_and_removes_button(self):
-        (self.home / ".codex").mkdir()
-        tk, commands, caption, label, button = self.build_onboarding()
-        commands["开始使用"]()
-        caption.configure.assert_called_with(text="在 Codex 里输入 /hooks，信任一次", fg=app.theme.TEXT)
-        button.destroy.assert_called_once()
-        tk.Toplevel.return_value.destroy.assert_not_called()
-        tk.Toplevel.assert_called_once()
-        self.application.message.assert_not_called()
-        with patch.object(app, "init_all") as initialize:
-            commands["开始使用"]()
-        initialize.assert_not_called()
+    def test_status_window_refreshes_sessions_and_reader_while_open(self):
+        """Acceptance 2026-11-19: opened at startup with an empty state, the window kept
+        '会话 0 个' / '读键方式 启动中…' forever and never offered the driver guide."""
+        texts, created, buttons = [], [], {}
 
-    def test_onboarding_failure_stays_in_same_window_and_allows_retry(self):
-        tk, commands, caption, label, button = self.build_onboarding()
-        with patch.object(app, "init_all", side_effect=OSError("backup failed")), self.assertLogs(app.log, level="ERROR"):
-            commands["开始使用"]()
-        self.assertIn("backup failed", caption.configure.call_args.kwargs["text"])
-        tk.Toplevel.return_value.destroy.assert_not_called()
-        button.destroy.assert_not_called()
-        self.assertNotIn("initialized", self.prefs.values)
-        self.application.message.assert_not_called()
-        commands["开始使用"]()
-        self.assertTrue(app.Preferences(self.home).values["initialized"])
-        tk.Toplevel.return_value.destroy.assert_called_once()
+        def make_label(parent, text="", **kwargs):
+            widget = MagicMock()
+            texts.append(text)
+            created.append(widget)
+            widget.configure.side_effect = lambda **kw: texts.append(kw.get("text", ""))
+            return widget
+
+        def make_button(parent, text, command, kind="primary", **kwargs):
+            buttons[text] = command
+            return MagicMock()
+
+        self.application.state = {}
+        with patch.dict(sys.modules, {"tkinter": MagicMock()}), patch.object(app.theme, "label", side_effect=make_label), \
+                patch.object(app.theme, "button", side_effect=make_button), patch.object(
+                app.theme, "style_window", side_effect=lambda window, title, **kwargs: window), patch.object(app.theme, "center"):
+            window = self.application.show_status()
+            joined = " ".join(texts)
+            self.assertIn("0 个", joined)
+            self.assertIn("启动中", joined)
+            self.assertNotIn("装驱动说明", buttons)
+            after = self.overlay.root.after
+            self.assertEqual(after.call_args.args[0], app.STATUS_REFRESH_MS)
+            refresh = after.call_args.args[1]
+
+            # The Hub's first snapshot arrives after the window opened.
+            mark = len(texts)
+            self.application.state = {"sessions": [{"slot": 1}, {"slot": 2}], "input_reader": "raw"}
+            refresh()
+            joined = " ".join(texts[mark:])
+            self.assertIn("2 个", joined)
+            self.assertIn("按键会同时打字", joined)
+            self.assertIn("装驱动说明", buttons)
+            self.assertIs(self.application.status_window, window)
+            self.assertEqual(after.call_args.args, (app.STATUS_REFRESH_MS, refresh))
+
+            # A value-only change edits labels in place instead of rebuilding the window.
+            mark, widgets = len(texts), len(created)
+            self.application.state = {"sessions": [{"slot": 1}, {"slot": 2}, {"slot": 3}], "input_reader": "raw"}
+            refresh()
+            self.assertEqual(len(created), widgets)
+            self.assertIn("3 个", " ".join(texts[mark:]))
+
+            # Unchanged state touches nothing.
+            mark = len(texts)
+            refresh()
+            self.assertEqual(texts[mark:], [])
+
+            # Closed: the timer chain ends.
+            buttons["完成"]()
+            calls = after.call_count
+            refresh()
+            self.assertEqual(after.call_count, calls)
+            self.assertIsNone(self.application.status_window)
+
+    def test_closing_status_without_start_changes_nothing(self):
+        tk, window, buttons = self.build_status()
+        buttons["完成"]()
+        self.assertNotIn("initialized", app.Preferences(self.home).values)
+        self.assertEqual(self.registry.writes, [])
+        self.assertFalse(hub_install.global_status(home=self.home)["enabled"])
+
+    def test_tray_hint_only_when_icon_is_hidden(self):
+        self.application.icon = Mock()
+        executable = str(Path(sys.executable))
+        self.application.registry = TrayRegistry({"111": {"ExecutablePath": executable}})
+        self.assertTrue(self.application.tray_hint())
+        self.application.icon.notify.assert_called_once_with(app.TRAY_HINT, "AgentDeck")
+        self.application.icon.reset_mock()
+        self.application.registry = TrayRegistry({"111": {"ExecutablePath": executable, "IsPromoted": 1}})
+        self.assertFalse(self.application.tray_hint())
+        self.application.icon.notify.assert_not_called()
+
+    def test_promote_writes_only_this_programs_record(self):
+        registry = TrayRegistry({"1": {"ExecutablePath": "C:/Other/other.exe"},
+                                 "2": {"ExecutablePath": sys.executable}})
+        self.assertTrue(app.promote_tray_icon(registry))
+        self.assertEqual(registry.writes, [(app.NOTIFY_KEY + "\\2", "IsPromoted", 4, 1)])
+        self.assertEqual(app.tray_icon_entry(registry), ("2", True))
+        self.assertFalse(app.promote_tray_icon(TrayRegistry()))
+
+    def test_overlay_menu_mirrors_tray_and_offers_driver_guide_in_raw_mode(self):
+        self.application.state = {"input_reader": "usb"}
+        labels = [entry[0] for entry in self.application.overlay_menu() if entry]
+        self.assertIn("状态", labels)
+        self.assertIn("退出", labels)
+        self.assertNotIn("装驱动说明", labels)
+        self.application.state = {"input_reader": "raw"}
+        entries = {entry[0]: entry[1] for entry in self.application.overlay_menu() if entry}
+        with patch.object(self.application, "show_driver_guide") as guide:
+            entries["装驱动说明"]()
+        guide.assert_called_once_with()
+        menu = self.application.menu(SimpleNamespace(Menu=Menu, MenuItem=MenuItem))
+        rows = {r.text: r for r in menu.children() if isinstance(r, MenuItem) and isinstance(r.text, str)}
+        rows["状态"].action()
+        self.assertEqual(self.queue.get_nowait(), ("status", None))
+        rows["装驱动说明（按键会打字时）"].action()
+        self.assertEqual(self.queue.get_nowait(), ("driver", None))
+
+    def test_driver_guide_covers_zadig_steps(self):
+        text = app.guide_text()
+        for needle in ("zadig.akeo.ie", "List All Devices", "4132 2107 00", "WinUSB", "Replace Driver"):
+            self.assertIn(needle, text)
 
     def test_diagnostics_queues_report_for_gui_thread(self):
         report = {"text": "USB 未连接", "legacy_count": 0}
@@ -1093,12 +1267,6 @@ class ApplicationTests(unittest.TestCase):
         doctor.assert_called_once_with(home=self.home, projects=[])
         self.assertEqual(self.queue.get_nowait(), ("report", report))
         self.application.message.assert_not_called()
-
-    def test_closing_onboarding_does_not_mark_initialization_complete(self):
-        tk, commands, caption, label, button = self.build_onboarding()
-        tk.Toplevel.return_value.protocol.call_args.args[1]()
-        self.assertNotIn("initialized", app.Preferences(self.home).values)
-        self.assertEqual(self.registry.writes, [])
 
     def test_run_always_stops_tray_even_when_overlay_fails(self):
         self.application.icon = Mock()
@@ -1113,8 +1281,10 @@ class ApplicationTests(unittest.TestCase):
         self.application.icon = Mock()
         self.queue.put(("show", None))
         self.engine.state.return_value = {"sessions": [{"state": "wait"}]}
-        with patch.object(self.application, "draw_icon", return_value="amber"):
+        with patch.object(self.application, "draw_icon", return_value="amber"), patch.object(
+                self.application, "show_status") as status:
             self.application.pump()
+        status.assert_called_once_with()
         self.overlay.show.assert_called_once()
         self.assertEqual(self.application.icon.icon, "amber")
         self.assertEqual(self.application.icon.title, "AgentDeck · 1 个会话 · 1 个待批")
@@ -1132,7 +1302,7 @@ class ApplicationTests(unittest.TestCase):
         self.engine.state.return_value = {"sessions": [
             {"agent": "cc", "session_id": "session", "slot": 3}]}
         work()
-        self.engine.action.assert_called_once_with({"action": "slot 3"})
+        self.engine.action.assert_called_once_with({"action": "slot 3", "session": ["cc", "session"]})
 
     def test_live_pump_uses_background_snapshot_without_hub_lock(self):
         self.application._background_enabled = True

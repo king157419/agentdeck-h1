@@ -4,6 +4,7 @@ import io
 import json
 import logging
 import math
+import os
 from pathlib import Path
 import subprocess
 import shutil
@@ -51,6 +52,61 @@ def _has_relay(path, agent):
                 if info is not None and info["agent"] == agent:
                     return True
     return False
+
+
+def git_bash():
+    """The bash Claude Code uses on Windows for shell-form hooks, or None (PowerShell)."""
+    configured = os.environ.get("CLAUDE_CODE_GIT_BASH_PATH")
+    if configured and Path(configured).is_file():
+        return configured
+    git = shutil.which("git")
+    if git:
+        root = Path(git).resolve().parent.parent
+        for candidate in (root / "bin" / "bash.exe", root / "usr" / "bin" / "bash.exe"):
+            if candidate.is_file():
+                return str(candidate)
+    return None
+
+
+def hook_launch(home, runner, *, bash=None):
+    """Start the installed Claude relay exactly as Claude Code would, with empty stdin.
+
+    Empty stdin is the relay's launch probe: it exits 0 without contacting the hub.
+    Returns None without a Claude relay entry, else {"ok", "how", "returncode", "detail"}.
+    """
+    path = Path(home).joinpath(*hub_install.TARGETS["cc"])
+    try:
+        entries = _entries(path)
+    except (OSError, ValueError, UnicodeError):
+        return None
+    entry = next((item for item in entries if (info := hub_install.relay_info(item)) is not None
+                  and info["agent"] == "cc" and not hub_install.is_gate(item)), None)
+    if entry is None:
+        return None
+    if "args" in entry:
+        argv, how = [entry["command"], *entry["args"]], "exec"
+    elif sys.platform == "win32":
+        shell = git_bash() if bash is None else bash
+        if shell:
+            argv, how = [shell, "-c", entry["command"]], "Git Bash"
+        else:
+            argv, how = ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                         entry["command"]], "PowerShell"
+    else:
+        argv, how = ["/bin/sh", "-c", entry["command"]], "sh"
+    try:
+        result = runner(argv, input="", capture_output=True, text=True, encoding="utf-8",
+                        errors="replace", timeout=10, check=False)
+        code = result.returncode
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        return {"ok": False, "how": how, "returncode": None, "detail": str(error)}
+    if code == 0:
+        detail = "%s 启动正常" % how
+    elif code == 127:
+        detail = "%s 找不到 relay（exit 127）：请在状态窗口点“修复”重新启用钩子" % how
+    else:
+        detail = "%s 启动失败（exit %s）：%s" % (how, code, (getattr(result, "stderr", "") or "").strip()[:200])
+    return {"ok": code == 0, "how": how, "returncode": code, "detail": detail}
 
 
 def _logged_in(result):
@@ -169,6 +225,9 @@ def doctor(*, port=47800, home=None, stdout=None, connection_factory=None,
                     permission_hint_logged = True
             check(label, success, "available" if success else
                   "%s; check osascript and grant permissions in %s" % (detail, MAC_PERMISSION_ADVICE))
+    launch = hook_launch(home, runner)
+    if launch is not None:
+        check("cc hook launch", launch["ok"], launch["detail"])
     return 1 if failures else 0
 
 
@@ -315,6 +374,10 @@ def app_report(*, home=None, projects=(), port=47800, usb_probe=None, serial_pro
         def runner(command, **options):
             if sys.platform == "win32":
                 options["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                # STARTF_FORCEOFFFEEDBACK: no app-starting (busy) cursor for this child.
+                startup = subprocess.STARTUPINFO()
+                startup.dwFlags |= 0x80
+                options["startupinfo"] = startup
             return subprocess.run(command, **options)
     doctor(home=home, port=port, stdout=io.StringIO(), connection_factory=connection_factory,
            runner=runner, wall_time=wall_time, checks=checks)
@@ -324,12 +387,14 @@ def app_report(*, home=None, projects=(), port=47800, usb_probe=None, serial_pro
         "cc event in last 10 minutes": ("Claude 最近十分钟的事件", "已收到", "未收到；请在已安装钩子的项目中开始会话"),
         "cx event in last 10 minutes": ("Codex 最近十分钟的事件", "已收到", "未收到；请在项目中输入 /hooks 信任钩子"),
         "Claude login": ("Claude 登录", "已登录", "未登录或 CLI 不可用，请在 Claude 中检查登录"),
+        "cc hook launch": ("Claude 钩子能否启动", None, None),
     }
     lines = []
     for check in checks:
         label = labels.get(check["label"])
         if label:
-            lines.append("%s：%s" % (label[0], label[1] if check["success"] else label[2]))
+            text = check["detail"] if label[1] is None else label[1] if check["success"] else label[2]
+            lines.append("%s：%s" % (label[0], text))
     try:
         usb = (usb_probe or keyboard_status)()
         driver = usb.get("driver")

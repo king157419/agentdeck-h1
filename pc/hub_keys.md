@@ -18,9 +18,9 @@ D:/conda/miniconda3/python.exe pc/hub.py --backend usb --profile v2_emulation
 | --- | --- | --- | --- | --- |
 | **第 1 排** | E (`hid:0x08`)<br>`slot 1`（会话 1） | B (`hid:0x05`)<br>`slot 2`（会话 2） | Ctrl+Z (`ctrl+hid:0x1D`)<br>`slot 3`（会话 3） | Space (`hid:0x2C`)<br>`interrupt`（打断） |
 | **第 2 排** | G (`hid:0x0A`)<br>`approve`（✓ 批准） | Ctrl+F (`ctrl+hid:0x09`)<br>`deny`（✗ 拒绝） | H (`hid:0x0B`)<br>`voice_down`/`up`（按住说话） | （第 4 颗无信号） |
-| **第 3 排** | L (`hid:0x0F`)<br>`screenshot`（截图） | M (`hid:0x10`)<br>`prompt continue`（继续） | Ctrl+T (`ctrl+hid:0x17`)<br>`prompt tests`（跑测试） | Ctrl+D (`ctrl+hid:0x07`)<br>`prompt summary`（总结进度） |
+| **第 3 排** | L (`hid:0x0F`)<br>`screenshot`（截图） | M (`hid:0x10`)<br>`prompt continue`（继续） | Ctrl+T (`ctrl+hid:0x17`)<br>`prompt tests`（跑测试） | Ctrl+D (`ctrl+hid:0x07`)<br>`prompt summary`（总结进度）<br>⚠ 危险键：漏进窗口时连按两次会退出 Claude Code |
 | **第 4 排** | U (`hid:0x18`)<br>`prompt commit`（提交） | X (`hid:0x1B`)<br>`cycle +1`（下个会话） | （第 3 颗无信号） | （第 4 颗无信号） |
-| **第 5 排** | Tab (`hid:0x2B`)<br>`next_wait`（跳到等我的会话） | Ctrl+C (`ctrl+hid:0x06`)<br>（留空，防与系统快捷键冲突） | Ctrl+V (`ctrl+hid:0x19`)<br>（留空，防与系统快捷键冲突） | P (`hid:0x13`)<br>`cycle -1`（上个会话） |
+| **第 5 排** | Tab (`hid:0x2B`)<br>`next_wait`（跳到等我的会话） | Ctrl+C (`ctrl+hid:0x06`)<br>（留空）⚠ 危险键：漏进窗口会打断 agent，连按会退出 | Ctrl+V (`ctrl+hid:0x19`)<br>（留空）⚠ 危险键：漏进窗口会粘贴剪贴板 | P (`hid:0x13`)<br>`cycle -1`（上个会话） |
 
 ### 旋钮绑定（从左到右编号 1–4）
 
@@ -29,11 +29,18 @@ D:/conda/miniconda3/python.exe pc/hub.py --backend usb --profile v2_emulation
 | 旋钮 1（最左） | 顺时针 S / 逆时针 F | `hid:0x16` / `hid:0x09` | `cycle +1` / `cycle -1` | 下一个 / 上一个会话 |
 | 旋钮 1 按下 | L 键 | `hid:0x0F` | `screenshot` | 截图并粘贴路径 |
 | 旋钮 2 | 顺时针 R / 逆时针 P | `hid:0x15` / `hid:0x13` | `cycle +1` / `cycle -1` | 下一个 / 上一个会话 |
-| 旋钮 2 按下 | Q 键 | `hid:0x14` | `prompt tests` | 跑测试（旧映射保留兼容） |
-| 旋钮 3 | 顺时针 - / 逆时针 = | `hid:0x2D` / `hid:0x2E` | `cycle +1` / `cycle -1` | 下一个 / 上一个会话 |
-| 旋钮 3 按下 | V 键 | `hid:0x19` | `prompt summary` | 总结进度（旧映射保留兼容） |
-| 旋钮 4（最右） | 顺时针 ] / 逆时针 [ | `hid:0x30` / `hid:0x2F` | `cycle +1` / `cycle -1` | 下一个 / 上一个会话 |
-| 旋钮 4 按下 | Ctrl+0 | `ctrl+hid:0x27` | `prompt continue` | 继续（旧映射保留兼容） |
+| 旋钮 2 按下 | Q 键 | `hid:0x14` | `show` | 显示浮窗（隐藏后不用鼠标也能叫回来） |
+| 旋钮 3 | 顺时针 - / 逆时针 = | `hid:0x2D` / `hid:0x2E` | `scroll 1` / `scroll -1` | 在所选 agent 窗口上滚轮：往下看新内容 / 往上翻 |
+| 旋钮 3 按下 | V 键 | `hid:0x19` | `scroll end` | 直接滚到底 |
+| 旋钮 4（最右） | 顺时针 ] / 逆时针 [ | `hid:0x30` / `hid:0x2F` | `nav down` / `nav up` | 下 / 上方向键：agent 提问时换选项（只在“等你”时可用） |
+| 旋钮 4 按下 | Ctrl+0 | `ctrl+hid:0x27` | `nav enter` | 回车：提交选项，或把语音说完的话发出去 |
+
+旋钮 4 的方向键和回车有两条保护：所选会话有待批请求（或 agent 自己的权限对话框）时一律拒绝，提示用 ✓/✗；
+上下键只在会话“等你”（AskUserQuestion、MCP 表单）时可用，免得空闲时翻出旧提问再被回车重发。
+
+只要读键方式不是 USB 直读（接口 0 还是系统 HID 驱动，走 Raw Input），每颗键都会同时打进前台窗口。
+这时 `prompt`、`nav`、语音和截图会被拒绝，浮窗顶部常驻红字提示先用 Zadig 换 WinUSB。
+Ctrl+C、Ctrl+D、Ctrl+V 三颗是危险键：漏进 agent 窗口分别会打断、退出、粘贴。
 
 低风险请求按一次 ✓；高风险请求需在 1.5 秒内松开并再按一次 ✓。
 极危请求转回 agent 原生确认，✓ 返回 `locked`。持续按住产生的重复报文

@@ -25,3 +25,6 @@ research/codex-*.out
 dist/
 build/
 research/cxt-web-driver/
+
+# 验收证据（截图，体积大，按需保留在本地）
+research/acceptance/out/

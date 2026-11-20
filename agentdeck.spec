@@ -9,6 +9,7 @@ pc = root / "pc"
 icon = str(pc / "agentdeck.ico")
 data = [(str(pc / name), ".") for name in
         ("hub_keys.json", "hub_prompts.json", "agentdeck.ico")]
+data.append((str(root / "agentdeck" / "装驱动.md"), "."))  # tray: 装驱动说明
 data += collect_data_files("libusb_package")
 binaries = collect_dynamic_libs("libusb_package")
 excludes = ["PyQt5", "PyQt6", "PySide2", "PySide6", "matplotlib", "IPython",

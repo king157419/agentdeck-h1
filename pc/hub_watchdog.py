@@ -21,9 +21,10 @@ class Watchdog:
         self._stop = threading.Event()
         self._thread = None
 
-    def watch(self, name, thread_id=None):
+    def watch(self, name, thread_id=None, wake=None):
         with self._lock:
             self._watched[name] = {"last": self.monotonic(), "stalled": False,
+                                   "wake": wake,
                                    "thread_id": threading.get_ident() if thread_id is None else thread_id}
 
     def beat(self, name):
@@ -58,18 +59,29 @@ class Watchdog:
 
     def check(self):
         stalled = []
+        wakes = []
         with self._lock:
             now = self.monotonic()
             for name, target in self._watched.items():
                 age = now - target["last"]
-                if age > self.timeout and not target["stalled"]:
-                    target["stalled"] = True
-                    stalled.append((name, age, target["thread_id"]))
-        # Stack formatting and file logging must never hold the heartbeat lock.
+                if age > self.timeout:
+                    wake = target["wake"]
+                    if wake is not None:
+                        wakes.append((name, wake))
+                    if not target["stalled"]:
+                        target["stalled"] = True
+                        stalled.append((name, age, target["thread_id"], wake is not None))
+        # Waking, stack formatting and logging must never hold the heartbeat lock.
+        for name, wake in wakes:
+            try:
+                wake()
+            except Exception as error:
+                log.debug("%s wake failed: %s", name, error)
         if stalled:
             stacks = self._stacks()
-            for name, age, thread_id in stalled:
-                log.warning("%s 卡顿 %.1f 秒（thread id=%s）\n%s", name, age, thread_id, stacks)
+            for name, age, thread_id, has_wake in stalled:
+                log.warning("%s 卡顿 %.1f 秒（thread id=%s）%s\n%s", name, age, thread_id,
+                            "；已发送唤醒" if has_wake else "", stacks)
 
     def _run(self):
         while not self._stop.wait(self.interval):

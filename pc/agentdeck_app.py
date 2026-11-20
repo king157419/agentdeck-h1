@@ -40,6 +40,29 @@ KEY_ROWS = (
 )
 KNOBS = (("hid:0x16", "hid:0x09", "hid:0x0F"), ("hid:0x15", "hid:0x13", "hid:0x14"),
          ("hid:0x2D", "hid:0x2E", "hid:0x19"), ("hid:0x30", "hid:0x2F", "ctrl+hid:0x27"))
+NOTIFY_KEY = r"Control Panel\NotifyIconSettings"
+ZADIG_URL = "https://zadig.akeo.ie"
+TRAY_HINT = "AgentDeck 在右下角 ^ 里，可拖到任务栏常驻"
+STATUS_REFRESH_MS = 1000  # the status window re-reads hooks/sessions/reader while open
+STATUS_CAPTION = "AgentDeck 正在运行。浮窗显示会话，右键浮窗有菜单。"
+GUIDE_NAME = "装驱动.md"
+GUIDE_FALLBACK = """让宏键盘不再打字：装 WinUSB 驱动
+
+1. 打开 https://zadig.akeo.ie ，下载并运行 Zadig。
+2. Options → 勾选 List All Devices。
+3. 选 USB ID 为 4132 2107 00 的那一项（宏键盘接口 0）。
+4. 驱动选 WinUSB，点 Replace Driver。
+5. AgentDeck 会自己改成 USB 直读，浮窗上的黄色提示随之消失。
+"""
+# Default bindings of earlier keymap versions, as changes from the shipped
+# default; an untouched copy of either is upgraded (the user's edits never are).
+V4_CHANGED = {"hid:0x2D": "cycle +1", "hid:0x2E": "cycle -1", "hid:0x30": "cycle +1",
+              "hid:0x2F": "cycle -1", "hid:0x19": "prompt summary", "ctrl+hid:0x27": "prompt continue"}
+V3_CHANGED = dict(V4_CHANGED, **{"hid:0x14": "prompt tests"})
+OLD_DEFAULTS = {3: V3_CHANGED, 4: V4_CHANGED}
+# Keys whose own letters are harmful when they leak into an agent window (Raw Input).
+DANGER_KEYS = {"Ctrl+C": "危险：漏键会打断", "Ctrl+D": "危险：连按两次会退出",
+               "Ctrl+V": "危险：漏键会粘贴"}
 
 
 class ShortcutRecorder:
@@ -100,12 +123,39 @@ def resource_dir():
     return Path(sys._MEIPASS) if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 
 
+def upgrade_keymap(target, source):
+    """Replace an unmodified copy of an older default keymap (backup kept)."""
+    try:
+        current = hub.load_json(target)
+        shipped = hub.load_json(source)
+        version = current.get("version") if isinstance(current, dict) else None
+        if (type(version) is not int or version not in OLD_DEFAULTS
+                or not isinstance(shipped, dict) or shipped.get("version", 0) <= version):
+            return False
+        old_default = dict(shipped["bindings"], **OLD_DEFAULTS[version])
+        if current.get("bindings") != old_default:
+            return False  # the user edited it: never overwrite
+        backup = target.with_name(target.name + ".bak-v%d" % version)
+        if not backup.exists():
+            shutil.copy2(target, backup)
+        temporary = target.with_suffix(".tmp")
+        shutil.copyfile(source, temporary)
+        os.replace(temporary, target)
+        log.info("键位已升级到 v%s（旧文件：%s）", shipped.get("version"), backup)
+        return True
+    except Exception as error:
+        log.warning("键位升级跳过：%s", error)
+        return False
+
+
 def prepare_configs(home=None):
     folder = data_dir(home)
     folder.mkdir(parents=True, exist_ok=True)
     paths = []
     for name in ("hub_keys.json", "hub_prompts.json"):
         target = folder / name
+        if name == "hub_keys.json" and target.exists():
+            upgrade_keymap(target, resource_dir() / name)
         if not target.exists():
             # Exclusive creation also protects a user file during simultaneous launches.
             with (resource_dir() / name).open("rb") as source:
@@ -185,11 +235,13 @@ def keymap_model(config, profile="default"):
             "knobs": [[action(code) for code in knob] for knob in KNOBS]}
 
 
-def launch_command():
+def launch_command(background=False):
     if getattr(sys, "frozen", False):
-        return subprocess.list2cmdline([str(Path(sys.executable).resolve())])
-    python = Path(sys.executable).with_name("pythonw.exe")
-    return subprocess.list2cmdline([str(python), str(Path(__file__).resolve())])
+        parts = [str(Path(sys.executable).resolve())]
+    else:
+        parts = [str(Path(sys.executable).with_name("pythonw.exe")), str(Path(__file__).resolve())]
+    # Only the login launch stays silent; a manual launch opens the status window.
+    return subprocess.list2cmdline(parts + (["--background"] if background else []))
 
 
 class AutoStart:
@@ -198,15 +250,27 @@ class AutoStart:
             import winreg
             registry = winreg
         self.registry = registry
-        self.command = launch_command() if command is None else command
+        self.legacy = launch_command() if command is None else None
+        self.command = launch_command(background=True) if command is None else command
 
-    def enabled(self):
+    def _value(self):
         r = self.registry
         try:
             with r.OpenKey(r.HKEY_CURRENT_USER, RUN_KEY) as key:
-                return r.QueryValueEx(key, "AgentDeck")[0] == self.command
+                return r.QueryValueEx(key, "AgentDeck")[0]
         except FileNotFoundError:
-            return False
+            return None
+
+    def enabled(self):
+        value = self._value()
+        return value is not None and value in (self.command, self.legacy)
+
+    def upgrade(self):
+        """Older builds registered the launch without --background."""
+        if self.legacy is not None and self._value() == self.legacy:
+            self.set_enabled(True)
+            return True
+        return False
 
     def set_enabled(self, enabled):
         r = self.registry
@@ -218,6 +282,65 @@ class AutoStart:
                     r.DeleteValue(key, "AgentDeck")
                 except FileNotFoundError:
                     pass
+
+
+def tray_icon_entry(registry=None, executable=None):
+    """(subkey, promoted) of this program's Windows 11 tray icon record, or None."""
+    if registry is None:
+        import winreg
+        registry = winreg
+    executable = os.path.normcase(os.path.abspath(sys.executable if executable is None else executable))
+    try:
+        with registry.OpenKey(registry.HKEY_CURRENT_USER, NOTIFY_KEY) as parent:
+            index = 0
+            while True:
+                try:
+                    name = registry.EnumKey(parent, index)
+                except OSError:
+                    return None
+                index += 1
+                try:
+                    with registry.OpenKey(parent, name) as key:
+                        path = registry.QueryValueEx(key, "ExecutablePath")[0]
+                        if os.path.normcase(os.path.abspath(str(path))) != executable:
+                            continue
+                        try:
+                            promoted = registry.QueryValueEx(key, "IsPromoted")[0] == 1
+                        except OSError:
+                            promoted = False
+                        return name, promoted
+                except OSError:
+                    continue
+    except Exception:
+        return None
+
+
+def promote_tray_icon(registry=None, executable=None):
+    """User-requested only: IsPromoted=1 (undocumented, Windows 11 22H2+) shows the icon."""
+    if registry is None:
+        import winreg
+        registry = winreg
+    entry = tray_icon_entry(registry, executable)
+    if entry is None:
+        return False
+    with registry.OpenKey(registry.HKEY_CURRENT_USER, NOTIFY_KEY + "\\" + entry[0], 0,
+                          registry.KEY_SET_VALUE) as key:
+        registry.SetValueEx(key, "IsPromoted", 0, registry.REG_DWORD, 1)
+    return True
+
+
+def guide_path():
+    if getattr(sys, "frozen", False):
+        return resource_dir() / GUIDE_NAME
+    return Path(__file__).resolve().parents[1] / "agentdeck" / GUIDE_NAME
+
+
+def guide_text():
+    try:
+        text = guide_path().read_text(encoding="utf-8-sig")
+    except OSError:
+        return GUIDE_FALLBACK
+    return text.replace("**", "").replace("# ", "")
 
 
 def set_global_hooks(home, enabled):
@@ -322,7 +445,7 @@ def tray_icon_type(base):
 class TrayApplication:
     """Tk stays on the main thread. Tray callbacks only enqueue operations."""
     def __init__(self, engine, *, commands, prefs, keys_path, profile="default",
-                 autostart=None, overlay=None):
+                 autostart=None, overlay=None, background=False, registry=None):
         self.hub = engine
         self.commands = commands
         self.prefs = prefs
@@ -330,12 +453,26 @@ class TrayApplication:
         self.profile = profile
         self.autostart = AutoStart() if autostart is None else autostart
         self.overlay = Overlay(engine) if overlay is None else overlay
+        self.background = background
+        self.registry = registry
         self.icon = None
         self.tray_thread = None
         self.state = {}
         self._background_enabled = False
         self.last_status = None
+        self.status_window = None
+        self.guide_window = None
+        try:
+            self.autostart.upgrade()
+        except Exception as error:
+            log.warning("开机自启升级失败：%s", error)
         self.autostart_enabled = self.autostart.enabled()
+
+    def _registry(self):
+        if self.registry is None:
+            import winreg
+            self.registry = winreg
+        return self.registry
 
     def enqueue(self, action, payload=None):
         def callback(icon=None, item=None):
@@ -352,8 +489,10 @@ class TrayApplication:
 
         return menu(
             item(lambda _: "显示" if self.overlay.hidden else "隐藏", self.enqueue("toggle"), default=True),
+            item("状态", self.enqueue("status")),
             item("会话", menu(sessions)), item("下一个待批", self.enqueue("next_wait")),
             item("键位", self.enqueue("keys")), item("诊断", self.enqueue("diagnostics")),
+            item("装驱动说明（按键会打字时）", self.enqueue("driver")),
             menu.SEPARATOR, item("所有项目启用", self.enqueue("global"),
                                  checked=lambda _: hub_install.global_status(home=self.hub.home)["enabled"]),
             item("单个项目", menu(item("安装…", self.enqueue("install")),
@@ -377,8 +516,50 @@ class TrayApplication:
         self.tray_thread = threading.Thread(target=self._run_tray, name="AgentDeck tray", daemon=True)
         self.tray_thread.start()
         self._background_enabled = getattr(self.overlay, "_tasks", None) is not None
+        self.overlay.menu_items = self.overlay_menu
+        self.overlay.on_driver_help = lambda: self.dispatch("driver")
         self.overlay.root.after(100, self.pump)
-        self.overlay.root.after(400, self.onboarding)
+        self.overlay.root.after(400, self.startup)
+
+    def startup(self):
+        """Manual launches open the status window; login launches stay silent."""
+        if not self.background or not self.prefs.values.get("initialized"):
+            self.show_status()
+        self.overlay.root.after(1500, self.tray_hint)
+
+    def tray_hint(self):
+        """Windows 11 hides new tray icons under ^; say where AgentDeck lives."""
+        try:
+            entry = tray_icon_entry(self._registry())
+        except Exception:
+            entry = None
+        if entry is not None and entry[1]:
+            return False
+        if self.background and self.prefs.values.get("initialized"):
+            return False
+        try:
+            self.icon.notify(TRAY_HINT, "AgentDeck")
+            return True
+        except Exception as error:
+            log.info("托盘提示不可用：%s", error)
+            return False
+
+    def overlay_menu(self):
+        """The tray menu, reachable from the overlay (right-click or ≡)."""
+        def run(action):
+            def callback():
+                try:
+                    self.dispatch(action)
+                except Exception as error:
+                    log.exception("菜单动作失败：%s", action)
+                    self.message("AgentDeck 操作失败", str(error), error=True)
+            return callback
+        entries = [("状态", run("status")), ("下一个待批", run("next_wait")),
+                   ("键位", run("keys")), ("诊断", run("diagnostics"))]
+        if self.state.get("input_reader") == "raw":
+            entries.append(("装驱动说明", run("driver")))
+        entries += [("日志", run("logs")), None, ("隐藏浮窗", run("toggle")), ("退出", run("quit"))]
+        return entries
 
     def _run_tray(self):
         try:
@@ -436,17 +617,22 @@ class TrayApplication:
     def dispatch(self, action, payload=None):
         if action == "show":
             self.overlay.show()
+            self.show_status()
+        elif action == "status":
+            self.show_status()
+        elif action == "driver":
+            self.show_driver_guide()
         elif action == "toggle":
             (self.overlay.show if self.overlay.hidden else self.overlay.hide)()
         elif action == "select":
-            # Verify the full identity at click time; a recycled slot must never retarget.
+            # Hub.action re-checks the full identity under its lock, so a recycled
+            # slot never retargets, and window focus runs without holding the lock.
             def select():
-                with self.hub.lock:
-                    session = next((s for s in self.hub.state()["sessions"]
-                                    if (s["agent"], s["session_id"]) == payload), None)
-                    if session is None:
-                        raise ValueError("该会话已结束")
-                    self.hub.action({"action": "slot %s" % session["slot"]})
+                session = next((s for s in self.hub.state()["sessions"]
+                                if (s["agent"], s["session_id"]) == tuple(payload)), None)
+                if session is None:
+                    raise ValueError("该会话已结束")
+                self.hub.action({"action": "slot %s" % session["slot"], "session": list(payload)})
             self._run_slow(select, action)
         elif action == "next_wait":
             self._run_slow(lambda: self.hub.action({"action": "next_wait"}), action)
@@ -515,6 +701,9 @@ class TrayApplication:
                 if not dead:
                     theme.label(card, action, color=theme.FAINT if action == "未绑定" else theme.MUTED,
                                 size=9, bg=theme.SURFACE, wraplength=150, justify="left").pack(anchor="w")
+                if key in DANGER_KEYS:
+                    theme.label(card, "⚠ " + DANGER_KEYS[key], color=theme.STATUS["ERR"], size=8,
+                                bg=theme.SURFACE, wraplength=150, justify="left").pack(anchor="w")
         knobs = tk.Frame(grid, bg=theme.BG)
         knobs.grid(row=len(model["rows"]), column=0, columnspan=4, sticky="ew", pady=(theme.S3, 0))
         for number, (cw, ccw, press) in enumerate(model["knobs"]):
@@ -727,39 +916,222 @@ class TrayApplication:
         window.destroy()
         self.diagnostics()
 
-    def onboarding(self):
-        if self.prefs.values.get("initialized"):
+    def status_model(self):
+        """Rows for the status window: (name, value, ok, button label, action)."""
+        home = self.hub.home
+        hooks = hub_install.global_status(home=home)
+        hooks_ok = hooks["enabled"] and not hooks["needs_repair"] and not hooks["missing_paths"]
+        self.autostart_enabled = self.autostart.enabled()
+        state = self.state or {}
+        reader = state.get("input_reader")
+        try:
+            tray = tray_icon_entry(self._registry())
+        except Exception:
+            tray = None
+        rows = [
+            ("钩子", "✓ 已启用" if hooks_ok else "需修复" if hooks["enabled"] else "未启用",
+             hooks_ok, None if hooks_ok else "修复", "hooks"),
+            ("开机自启", "✓ 已开启" if self.autostart_enabled else "未开启",
+             self.autostart_enabled, None if self.autostart_enabled else "开启", "autostart"),
+        ]
+        if (Path(home) / ".codex").exists():
+            rows.append(("Codex", "钩子改过后，在 Codex 输入 /hooks 信任一次", None, None, None))
+        rows.append(("会话", "%d 个；已开着的 Codex 会话要重开才生效，Claude 自动生效"
+                     % len(state.get("sessions", ())), None, None, None))
+        rows.append(("读键方式", {"usb": "✓ USB 直读",
+                                "raw": "Raw Input：按键会同时打字，换 WinUSB 驱动可隔离",
+                                "absent": "没检测到宏键盘"}.get(reader, "启动中…"),
+                     reader == "usb", "装驱动说明" if reader == "raw" else None, "driver"))
+        promoted = tray is not None and tray[1]
+        rows.append(("托盘图标", "✓ 在任务栏右下角，右键它有菜单" if promoted else "在右下角 ^ 里，右键它有菜单",
+                     promoted, "放到任务栏" if tray is not None and not promoted else None, "promote"))
+        complete = hooks_ok and self.autostart_enabled and bool(self.prefs.values.get("initialized"))
+        return {"rows": rows, "complete": complete}
+
+    def status_action(self, action):
+        if action in ("hooks", "start"):
+            init_all(self.hub.home, autostart=self.autostart)
+            self.prefs.values["initialized"] = True
+        elif action == "autostart":
+            self.autostart.set_enabled(True)
+        elif action == "driver":
+            self.show_driver_guide()
             return
+        elif action == "promote":
+            promote_tray_icon(self._registry())
+        self.autostart_enabled = self.autostart.enabled()
+
+    @staticmethod
+    def _status_shape(model):
+        """What needs new widgets: row names, buttons and the bottom bar. Values do not."""
+        return (tuple((name, label, action) for name, _, _, label, action in model["rows"]),
+                bool(model["complete"]))
+
+    def show_status(self):
+        """One window answering: is it set up, where is it, why keys type letters.
+
+        The window stays live: every STATUS_REFRESH_MS it re-reads status_model(),
+        because at startup the session list and key reader are not known yet.
+        """
         import tkinter as tk
-        # Installing global hooks also creates .codex on machines without Codex.
-        codex_installed = (self.hub.home / ".codex").exists()
-        window = theme.style_window(tk.Toplevel(self.overlay.root), "AgentDeck")
-        body = tk.Frame(window, bg=theme.BG, padx=theme.S5, pady=theme.S5)
-        body.pack()
-        caption = theme.label(body, "点击开始，自动启用钩子和开机自启。")
-        caption.pack(anchor="w")
-
-        def enable():
-            if self.prefs.values.get("initialized"):
-                return
+        window = self.status_window
+        if window is not None:
             try:
-                init_all(self.hub.home, autostart=self.autostart)
-                self.prefs.values["initialized"] = True
-                self.autostart_enabled = self.autostart.enabled()
-                if codex_installed:
-                    caption.configure(text="在 Codex 里输入 /hooks，信任一次", fg=theme.TEXT)
-                    start.destroy()
-                    theme.center(window)
-                else:
-                    window.destroy()
-            except Exception as error:
-                log.exception("初始化失败")
-                caption.configure(text="初始化失败：%s" % error, fg=theme.STATUS["ERR"])
+                window.destroy()
+            except Exception:
+                pass
+        window = theme.style_window(tk.Toplevel(self.overlay.root), "AgentDeck 状态")
+        self.status_window = window
+        body = tk.Frame(window, bg=theme.BG, padx=theme.S5, pady=theme.S5)
+        body.pack(fill="both", expand=True)
+        view = {"model": None, "shape": None, "values": {}, "caption": None, "error": None, "timer": None}
+        root = self.overlay.root
 
-        start = theme.button(body, "开始使用", enable)
-        start.pack(anchor="e", pady=(theme.S5, 0))
-        window.protocol("WM_DELETE_WINDOW", window.destroy)
+        def finish():
+            try:
+                window.destroy()
+            finally:
+                if self.status_window is window:
+                    self.status_window = None
+
+        def act(action):
+            try:
+                self.status_action(action)
+            except Exception as error:
+                log.exception("状态窗口操作失败：%s", action)
+                view["error"] = "操作失败：%s" % error
+                if view["caption"] is not None:
+                    view["caption"].configure(text=view["error"], fg=theme.STATUS["ERR"])
+                return
+            view["error"] = None
+            if action != "driver":
+                show(self.status_model())
+
+        def build(model):
+            for child in body.winfo_children():
+                child.destroy()
+            caption = theme.label(body, view["error"] or STATUS_CAPTION,
+                                  color=theme.STATUS["ERR"] if view["error"] else theme.MUTED)
+            caption.grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, theme.S3))
+            view["caption"], view["values"] = caption, {}
+            for index, (name, value, ok, label, action) in enumerate(model["rows"], start=1):
+                theme.label(body, name, color=theme.MUTED, size=9).grid(row=index, column=0, sticky="nw",
+                                                                        padx=(0, theme.S4), pady=theme.S1)
+                color = theme.TEXT if ok or ok is None else theme.STATUS["ASK"]
+                value_label = theme.label(body, value, color=color, size=10, wraplength=320, justify="left")
+                value_label.grid(row=index, column=1, sticky="w", pady=theme.S1)
+                view["values"][name] = value_label
+                if label:
+                    theme.button(body, label, lambda a=action: act(a), "quiet", padx=theme.S2,
+                                 pady=1).grid(row=index, column=2, sticky="e", padx=(theme.S3, 0))
+            bar = tk.Frame(body, bg=theme.BG)
+            bar.grid(row=len(model["rows"]) + 1, column=0, columnspan=3, sticky="e", pady=(theme.S5, 0))
+            if not model["complete"]:
+                theme.button(bar, "开始使用", lambda: act("start")).pack(side="right", padx=(theme.S2, 0))
+                theme.button(bar, "完成", finish, "quiet").pack(side="right")
+            else:
+                theme.button(bar, "完成", finish).pack(side="right")
+
+        def show(model):
+            if model == view["model"]:
+                return
+            shape = self._status_shape(model)
+            if shape == view["shape"]:
+                # Same rows and buttons: change text in place so a click in progress survives.
+                for name, value, ok, _, _ in model["rows"]:
+                    view["values"][name].configure(
+                        text=value, fg=theme.TEXT if ok or ok is None else theme.STATUS["ASK"])
+            else:
+                build(model)
+                view["shape"] = shape
+            view["model"] = model
+
+        def refresh():
+            if self.status_window is not window:
+                return  # closed, or replaced by a newer status window
+            try:
+                if not window.winfo_exists():
+                    return
+                show(self.status_model())
+            except Exception:
+                log.exception("状态窗口刷新失败")
+                view["model"] = view["shape"] = None  # rebuild from scratch next time
+            schedule()
+
+        def schedule():
+            # On the root, not the window: a destroyed window would leave a dead Tcl command.
+            view["timer"] = root.after(STATUS_REFRESH_MS, refresh)
+
+        def destroyed(event):
+            # Closed, replaced or torn down with the root: drop the pending refresh.
+            if event.widget is window and view["timer"] is not None:
+                try:
+                    root.after_cancel(view["timer"])
+                except Exception:
+                    pass
+                view["timer"] = None
+
+        show(self.status_model())
+        window.protocol("WM_DELETE_WINDOW", finish)
+        window.bind("<Destroy>", destroyed, add="+")
         theme.center(window)
+        self._raise(window)
+        schedule()
+        return window
+
+    @staticmethod
+    def _raise(window):
+        """Bring a new window in front of the topmost overlay and other apps."""
+        try:
+            window.deiconify()
+            window.lift()
+            window.attributes("-topmost", True)
+            window.focus_force()
+
+            def release():
+                try:
+                    if window.winfo_exists():
+                        window.attributes("-topmost", False)
+                except Exception:
+                    pass
+            # The root outlives a window closed within 500 ms (no dead Tcl command).
+            root = window._root()
+            timer = root.after(500, release)
+
+            def cancel(event):
+                if event.widget is window:
+                    try:
+                        root.after_cancel(timer)
+                    except Exception:
+                        pass  # already ran
+            window.bind("<Destroy>", cancel, add="+")
+        except Exception as error:
+            log.debug("窗口置前失败：%s", error)
+
+    def show_driver_guide(self):
+        import tkinter as tk
+        import webbrowser
+        if self.guide_window is not None:
+            try:
+                self.guide_window.destroy()
+            except Exception:
+                pass
+        window = theme.style_window(tk.Toplevel(self.overlay.root), "装驱动说明", resizable=True)
+        self.guide_window = window
+        lines = guide_text().strip().splitlines()
+        text = tk.Text(window, width=64, height=min(max(len(lines) + 1, 8), 24), wrap="word", bd=0,
+                       highlightthickness=0, bg=theme.BG, fg=theme.TEXT, font=theme.font(10),
+                       padx=theme.S5, pady=theme.S5, spacing1=theme.S1, cursor="arrow")
+        text.insert("end", "\n".join(lines) + "\n")
+        text.configure(state="disabled")
+        text.pack(fill="both", expand=True)
+        bar = tk.Frame(window, bg=theme.BG, padx=theme.S5, pady=theme.S4)
+        bar.pack(fill="x")
+        theme.button(bar, "关闭", window.destroy, "quiet").pack(side="right", padx=(theme.S2, 0))
+        theme.button(bar, "打开 Zadig 网站", lambda: webbrowser.open(ZADIG_URL)).pack(side="right")
+        theme.center(window)
+        self._raise(window)
+        return window
 
 
 def repair_global_hooks(home):
@@ -808,6 +1180,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--home", type=Path)
     parser.add_argument("--profile")
+    parser.add_argument("--background", action="store_true",
+                        help="login launch: no status window (tray and overlay only)")
     action = parser.add_mutually_exclusive_group()
     action.add_argument("--init", action="store_true", help="enable global hooks and startup, then exit")
     action.add_argument("--uninstall", action="store_true", help="remove global hooks and startup, then exit")
@@ -847,7 +1221,8 @@ def main(argv=None):
                          "--home", str(home), "--keys", str(keys), "--prompts", str(prompts),
                          "--profile", profile],
                         ui_factory=lambda engine: TrayApplication(engine, commands=commands, prefs=prefs,
-                                                                  keys_path=keys, profile=profile))
+                                                                  keys_path=keys, profile=profile,
+                                                                  background=args.background))
     except Exception as error:
         log.exception("AgentDeck 启动失败")
         from tkinter import messagebox

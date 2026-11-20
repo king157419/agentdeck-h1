@@ -68,9 +68,9 @@ class HotkeyKeys:
 
     def dispatch(self, binding, shown, *, received_at=None):
         received_at = self.hub.monotonic() if received_at is None else received_at
+        action = binding.action
         try:
             with self.hub.lock:
-                action = binding.action
                 if action == "voice_toggle":
                     desktop = self.hub.desktop
                     action = "voice_up" if desktop is not None and desktop.voice_active else "voice_down"
@@ -85,12 +85,26 @@ class HotkeyKeys:
                         log.warning("Hotkey %s ignored: displayed request changed", binding.name)
                         return False
                     payload["request_id"] = request_id
-                result = self.hub.action(payload, source="hotkey", received_at=received_at)
+            # Outside the lock: Hub.action releases it before window/input effects,
+            # and the interrupt request id is still revalidated there.
+            result = self.hub.action(payload, source="hotkey", received_at=received_at)
             log.info("Hotkey %s -> %s", binding.name, result)
+            self._note(action, result=result)
             return True
         except (ValueError, RuntimeError) as error:
             log.warning("Hotkey %s action failed: %s", binding.name, error)
+            self._note(action, error=error)
             return False
+
+    def _note(self, action, result=None, error=None):
+        note = getattr(self.hub, "note_input", None)
+        if not callable(note):
+            return
+        try:
+            from hub import describe_input
+            note(*describe_input(action, result, error))
+        except Exception as failure:
+            log.debug("Hotkey feedback unavailable: %s", failure)
 
 
 class Win32Hotkeys:

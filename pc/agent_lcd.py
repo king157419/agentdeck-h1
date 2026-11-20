@@ -28,7 +28,8 @@ EVENT_STATE = {
     "Stop": "done",
     "Interrupt": "idle",
 }
-WAIT_NOTIFICATIONS = ("permission_prompt", "elicitation_dialog")
+WAIT_NOTIFICATIONS = ("permission_prompt", "elicitation_dialog", "elicitation_url_dialog",
+                      "agent_needs_input")
 
 
 def find_port():

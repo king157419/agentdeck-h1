@@ -55,6 +55,22 @@ def command(agent, *, port=47800, approve_timeout=110, gate=False, python=None, 
     return subprocess.list2cmdline(args) if sys.platform == "win32" else shlex.join(args)
 
 
+def hook_fields(agent, *, port=47800, approve_timeout=110, gate=False, python=None, project=False):
+    """The command fields of one hook entry.
+
+    Claude Code runs a hook without ``args`` through Git Bash on Windows, which
+    eats the backslashes of an unquoted Windows relay path (exit 127, not found).
+    The bundled Claude relay therefore uses exec form (``command`` + ``args``, no
+    shell). Codex keeps the exact previous string: it trusts hooks by hash.
+    """
+    text = command(agent, port=port, approve_timeout=approve_timeout, gate=gate,
+                   python=python, project=project)
+    if agent == "cc" and getattr(sys, "frozen", False):
+        parts = split_command(text)
+        return {"command": Path(parts[0]).as_posix(), "args": parts[1:]}
+    return {"command": text}
+
+
 def _source_command(agent, *, python=None, project=False):
     # Keep existing Windows global hooks stable across interpreter changes.
     default_python = PYTHON if sys.platform == "win32" and not project else sys.executable
@@ -75,22 +91,37 @@ def split_command(text):
     return shlex.split(text)
 
 
-def relay_info(entry):
-    """Identify an executed relay, including old locations after a folder move."""
+def entry_parts(entry):
+    """argv of a command hook: exec form (``command`` + ``args``) or shell form."""
     if not isinstance(entry, dict) or entry.get("type") != "command":
         return None
+    if "args" in entry:
+        command, args = entry.get("command"), entry["args"]
+        if (not isinstance(command, str) or not isinstance(args, list)
+                or any(not isinstance(arg, str) for arg in args)):
+            return None
+        return [command, *args]
     try:
-        parts = split_command(entry.get("command", ""))
+        return split_command(entry.get("command", ""))
     except (TypeError, ValueError):
         return None
+
+
+def relay_info(entry):
+    """Identify an executed relay, including old locations after a folder move."""
+    parts = entry_parts(entry)
+    if parts is None:
+        return None
+    form = "exec" if "args" in entry else "shell"
     basename = lambda path: path.replace("\\", "/").rsplit("/", 1)[-1].casefold()
     if len(parts) >= 3 and basename(parts[0]) == "agentdeck-relay.exe" and parts[1] == "--agent":
-        return {"agent": parts[2], "paths": [parts[0]]} if parts[2] in EVENTS else None
+        return ({"agent": parts[2], "paths": [parts[0]], "form": form, "exe": True}
+                if parts[2] in EVENTS else None)
     if (len(parts) >= 4 and basename(parts[1]) == "hub_relay.py"
             and parts[2] == "--agent" and parts[3] in EVENTS
             and (parts[1].replace("\\", "/").casefold() == SCRIPT.casefold()
                  or re.fullmatch(r"python(?:w|[23](?:\.\d+)?)?(?:\.exe)?", basename(parts[0])))):
-        return {"agent": parts[3], "paths": parts[:2]}
+        return {"agent": parts[3], "paths": parts[:2], "form": form, "exe": False}
     return None
 
 
@@ -100,14 +131,14 @@ def is_ours(entry):
 
 
 def is_gate(entry):
-    return is_ours(entry) and "--gate" in split_command(entry["command"])
+    return is_ours(entry) and "--gate" in entry_parts(entry)
 
 
 def global_status(*, home=None):
     """Read both global configs; presence and relay path health are separate."""
     root = Path.home() if home is None else Path(home)
     present, missing, errors = [], [], []
-    moved = False
+    moved = shell_form = False
     expected = (Path(sys.executable).resolve().with_name("AgentDeck-relay.exe")
                 if getattr(sys, "frozen", False) else None)
     for agent, folders in TARGETS.items():
@@ -143,9 +174,12 @@ def global_status(*, home=None):
                 moved |= (len(info["paths"]) != 1 or
                           os.path.normcase(os.path.abspath(info["paths"][0])) !=
                           os.path.normcase(str(expected)))
+            # Git Bash cannot start the bundled relay from a shell-form string.
+            shell_form |= agent == "cc" and info["agent"] == "cc" and info["exe"] and info["form"] == "shell"
     enabled = all(present)
     return {"enabled": enabled, "missing_paths": missing,
-            "needs_repair": enabled and moved, "errors": errors}
+            "needs_repair": enabled and (moved or (expected is not None and shell_form)),
+            "shell_form": shell_form, "errors": errors}
 
 
 def is_legacy(entry):
@@ -256,13 +290,14 @@ def updated(data, action, agent, *, port=47800, approve_timeout=110, gate=False,
     if action == "install":
         for event in EVENTS[agent]:
             groups = hooks.setdefault(event, [])
-            entry = {"type": "command", "command": command(agent, port=port,
+            entry = {"type": "command", **hook_fields(agent, port=port,
                      approve_timeout=approve_timeout, python=python, project=project),
                      "timeout": 120 if event == "PermissionRequest" else 10}
             own = [handler for group in groups for handler in group["hooks"]
                    if is_ours(handler) and not is_gate(handler)]
             if own:
                 for handler in own:
+                    handler.pop("args", None)
                     handler.update(entry)
             else:
                 groups.append({"hooks": [entry]})
@@ -282,11 +317,12 @@ def updated(data, action, agent, *, port=47800, approve_timeout=110, gate=False,
         own_gates = [handler for group in groups for handler in group["hooks"] if is_gate(handler)]
         # Reinstalling regular hooks preserves an explicitly installed gate.
         if gate or own_gates:
-            entry = {"type": "command", "command": command(agent, port=port,
+            entry = {"type": "command", **hook_fields(agent, port=port,
                      approve_timeout=approve_timeout, gate=True, python=python,
                      project=project), "timeout": 120}
             if own_gates:
                 for handler in own_gates:
+                    handler.pop("args", None)
                     handler.update(entry)
             else:
                 group = {"hooks": [entry]}

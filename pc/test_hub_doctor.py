@@ -81,11 +81,12 @@ class DoctorTests(unittest.TestCase):
     def test_macos_adds_two_harmless_bounded_probes(self):
         with patch.object(hub_doctor.sys, "platform", "darwin"):
             self.assertEqual(self.run_doctor(), 0)
-        self.assertEqual(self.output.getvalue().count("✓"), 9)
-        self.assertEqual([command for command, _ in self.commands[1:]], [
+        # 7 base checks + 2 macOS probes + the Claude hook launch probe.
+        self.assertEqual(self.output.getvalue().count("✓"), 10)
+        self.assertEqual([command for command, _ in self.commands[1:3]], [
             ["osascript", "-e", "return 1"],
             ["osascript", "-e", 'tell application "System Events" to get UI elements enabled']])
-        for _, options in self.commands[1:]:
+        for _, options in self.commands[1:3]:
             self.assertEqual(options["timeout"], 3)
             self.assertTrue(options["capture_output"])
             self.assertFalse(options["check"])
@@ -140,7 +141,7 @@ class DoctorTests(unittest.TestCase):
         before = {path.relative_to(self.home): path.read_bytes()
                   for path in self.home.rglob("*") if path.is_file()}
         self.assertEqual(self.run_doctor(), 0)
-        self.assertEqual(self.output.getvalue().count("✓"), 7)
+        self.assertEqual(self.output.getvalue().count("✓"), 8)  # includes cc hook launch
         self.assertNotIn("✗", self.output.getvalue())
         self.assertEqual(self.calls, [("GET", "/health", {}),
                                      ("GET", "/state", {"X-AgentDeck-Token": "test-token"})])

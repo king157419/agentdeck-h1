@@ -3,6 +3,7 @@ import ctypes
 from dataclasses import dataclass, field
 from datetime import datetime
 import logging
+import ntpath
 from pathlib import Path
 import sys
 import threading
@@ -11,7 +12,7 @@ import uuid
 
 if sys.platform == "win32":
     from ctypes import wintypes
-    from deck_windows import INPUT, KEYBDINPUT, WindowControl
+    from deck_windows import INPUT, KEYBDINPUT, MOUSEINPUT, WindowControl
 
 
 VOICE_POLL_SECONDS = 0.1
@@ -70,10 +71,64 @@ if sys.platform == "win32":
 
         def _can_press(self, keys, expected):
             modifiers = (0x10, 0x11, 0x12, 0x5B, 0x5C, *range(0xA0, 0xA6))
+            # Same window handle: Claude Code animates its title, which must not
+            # make a correct target look like a foreground change.
             return (bool(keys) and not getattr(self, "_held_keys", ())
                     and not any(self.user.GetAsyncKeyState(key) & 0x8000
                                 for key in set(modifiers + keys))
-                    and self() == expected)
+                    and self()[0] == expected[0])
+
+        def _dpi_aware(self):
+            """Physical pixels for rects, cursor and virtual screen on this thread."""
+            method = getattr(self.user, "SetThreadDpiAwarenessContext", None)
+            if method is None:
+                return None
+            method.argtypes, method.restype = [ctypes.c_void_p], ctypes.c_void_p
+            return method(ctypes.c_void_p(-4))  # PER_MONITOR_AWARE_V2
+
+        def _restore_dpi(self, previous):
+            if previous:
+                self.user.SetThreadDpiAwarenessContext(previous)
+
+        def scroll_point(self, hwnd):
+            """First sample point of the window not covered by another window (e.g. the overlay)."""
+            rect = wintypes.RECT()
+            self.user.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+            self.user.GetWindowRect.restype = wintypes.BOOL
+            self.user.WindowFromPoint.argtypes = [wintypes.POINT]
+            self.user.WindowFromPoint.restype = wintypes.HWND
+            self.user.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+            self.user.GetAncestor.restype = wintypes.HWND
+            if not self.user.GetWindowRect(hwnd, ctypes.byref(rect)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            for fx, fy in SCROLL_POINTS:
+                point = wintypes.POINT(rect.left + int((rect.right - rect.left) * fx),
+                                       rect.top + int((rect.bottom - rect.top) * fy))
+                hit = self.user.WindowFromPoint(point)
+                if hit and self.user.GetAncestor(hit, 2) == hwnd:  # GA_ROOT
+                    return point.x, point.y
+            raise RuntimeError("窗口被挡住")
+
+        def wheel(self, hwnd, notches, expected):
+            """One SendInput batch: move to the window, wheel, move back."""
+            previous = self._dpi_aware()
+            try:
+                if self()[0] != expected[0] or getattr(self, "_held_keys", ()):
+                    return False
+                x, y = self.scroll_point(hwnd)
+                cursor = wintypes.POINT()
+                self.user.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
+                self.user.GetCursorPos.restype = wintypes.BOOL
+                if not self.user.GetCursorPos(ctypes.byref(cursor)):
+                    raise ctypes.WinError(ctypes.get_last_error())
+                self.user.GetSystemMetrics.argtypes = [ctypes.c_int]
+                self.user.GetSystemMetrics.restype = ctypes.c_int
+                screen = tuple(self.user.GetSystemMetrics(index) for index in (76, 77, 78, 79))
+                events = wheel_events((x, y), (cursor.x, cursor.y), notches, screen)
+                sent = self.user.SendInput(len(events), events, ctypes.sizeof(INPUT))
+                return sent == len(events)
+            finally:
+                self._restore_dpi(previous)
 
         def _send_owned(self, transitions):
             # Reserve ownership before native input: even an exception after
@@ -126,6 +181,31 @@ if sys.platform == "win32":
                                    0x6F, 0x90, 0xA3, 0xA5)
                 event.ki = KEYBDINPUT(key, 0, flags | int(extended), 0, 0)
             return events
+
+
+SCROLL_POINTS = ((0.5, 0.6), (0.5, 0.85), (0.25, 0.5), (0.75, 0.5), (0.5, 0.3))
+
+
+def absolute(point, screen):
+    """Pixel -> 0..65535 on the virtual desktop (SM_X/Y/CX/CYVIRTUALSCREEN)."""
+    left, top, width, height = screen
+    width, height = max(1, width), max(1, height)
+    x = min(65535, max(0, ((point[0] - left) * 65536 + width - 1) // width))
+    y = min(65535, max(0, ((point[1] - top) * 65536 + height - 1) // height))
+    return x, y
+
+
+def wheel_events(target, cursor, notches, screen):
+    """Move|absolute|virtualdesk to target, wheel -120*notches, move back to cursor."""
+    events = (INPUT * 3)()
+    move = 0x0001 | 0x8000 | 0x4000  # MOVE | ABSOLUTE | VIRTUALDESK
+    for event, flags, point in ((events[0], move, target), (events[1], 0x0800, None),
+                                (events[2], move, cursor)):
+        event.type = 0  # INPUT_MOUSE
+        dx, dy = absolute(point, screen) if point is not None else (0, 0)
+        data = (-120 * notches) & 0xFFFFFFFF if point is None else 0
+        event.mi = MOUSEINPUT(dx, dy, data, flags, 0, 0)
+    return events
 
 
 def set_clipboard(text):
@@ -254,15 +334,40 @@ class DesktopEffects:
     def focus(self, session, sessions):
         return self._focus(session, sessions)
 
+    @staticmethod
+    def _bound_window(session, windows):
+        """The window the relay recorded for this session, if it still exists."""
+        hwnd = session.get("hwnd")
+        if type(hwnd) is not int or hwnd <= 0:
+            return None
+        expected = session.get("window_exe") or ""
+        for info in windows:
+            if info[0] != hwnd:
+                continue
+            process = ntpath.basename(info[1] or "")
+            # A reused handle of a different program is not this session's window.
+            if expected and process and process.casefold() != ntpath.basename(expected).casefold():
+                return None
+            return info
+        return None
+
     def _focus(self, session, sessions):
         from deck import Session, window_for_session
-        target = Session(session["key"], session["state"], session["name"])
-        candidates = [Session(item["key"], item["state"], item["name"])
-                      for item in sessions]
-        window, reason = window_for_session(target, self.windows.windows(), candidates)
-        if window is None:
-            raise RuntimeError(reason)
-        if not self.windows.activate(window[0]) or self.windows() != window:
+        windows = self.windows.windows()
+        window = self._bound_window(session, windows)
+        shared = window is not None and sum(
+            1 for item in sessions if type(item.get("hwnd")) is int and item["hwnd"] == window[0]) > 1
+        if window is None or shared:
+            target = Session(session["key"], session["state"], session["name"])
+            candidates = [Session(item["key"], item["state"], item["name"])
+                          for item in sessions]
+            matched, reason = window_for_session(target, windows, candidates)
+            if matched is not None and (window is None or matched[0] != window[0]):
+                window = matched
+            if window is None:
+                raise RuntimeError("窗口已关闭或找不到（%s）" % reason)
+        # Compare handles only: Claude Code keeps changing its terminal title.
+        if not self.windows.activate(window[0]) or self.windows()[0] != window[0]:
             raise RuntimeError("could not activate the selected session window")
         return window
 
@@ -271,15 +376,15 @@ class DesktopEffects:
         # never inherit delivery information from the previous toggle.
         if hasattr(self.windows, "_combo_triggered"):
             self.windows._combo_triggered = False
-        if self.windows() != expected or not self.windows.send_combo(keys, expected):
+        if self.windows()[0] != expected[0] or not self.windows.send_combo(keys, expected):
             raise RuntimeError("foreground changed or key combination failed")
 
     def _key(self, key, expected):
-        if self.windows() != expected or not self.windows.send_key(key, expected):
+        if self.windows()[0] != expected[0] or not self.windows.send_key(key, expected):
             raise RuntimeError("foreground changed or key input failed")
 
     def _paste(self, text, expected):
-        if self.windows() != expected:
+        if self.windows()[0] != expected[0]:
             raise RuntimeError("foreground changed before paste")
         self.clipboard(text)
         self._combo((0x11, 0x56), expected)  # Ctrl+V
@@ -289,6 +394,27 @@ class DesktopEffects:
 
     def interrupt(self, session, sessions):
         self._key(0x1B, self._focus(session, sessions))
+        return True
+
+    def nav(self, session, sessions, key):
+        """Arrow keys pick an option in the agent's question; Enter submits."""
+        self._key({"up": 0x26, "down": 0x28, "enter": 0x0D}[key], self._focus(session, sessions))
+        return True
+
+    def scroll(self, session, sessions, notches):
+        """Mouse wheel over the agent window (positive notches scroll toward newer text).
+
+        Terminals scroll their scrollback, full-screen TUIs and editors handle the
+        wheel themselves; scrolling keys would mean different things per app.
+        """
+        if type(notches) is not int or not notches:
+            raise ValueError("scroll needs a nonzero integer")
+        window = self._focus(session, sessions)  # foreground: works without "scroll inactive windows"
+        wheel = getattr(self.windows, "wheel", None)
+        if wheel is None:
+            raise RuntimeError("mouse wheel input unavailable")
+        if not wheel(window[0], notches, window):
+            raise RuntimeError("foreground changed or wheel input failed")
         return True
 
     @property

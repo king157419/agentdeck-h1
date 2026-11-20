@@ -12,11 +12,14 @@ import hmac
 import json
 import logging
 import math
+import os
 from pathlib import Path
 from queue import Empty, SimpleQueue
 import re
 import secrets
+import select
 import shlex
+import socket
 import sys
 import threading
 import time
@@ -39,13 +42,27 @@ SWITCH_GUARD_SECONDS = 0.3
 GATE_CONFIRMED_SECONDS = 30.0
 VOICE_NOTICE_SECONDS = 5.0
 SESSION_IDLE_SECONDS = 6 * 60 * 60
-MAX_BODY = 1024 * 1024
+MAX_BODY = 8 * 1024 * 1024
+WAIT_SLICE = 0.25            # how often a waiting decision checks its hook client
+INPUT_NOTICE_SECONDS = 2.0
+# Claude Code: "allow" alone does not answer these; the native UI must handle them.
+NEEDS_ANSWER_TOOLS = ("AskUserQuestion", "ExitPlanMode")
+MOVED_ON_EVENTS = ("UserPromptSubmit", "PostToolUse", "PostToolUseFailure")
 EVENT_STATES = {
     "SessionStart": "idle", "UserPromptSubmit": "think", "PreToolUse": "tool",
     "PostToolUse": "think", "PostToolUseFailure": "error", "Stop": "done",
     "Interrupt": "idle",
 }
 EVENTS = set(EVENT_STATES) | {"PermissionRequest", "Notification", "SessionEnd"}
+LAST_TEXT_LIMIT = 4000
+ACTIVITY_LIMIT = 60
+SCROLL_LIMIT = 20
+SCROLL_END = 100             # "scroll end": far enough to reach the bottom
+NAV_KEYS = ("up", "down", "enter")
+# Raw Input cannot stop the key itself from typing into the focused window, so a
+# paste/Enter action would send e.g. "m继续". Only USB direct reads may use these.
+RAW_INPUT_BLOCKED = ("prompt", "nav", "voice_down", "voice", "screenshot")
+LEAK_TEXT = "按键会漏进窗口：先用 Zadig 把接口 0 换成 WinUSB"
 log = logging.getLogger("agentdeck.hub")
 keylog = logging.getLogger("agentdeck.hub.keys")
 
@@ -54,9 +71,139 @@ from hub_risk import (  # noqa: F401  (re-exported: hub.classify stays public)
     WRITE_TOOL, _production_ssh, classify)
 
 
-def tool_input_hash(tool_input):
-    return hashlib.sha256(json.dumps(tool_input, ensure_ascii=False, sort_keys=True,
-                                     separators=(",", ":")).encode("utf-8")).hexdigest()
+from hub_relay import scrub_surrogates, tool_input_hash  # noqa: E402,F401  (shared with relay)
+
+
+def hub_marker(home=None):
+    """Lets the relay skip a dead hub in ~0 ms instead of a 2 s refused connect."""
+    return (Path.home() if home is None else Path(home)) / ".agentdeck" / "hub.json"
+
+
+def write_hub_marker(home, port):
+    try:
+        if type(port) is not int:
+            return None
+        path = hub_marker(home)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name("hub.json.%d.tmp" % os.getpid())
+        temporary.write_text(json.dumps({"pid": os.getpid(), "port": port}) + "\n", encoding="utf-8")
+        os.replace(temporary, path)
+        return path
+    except Exception as error:
+        log.warning("Cannot write %s: %s", hub_marker(home), error)
+        return None
+
+
+def remove_hub_marker(path):
+    try:
+        if path is not None and json.loads(path.read_text(encoding="utf-8")).get("pid") == os.getpid():
+            path.unlink()
+    except Exception:
+        pass
+
+
+INPUT_ERRORS = (  # (substring of HubError text, overlay text, LCD ASCII text)
+    ("no session in that slot", "槽位 {slot} 没有会话", "Slot {slot} empty"),
+    ("select a session first", "先选一个会话", "Select a session"),
+    ("release voice", "先松开语音键", "Release voice"),
+    ("desktop output disabled", "桌面操作已关闭", "Desktop off"),
+    ("switch_guard", "请求刚切换，稍后再按", "Wait, press again"),
+    ("stale_nonce", "请求已变，看屏幕再按", "Request changed"),
+    ("displayed request changed", "请求已变，看屏幕再按", "Request changed"),
+    ("nonce_required", "请求已变，看屏幕再按", "Request changed"),
+    ("audit unavailable", "审计不可用，请在终端确认", "Use terminal"),
+    ("unknown prompt template", "没有这个预设", "No such prompt"),
+    ("hub is shutting down", "正在退出", "Shutting down"),
+    ("keys leak into the window", LEAK_TEXT, "Need WinUSB"),
+    ("use approve/deny", "有待批请求：用 ✓/✗ 处理", "Use approve/deny"),
+    ("only while the agent asks", "agent 提问时才能上下选", "No question"),
+)
+INPUT_RESULTS = {"allowed": "已批准", "denied": "已拒绝", "confirm": "再按一次确认",
+                 "locked": "需在终端确认", "no_request": "没有待批请求",
+                 "no_waiting_session": "没有等你的会话", "unavailable": "此操作不可用",
+                 "focus": "去窗口里回答", "shown": "已显示浮窗"}
+INPUT_SENT = {"prompt": "已发送预设", "screenshot": "已截图并粘贴路径", "voice_down": "开始说话",
+              "voice": "语音已切换", "voice_up": "停止说话", "interrupt": "已打断",
+              "nav up": "已按 ↑", "nav down": "已按 ↓", "nav enter": "已回车",
+              "scroll end": "已翻到底", "scroll": "已滚动"}
+EVENT_KINDS = {"Stop": "回复", "Notification": "提醒", "UserPromptSubmit": "你"}
+
+
+def tool_summary(tool_input, limit=ACTIVITY_LIMIT):
+    """The same command/description/file_path/path summary a request shows."""
+    summary = (tool_input.get("command") or tool_input.get("description") or
+               tool_input.get("file_path") or tool_input.get("path")) if isinstance(tool_input, dict) else tool_input
+    if not isinstance(summary, str):
+        return ""
+    return " ".join(summary.split())[:limit]
+
+
+def question_text(tool_input):
+    """AskUserQuestion: each question with its option labels."""
+    lines = []
+    questions = tool_input.get("questions") if isinstance(tool_input, dict) else None
+    if isinstance(questions, list):
+        for question in questions:
+            if not isinstance(question, dict):
+                continue
+            if isinstance(question.get("question"), str):
+                lines.append(question["question"])
+            options = question.get("options")
+            labels = [option.get("label") for option in options if isinstance(option, dict)
+                      and isinstance(option.get("label"), str)] if isinstance(options, list) else []
+            if labels:
+                lines.append(" / ".join(labels))
+    if lines:
+        return "\n".join(lines)
+    try:
+        return json.dumps(tool_input, ensure_ascii=False)[:300]
+    except (TypeError, ValueError):
+        return ""
+
+
+def event_text(name, event):
+    """(text, kind) worth showing as the session's latest line, else (None, None)."""
+    if name == "Stop":
+        text = event.get("last_assistant_message")
+    elif name == "Notification":
+        text = event.get("message")
+        title = event.get("title")
+        if isinstance(text, str) and isinstance(title, str) and title.strip():
+            text = title.strip() + "：" + text
+    elif name == "UserPromptSubmit":
+        text = event.get("prompt")
+    elif name == "PreToolUse" and event.get("tool_name") == "AskUserQuestion":
+        return question_text(event.get("tool_input")) or None, "提问"
+    else:
+        return None, None
+    if not isinstance(text, str) or not text.strip():
+        return None, None
+    return text, EVENT_KINDS[name]
+
+
+def describe_input(action, result=None, error=None):
+    """Short Chinese feedback for a physical key, plus ASCII LCD text for failures."""
+    parts = str(action).split()
+    slot = parts[1] if len(parts) > 1 else "?"
+    if error is not None:
+        text = str(error)
+        for needle, message, lcd in INPUT_ERRORS:
+            if needle in text:
+                return message.format(slot=slot), False, lcd.format(slot=slot)
+        return "操作失败：" + text[:40], False, "Key failed"
+    result = result if isinstance(result, dict) else {}
+    status = result.get("status")
+    if status == "selected":
+        text = "已选槽位 %s" % result.get("slot")
+        if result.get("window") not in (None, "focused"):
+            text += "（没找到窗口）"
+        elif result.get("shared_window"):
+            text += "（同窗：只能调到前台）"
+        return text, True, None
+    if status == "sent":
+        return (INPUT_SENT.get(" ".join(parts[:2])) or INPUT_SENT.get(parts[0] if parts else "", "已发送"),
+                True, None)
+    return INPUT_RESULTS.get(status, str(status or "完成")), True, None
 
 
 def gate_denial(reason):
@@ -195,6 +342,22 @@ class Hub:
         self.voice_generation = 0
         self.voice_target = None
         self.voice_notice = None
+        self.input_notice = None      # (ASCII text, expiry) shown in the LCD name field
+        self.last_input = None        # last physical key result, published in state()
+        self.input_seq = 0
+        self.show_requests = 0        # "show" key presses; the overlay un-hides on change
+        self.input_reader = None      # callable -> "usb" / "raw" / None (set by main)
+
+    def note_input(self, text, ok=True, lcd=None):
+        """Make every key press visible: overlay header (state) and LCD for failures."""
+        with self.lock:
+            self.input_seq += 1
+            self.last_input = {"text": str(text), "ok": bool(ok), "at": self.wall_time(),
+                               "seq": self.input_seq}
+            if lcd and self.lcd_enabled and not self.closed:
+                self.input_notice = (str(lcd), self.monotonic() + INPUT_NOTICE_SECONDS)
+                if self.selected in self.sessions:
+                    self._show()
 
     def _send(self, lines, focus=False, rendered=None):
         if not self.lcd_enabled:
@@ -366,6 +529,10 @@ class Hub:
             return "Gate confirmed: " + session["name"]
         if self.voice_notice:
             return self.voice_notice[1]
+        if self.input_notice and identity == self.selected:
+            return "KEY: " + self.input_notice[0]
+        if session.get("needs_answer"):
+            return "ANSWER: " + session["name"]
         return session["name"]
 
     def _update_voice(self):
@@ -398,6 +565,9 @@ class Hub:
         if self.voice_notice and self.monotonic() >= self.voice_notice[2]:
             self.voice_notice = None
             changed = True
+        if self.input_notice and self.monotonic() >= self.input_notice[1]:
+            self.input_notice = None
+            changed = True
         if changed:
             self._show()
 
@@ -427,8 +597,9 @@ class Hub:
             if decision in ("allow", "deny"):
                 raise HubError("audit unavailable; use terminal approval", 503) from error
 
-    def _resolve(self, request, behavior=None, source="timeout"):
-        self._audit(request, behavior or "timeout", "gate" if request.gate else source)
+    def _resolve(self, request, behavior=None, source="timeout", *, decision=None, moved_on=False):
+        """``moved_on``: the agent no longer waits (client gone or later event)."""
+        self._audit(request, decision or behavior or "timeout", "gate" if request.gate else source)
         if request.gate:
             if behavior == "allow":
                 request.response = {}
@@ -447,7 +618,12 @@ class Hub:
         if session is not None:
             remaining = any(p.session == request.session for p in self.pending.values())
             locked = any(p.session == request.session for p in self.locked.values())
-            session["state"] = ("locked" if locked and not remaining else "wait" if remaining or (behavior is None and not request.gate)
+            native = behavior is None and not request.gate and not moved_on
+            if native:
+                # The agent's own permission dialog now has the question; Enter
+                # there would approve it without AgentDeck's confirmations.
+                session["native_wait"] = True
+            session["state"] = ("locked" if locked and not remaining else "wait" if remaining or native
                                 else "tool" if behavior == "allow" else "idle")
             session["last_updated"] = self.wall_time()
             self._publish(session)
@@ -505,8 +681,14 @@ class Hub:
             if wall_now - session["last_updated"] > SESSION_IDLE_SECONDS:
                 self._remove_session(identity)
 
-    def event(self, agent, event, *, gate=False):
-        """Handle a hook; permission and intercepted gate requests wait outside the lock."""
+    def event(self, agent, event, *, gate=False, received_at=None, disconnected=None):
+        """Handle a hook; permission and intercepted gate requests wait outside the lock.
+
+        ``received_at`` (monotonic) starts the approval budget at HTTP receipt, so a
+        lock wait cannot outlive the relay. ``disconnected()`` reports a hook client
+        that has gone away (killed relay, native decision, Esc); its request is dropped.
+        """
+        received_at = self.monotonic() if received_at is None else received_at
         if agent not in ("cc", "cx") or not isinstance(event, dict):
             raise HubError("agent must be cc or cx; event must be an object")
         name = event.get("hook_event_name")
@@ -566,8 +748,27 @@ class Hub:
             cwd = event.get("cwd", session["cwd"])
             session.update(cwd=cwd, name=agent_lcd.ascii_name(cwd),
                            project=agent_lcd.ascii_name(cwd), last_updated=self.wall_time())
+            window = event.get("agentdeck_window")
+            if isinstance(window, dict):
+                # The relay's top-level window of the agent process: focus by handle,
+                # not by guessing from a title Claude Code keeps rewriting.
+                hwnd, exe = window.get("hwnd"), window.get("exe")
+                if type(hwnd) is int and 0 < hwnd < 2**64:
+                    session["hwnd"] = hwnd
+                    session["window_exe"] = exe[:260] if isinstance(exe, str) else ""
+            if name not in ("PermissionRequest", "Notification"):
+                session.pop("needs_answer", None)
             if self.selected is None:
                 self.selected = identity
+            if name == "PermissionRequest" and not gate and tool_name in NEEDS_ANSWER_TOOLS:
+                # A bare allow cannot answer a question or accept a plan; the native
+                # UI does it. The approve key focuses this session's window instead.
+                session["needs_answer"] = tool_name
+                session["state"] = "wait"
+                self._publish(session)
+                if self.selected == identity:
+                    self._show()
+                return {}
             if name == "PermissionRequest" or gate:
                 summary = (tool_input.get("command") or tool_input.get("description") or
                            tool_input.get("file_path") or tool_input.get("path")) if isinstance(tool_input, dict) else tool_input
@@ -576,7 +777,7 @@ class Hub:
                 request = Pending(uuid.uuid4().hex, identity, tool_name,
                                   " ".join(summary.split())[:240],
                                   risk,
-                                  self.wall_time(), self.monotonic() + self.approve_timeout,
+                                  self.wall_time(), received_at + self.approve_timeout,
                                   command=summary, project=session["project"], gate=gate,
                                   input_hash=tool_input_hash(tool_input), nonce=self._new_nonce())
                 request.gate_confirmed = not gate and (identity, request.input_hash) in self.gate_passed
@@ -600,6 +801,39 @@ class Hub:
                     for request in list(self.pending.values()):
                         if request.session == identity:
                             self._resolve(request)
+                elif name in MOVED_ON_EVENTS:
+                    # The agent moved on without our answer (native dialog, Esc):
+                    # a new prompt ends the turn; a finished identical tool call
+                    # proves the permission was decided elsewhere. PreToolUse is
+                    # not used: parallel tool calls and the gate's own telemetry
+                    # event would cancel requests that are still being shown.
+                    digest = event.get("tool_input_hash")
+                    if not isinstance(digest, str):
+                        digest = tool_input_hash(tool_input) if "tool_input" in event else None
+                    for request in list(self.pending.values()):
+                        if request.session == identity and not request.gate and (
+                                name == "UserPromptSubmit" or (
+                                    request.tool_name == tool_name and request.input_hash == digest)):
+                            self._resolve(request, source="event", decision="abandoned", moved_on=True)
+                if name in MOVED_ON_EVENTS or name in ("Stop", "Interrupt", "SessionStart"):
+                    session.pop("native_wait", None)
+                text, kind = event_text(name, event)
+                if text:
+                    session.update(last_text=text[-LAST_TEXT_LIMIT:], last_kind=kind,
+                                   last_text_at=self.wall_time())
+                if name in ("Stop", "SessionStart", "Interrupt"):
+                    session.pop("activity", None)
+                elif name == "PreToolUse" and isinstance(tool_name, str) and tool_name:
+                    summary = tool_summary(tool_input)
+                    session["activity"] = (tool_name + (" " + summary if summary else ""))[:ACTIVITY_LIMIT]
+                if name == "Notification":
+                    notification = event.get("notification_type")
+                    notification = notification[:64] if isinstance(notification, str) else ""
+                    if not notification and "permission" in str(event.get("message") or "").lower():
+                        notification = "permission_prompt"
+                    session["wait_kind"] = notification
+                else:
+                    session.pop("wait_kind", None)
                 state = EVENT_STATES.get(name)
                 if name == "Notification":
                     kind = event.get("notification_type", "")
@@ -619,10 +853,26 @@ class Hub:
                     self._next_request()
                 return {}
         # Concurrent HTTP action requests can now acquire the lock and decide.
-        request.ready.wait(max(0, request.deadline - self.monotonic()))
+        abandoned = False
+        budget = max(0, request.deadline - self.monotonic())
+        if disconnected is None:
+            request.ready.wait(budget)
+        else:
+            end = time.monotonic() + budget  # real-time bound also covers injected clocks
+            while True:
+                remaining = min(request.deadline - self.monotonic(), end - time.monotonic())
+                if remaining <= 0 or request.ready.wait(min(remaining, WAIT_SLICE)):
+                    break
+                if disconnected():
+                    abandoned = True
+                    break
         with self.lock:
             if request.id in self.pending:
-                self._resolve(request)
+                if abandoned:
+                    log.info("Hook client left; dropping request %s (%s)", request.id, request.tool_name)
+                    self._resolve(request, source="client", decision="abandoned", moved_on=True)
+                else:
+                    self._resolve(request)
             return request.response
 
     def state(self):
@@ -637,7 +887,16 @@ class Hub:
                 item["locked_requests"] = [p.public() for p in self.locked.values() if p.session == identity]
                 sessions.append(item)
             selected = self.sessions.get(self.selected)
+            reader = None
+            if callable(self.input_reader):
+                try:
+                    reader = self.input_reader()
+                except Exception:
+                    reader = None
             return {"sessions": sessions, "pending": [p.public() for p in self.pending.values()],
+                    "last_input": dict(self.last_input) if self.last_input else None,
+                    "input_reader": reader if reader in ("usb", "raw", "absent") else None,
+                    "show_requests": self.show_requests,
                     "locked": [p.public() for p in self.locked.values()],
                     "agents_seen": dict(self.agents_seen),
                     "nonce_required": self.require_nonce,
@@ -694,7 +953,11 @@ class Hub:
             raise HubError(reason, 409)
 
     def action(self, payload, source="http", *, received_at=None):
-        """The single action path used by both HTTP and the physical device."""
+        """The single action path used by both HTTP and the physical device.
+
+        State changes happen under ``self.lock``; window focus, paste, screenshot
+        and dictation run after it is released, so hook events never wait on them.
+        """
         # This timestamp is an internal argument, never read from HTTP JSON.
         # A press inside the guard must stay blocked while waiting for the lock.
         received_at = self.monotonic() if received_at is None else received_at
@@ -705,148 +968,236 @@ class Hub:
             raise HubError("action must not be empty")
         command = parts[0]
         argument = parts[1] if len(parts) == 2 else None
-        if command not in ("slot", "cycle", "next_wait", "approve", "deny", "interrupt", "voice", "voice_down", "voice_up", "screenshot", "prompt"):
+        if command not in ("slot", "cycle", "next_wait", "approve", "deny", "interrupt", "voice",
+                           "voice_down", "voice_up", "screenshot", "prompt", "show", "scroll", "nav"):
             raise HubError("unknown action")
-        if command not in ("slot", "cycle", "prompt") and argument is not None:
+        if command not in ("slot", "cycle", "prompt", "scroll", "nav") and argument is not None:
             raise HubError("unexpected action argument")
-        with self.lock:
-            if self.closed:
-                raise HubError("hub is shutting down", 503)
-            if command in ("approve", "deny"):
-                self._validate_decision(payload, command, source, received_at)
-            self._update_voice()
-            self._expire()
-            if command == "voice_up":
+        if command == "scroll":
+            if argument == "end":
+                argument = SCROLL_END
+            else:
                 try:
-                    if self.desktop is not None:
-                        completed = self.desktop.voice_up()
-                        if sys.platform == "darwin" and completed is False:
-                            return {"action": command, "status": "unavailable"}
+                    argument = int(argument)
+                except (TypeError, ValueError):
+                    argument = 0
+                if not argument or abs(argument) > SCROLL_LIMIT:
+                    raise HubError("scroll needs a nonzero step up to %d, or end" % SCROLL_LIMIT)
+        if command == "nav" and argument not in NAV_KEYS:
+            raise HubError("nav needs up, down or enter")
+        with self.lock:
+            outcome = self._action_locked(payload, command, argument, source, received_at)
+        if callable(outcome):
+            return outcome()
+        return outcome
+
+    def _focus_effect(self, command, selected, result):
+        """Snapshot under the lock; the returned callable focuses without it."""
+        session = dict(self.sessions[selected])
+        sessions = [dict(item) for item in self.sessions.values()]
+        # Shared relay handles may still resolve to a distinct session window.
+        hwnd = session.get("hwnd")
+        shared = type(hwnd) is int and sum(1 for item in sessions if item.get("hwnd") == hwnd) > 1
+        try:
+            desktop, unavailable = self._desktop(), None
+        except HubError as error:
+            desktop, unavailable = None, error
+
+        def focus():
+            shared_window = shared
+            try:
+                if unavailable is not None:
+                    raise unavailable
+                focused = desktop.focus(session, sessions)
+                if isinstance(focused, tuple) and len(focused) == 3:
+                    shared_window = shared and focused[0] == hwnd
+                window = "window focus unavailable" if focused is False else "focused"
+            except Exception as error:
+                log.warning("Window focus unavailable: %s", error)
+                window = str(error)
+            extra = {"shared_window": True} if shared_window and window == "focused" else {}
+            return dict(result, slot=session["slot"], window=window, **extra)
+        return focus
+
+    def _action_locked(self, payload, command, argument, source, received_at):
+        if self.closed:
+            raise HubError("hub is shutting down", 503)
+        if command in ("approve", "deny"):
+            self._validate_decision(payload, command, source, received_at)
+        self._update_voice()
+        self._expire()
+        if command == "show":
+            self.show_requests += 1
+            return {"action": command, "status": "shown"}
+        if command == "voice_up":
+            desktop = self.desktop
+            if desktop is None:
+                return {"action": command, "status": "sent"}
+
+            def stop_voice():
+                try:
+                    completed = desktop.voice_up()
                 except Exception as error:
                     raise HubError(str(error), 409) from error
                 finally:
-                    self._update_voice()
+                    with self.lock:
+                        self._update_voice()
+                if sys.platform == "darwin" and completed is False:
+                    return {"action": command, "status": "unavailable"}
                 return {"action": command, "status": "sent"}
-            voice_active = self.desktop is not None and self.desktop.voice_active
-            if voice_active and command not in ("voice_down", "deny", "interrupt"):
-                raise HubError("release voice before approving, changing sessions or sending input", 409)
-            if voice_active and command == "voice_down":
-                return {"action": command, "status": "sent"}
-            if command in ("approve", "deny", "interrupt"):
-                if command == "interrupt" and self.displayed_request_id is None and self.pending:
-                    self._next_request()
-                request = self._displayed()
-                expected = payload.get("request_id")
-                if 'request_id' in payload and expected != self.displayed_request_id:
-                    raise HubError("displayed request changed", 409)
-                if request is not None:
-                    result = {"action": command, "request_id": request.id}
-                    if request.status == "locked":
-                        return dict(result, status="locked")
-                    if command == "approve" and ((request.gate and request.risk in ("high", "critical")) or
-                                                  (request.risk == "high" and not request.gate_confirmed)):
-                        now = self.monotonic()
-                        if request.armed_at is None or now - request.armed_at > CONFIRM_SECONDS:
-                            request.armed_at = now
-                            self.confirm_target = request.id
-                            self.confirm_until = now + CONFIRM_SECONDS
-                            self._show()
-                            return dict(result, status="confirm", message="GATE! press again" if request.gate else "HOLD! press again")
-                    self._resolve(request, "allow" if command == "approve" else "deny", source)
-                    if command == 'approve':
-                        self.confirm_target = None
-                        self.confirm_until = float('-inf')
-                    return dict(result, status="allowed" if command == "approve" else "denied")
-                if command != "interrupt":
-                    return {"action": command, "request_id": None, "status": "no_request"}
-                if voice_active:
-                    raise HubError("release voice before sending input", 409)
-            if command in ("slot", "cycle", "next_wait"):
-                sessions = sorted(self.sessions.items(), key=lambda pair: pair[1]["slot"])
-                if command == "next_wait":
-                    identities = [identity for identity, _ in sessions]
-                    index = identities.index(self.selected) if self.selected in identities else -1
-                    selected = next(
-                        (sessions[(index + step) % len(sessions)][0]
-                         for step in range(1, len(sessions) + 1)
-                         if sessions[(index + step) % len(sessions)][1]["state"] in ("wait", "locked")),
-                        None,
-                    )
-                    if selected is None:
-                        return {"action": command, "status": "no_waiting_session",
-                                "slot": None, "request_id": self.displayed_request_id}
-                else:
-                    raw = argument if argument is not None else payload.get("slot" if command == "slot" else "delta")
-                    if isinstance(raw, bool) or not isinstance(raw, (str, int)):
-                        raise HubError("slot/cycle needs an integer")
-                    try:
-                        number = int(raw)
-                    except ValueError as error:
-                        raise HubError("slot/cycle needs an integer") from error
-                    if command == "slot":
-                        selected = next((identity for identity, s in sessions if s["slot"] == number), None)
-                    else:
-                        if number == 0:
-                            raise HubError("cycle delta must not be zero")
-                        identities = [identity for identity, _ in sessions]
-                        index = identities.index(self.selected) if self.selected in identities else (-1 if number > 0 else 0)
-                        selected = identities[(index + number) % len(identities)] if identities else None
-                    if selected is None:
-                        raise HubError("no session in that slot", 404)
-                previous = self.pending.get(self.displayed_request_id)
-                if previous is not None:
-                    previous.armed_at = None
-                self.selected = selected
-                self.confirm_target = None
-                self.confirm_until = float('-inf')
-                self._set_displayed(next((p.id for p in self.pending.values() if p.session == selected), None) or next(
-                    (p.id for p in self.locked.values() if p.session == selected), None))
-                self._show()
-                session = self.sessions[selected]
+            return stop_voice
+        voice_active = self.desktop is not None and self.desktop.voice_active
+        if voice_active and command not in ("voice_down", "deny", "interrupt"):
+            raise HubError("release voice before approving, changing sessions or sending input", 409)
+        if voice_active and command == "voice_down":
+            return {"action": command, "status": "sent"}
+        if command in ("approve", "deny", "interrupt"):
+            if command == "interrupt" and self.displayed_request_id is None and self.pending:
+                self._next_request()
+            request = self._displayed()
+            expected = payload.get("request_id")
+            if 'request_id' in payload and expected != self.displayed_request_id:
+                raise HubError("displayed request changed", 409)
+            if request is not None:
+                result = {"action": command, "request_id": request.id}
+                if request.status == "locked":
+                    return dict(result, status="locked")
+                if command == "approve" and ((request.gate and request.risk in ("high", "critical")) or
+                                              (request.risk == "high" and not request.gate_confirmed)):
+                    now = self.monotonic()
+                    if request.armed_at is None or now - request.armed_at > CONFIRM_SECONDS:
+                        request.armed_at = now
+                        self.confirm_target = request.id
+                        self.confirm_until = now + CONFIRM_SECONDS
+                        self._show()
+                        return dict(result, status="confirm", message="GATE! press again" if request.gate else "HOLD! press again")
+                self._resolve(request, "allow" if command == "approve" else "deny", source)
+                if command == 'approve':
+                    self.confirm_target = None
+                    self.confirm_until = float('-inf')
+                return dict(result, status="allowed" if command == "approve" else "denied")
+            if command == "approve":
+                # Questions and plans are answered in the agent's own window.
+                ordered = sorted(self.sessions.items(), key=lambda pair: pair[1]["slot"])
+                asking = [identity for identity, s in ordered if s.get("needs_answer")]
+                if asking:
+                    selected = self.selected if self.selected in asking else asking[0]
+                    self.selected = selected
+                    self._show()
+                    return self._focus_effect(command, selected,
+                                              {"action": command, "request_id": None, "status": "focus"})
+            if command != "interrupt":
+                return {"action": command, "request_id": None, "status": "no_request"}
+            if voice_active:
+                raise HubError("release voice before sending input", 409)
+        if command in ("slot", "cycle", "next_wait"):
+            sessions = sorted(self.sessions.items(), key=lambda pair: pair[1]["slot"])
+            if command == "next_wait":
+                identities = [identity for identity, _ in sessions]
+                index = identities.index(self.selected) if self.selected in identities else -1
+                selected = next(
+                    (sessions[(index + step) % len(sessions)][0]
+                     for step in range(1, len(sessions) + 1)
+                     if sessions[(index + step) % len(sessions)][1]["state"] in ("wait", "locked")),
+                    None,
+                )
+                if selected is None:
+                    return {"action": command, "status": "no_waiting_session",
+                            "slot": None, "request_id": self.displayed_request_id}
+            else:
+                raw = argument if argument is not None else payload.get("slot" if command == "slot" else "delta")
+                if isinstance(raw, bool) or not isinstance(raw, (str, int)):
+                    raise HubError("slot/cycle needs an integer")
                 try:
-                    focused = self._desktop().focus(session, list(self.sessions.values()))
-                    window = "window focus unavailable" if focused is False else "focused"
-                except Exception as error:
-                    log.warning("Window focus unavailable: %s", error)
-                    window = str(error)
-                return {"action": command, "status": "selected", "slot": session["slot"],
-                        "request_id": self.displayed_request_id, "window": window}
-            session = self.sessions.get(self.selected)
-            if session is None:
-                raise HubError("select a session first", 409)
-            desktop = self._desktop()
-            sessions = list(self.sessions.values())
+                    number = int(raw)
+                except ValueError as error:
+                    raise HubError("slot/cycle needs an integer") from error
+                if command == "slot":
+                    selected = next((identity for identity, s in sessions if s["slot"] == number), None)
+                    expected = payload.get("session")
+                    if (selected is not None and expected is not None
+                            and list(expected) != list(selected)):
+                        raise HubError("that session has ended", 409)
+                else:
+                    if number == 0:
+                        raise HubError("cycle delta must not be zero")
+                    identities = [identity for identity, _ in sessions]
+                    index = identities.index(self.selected) if self.selected in identities else (-1 if number > 0 else 0)
+                    selected = identities[(index + number) % len(identities)] if identities else None
+                if selected is None:
+                    raise HubError("no session in that slot", 404)
+            previous = self.pending.get(self.displayed_request_id)
+            if previous is not None:
+                previous.armed_at = None
+            self.selected = selected
+            self.confirm_target = None
+            self.confirm_until = float('-inf')
+            self._set_displayed(next((p.id for p in self.pending.values() if p.session == selected), None) or next(
+                (p.id for p in self.locked.values() if p.session == selected), None))
+            self._show()
+            return self._focus_effect(command, selected, {
+                "action": command, "status": "selected", "request_id": self.displayed_request_id})
+        session = self.sessions.get(self.selected)
+        if session is None:
+            raise HubError("select a session first", 409)
+        if command == "nav":
+            identity = self.selected
+            if (any(p.session == identity for p in self.pending.values())
+                    or any(p.session == identity for p in self.locked.values())
+                    or session.get("wait_kind") == "permission_prompt" or session.get("native_wait")):
+                # Enter in the agent's own permission dialog would skip the
+                # high-risk double press and the critical-risk lock.
+                raise HubError("a permission request is open: use approve/deny", 409)
+            if argument in ("up", "down") and session["state"] != "wait":
+                # Idle arrows recall old prompts; a later Enter would resend one.
+                raise HubError("nav up/down works only while the agent asks a question", 409)
+        desktop = self._desktop()
+        sessions = [dict(item) for item in self.sessions.values()]
+        session = dict(session)
+        text = generation = None
+        if command == "prompt":
+            template = argument if argument is not None else payload.get("name")
+            if not isinstance(template, str) or not isinstance(self.prompts.get(template), str):
+                raise HubError("unknown prompt template")
+            text = self.prompts[template]
+        elif command in ("voice", "voice_down"):
+            self.voice_notice = None
+            self.voice_generation += 1
+            generation = self.voice_generation
+            self.voice_target = self.selected
+            if sys.platform != "darwin":
+                for request in self.pending.values():
+                    request.armed_at = None
+
+        def run_effect():
             try:
                 completed = None
                 if command == "prompt":
-                    template = argument if argument is not None else payload.get("name")
-                    if not isinstance(template, str) or not isinstance(self.prompts.get(template), str):
-                        raise HubError("unknown prompt template")
-                    completed = desktop.prompt(session, sessions, self.prompts[template])
+                    completed = desktop.prompt(session, sessions, text)
+                elif command in ("scroll", "nav"):
+                    method = getattr(desktop, command, None)
+                    completed = False if method is None else method(session, sessions, argument)
+                    if completed is False:
+                        return {"action": command, "status": "unavailable"}
                 elif command == "screenshot":
                     path = desktop.screenshot(session, sessions)
                     if path is False:
                         return {"action": command, "status": "unavailable"}
                     return {"action": command, "status": "sent", "path": path}
                 elif command in ("voice", "voice_down"):
-                    self.voice_notice = None
-                    self.voice_generation += 1
-                    generation = self.voice_generation
-                    self.voice_target = self.selected
-                    if sys.platform != "darwin":
-                        for request in self.pending.values():
-                            request.armed_at = None
                     completed = desktop.voice_down(session, sessions,
                                                    on_stop=lambda result: self.voice_events.put((generation, result)))
-                    if sys.platform == "darwin":
-                        if completed is False:
+                    with self.lock:
+                        unavailable = sys.platform == "darwin" and completed is False
+                        if unavailable and self.voice_generation == generation:
                             self.voice_target = None
-                            self._show()
-                            return {"action": command, "status": "unavailable"}
-                        for request in self.pending.values():
-                            request.armed_at = None
-                    self._show()
-                    if command == "voice" and (sys.platform != "darwin" or completed is not False):
+                        if sys.platform == "darwin" and not unavailable:
+                            for request in self.pending.values():
+                                request.armed_at = None
+                        self._show()
+                    if unavailable:
+                        return {"action": command, "status": "unavailable"}
+                    if command == "voice":
                         completed = desktop.voice_up()
                 else:
                     completed = getattr(desktop, command)(session, sessions)
@@ -859,10 +1210,12 @@ class Hub:
                 raise HubError(str(error), 409) from error
             finally:
                 if command in ("voice", "voice_down"):
-                    self._update_voice()
-                    if not desktop.voice_active:
-                        self.voice_target = None
+                    with self.lock:
+                        self._update_voice()
+                        if not desktop.voice_active and self.voice_generation == generation:
+                            self.voice_target = None
             return {"action": command, "status": "sent"}
+        return run_effect
 
     def _desktop(self):
         if not self.desktop_enabled:
@@ -900,6 +1253,7 @@ class Hub:
 
 class HubServer(ThreadingHTTPServer):
     daemon_threads = True
+    request_queue_size = 64  # bursts of parallel hooks must not be refused by the backlog
 
     def __init__(self, hub, token, port=PORT):
         if not isinstance(token, str) or not token.strip():
@@ -931,16 +1285,29 @@ class HubHandler(BaseHTTPRequestHandler):
         except ValueError as error:
             raise HubError("invalid Content-Length") from error
         if not 0 < size <= MAX_BODY:
-            raise HubError("JSON body required (maximum 1 MiB)")
+            raise HubError("JSON body required (maximum 8 MiB)")
         try:
             body = json.loads(self.rfile.read(size))
         except (ValueError, UnicodeError) as error:
             raise HubError("invalid JSON") from error
         if not isinstance(body, dict):
             raise HubError("JSON body must be an object")
-        return body
+        # Agents cut strings by UTF-16 units; a lone surrogate would break every
+        # later UTF-8 encode (hash, audit, reply).
+        return scrub_surrogates(body)
+
+    def _client_gone(self):
+        """True once the hook client closed or reset its connection."""
+        try:
+            readable, _, _ = select.select([self.connection], [], [], 0)
+            if not readable:
+                return False
+            return self.connection.recv(1, socket.MSG_PEEK) == b""
+        except (OSError, ValueError):
+            return True
 
     def _handle(self):
+        received_at = self.server.hub.monotonic()
         try:
             route = urlsplit(self.path)
             if self.command == "GET" and route.path == "/health":
@@ -974,7 +1341,8 @@ class HubHandler(BaseHTTPRequestHandler):
                 gates = query.get("gate", [])
                 if gates not in ([], ["1"]):
                     raise HubError("gate must be a single 1")
-                result = self.server.hub.event(agents[0], self._body(), gate=bool(gates))
+                result = self.server.hub.event(agents[0], self._body(), gate=bool(gates),
+                                               received_at=received_at, disconnected=self._client_gone)
             elif self.command == "POST" and route.path == "/action":
                 result = self.server.hub.action(self._body())
             elif self.command == 'POST' and route.path == '/rendered':
@@ -999,7 +1367,7 @@ class HubHandler(BaseHTTPRequestHandler):
             self._reply(200, result)
         except HubError as error:
             self._reply(error.status, {"error": str(error)})
-        except (BrokenPipeError, ConnectionResetError, TimeoutError):
+        except (ConnectionError, TimeoutError):  # includes aborted (WinError 10053) clients
             log.debug("Hook client disconnected")
         except Exception:
             log.exception("Hub request failed")
@@ -1084,6 +1452,9 @@ class USBKeys:
 
     def _dispatch(self, binding, action, shown, received_at, reader="USB"):
         try:
+            if reader == "Raw Input" and action.split()[0] in RAW_INPUT_BLOCKED:
+                # The key has already typed its letter into the focused window.
+                raise HubError("keys leak into the window under Raw Input; install WinUSB", 409)
             payload = {"action": action}
             if action in ("approve", "deny"):
                 payload.update(shown)
@@ -1092,11 +1463,24 @@ class USBKeys:
             result = self.hub.action(payload, source="key", received_at=received_at)
             keylog.debug("Keyboard action reader=%s binding=%s action=%s result=%s", reader, binding, action, result)
             log.info("%s %s -> %s", reader, binding, result)
+            self._note(action, result=result)
             return True
         except (HubError, ValueError) as error:
             keylog.debug("Keyboard action reader=%s binding=%s action=%s result=blocked: %s", reader, binding, action, error)
             log.warning("%s action failed: %s", reader, error)
+            self._note(action, error=error)
             return False
+
+    def _note(self, action, result=None, error=None):
+        """A key press must never look dead: publish its result to the displays."""
+        note = getattr(self.hub, "note_input", None)
+        if not callable(note):
+            return
+        try:
+            text, ok, lcd = describe_input(action, result, error)
+            note(text, ok, lcd)
+        except Exception as failure:
+            log.debug("Key feedback unavailable: %s", failure)
 
 
 def parse_backends(value):
@@ -1156,7 +1540,7 @@ def main(argv=None, *, ui_factory=None):
               critical_rules=load_json(args.critical_rules) if args.critical_rules else None,
               home=home, lcd_enabled=not args.no_lcd, desktop_enabled=not args.no_desktop,
               desktop=None if args.no_desktop else DesktopEffects(**desktop_options), **options)
-    server = overlay = http_thread = maintenance = None
+    server = overlay = http_thread = maintenance = marker = None
     readers = []
     stopped = threading.Event()
     server_errors = []
@@ -1192,15 +1576,18 @@ def main(argv=None, *, ui_factory=None):
             from hub_keyboard import KeyboardInput
             keyboard = KeyboardInput(USBKeys(hub, mapping, profile=args.profile), monotonic=hub.monotonic)
             keyboard.heartbeat = lambda: watchdog.beat("keyboard")
+            hub.input_reader = getattr(keyboard, "reader_mode", None)
             readers.append((keyboard, "AgentDeck USB"))
         if "hotkey" in args.backend:
             from hub_hotkey import HotkeyInput
             readers.append((HotkeyInput(hub, mapping), "AgentDeck hotkeys"))
         server = HubServer(hub, load_token(args.home), args.port)
+        marker = write_hub_marker(args.home, getattr(server, "server_port", None))
         if args.overlay:
             from hub_overlay import Overlay
             overlay = (ui_factory or Overlay)(hub)
-            getattr(overlay, "overlay", overlay).heartbeat = lambda: watchdog.beat("UI")
+            target = getattr(overlay, "overlay", overlay)
+            target.heartbeat = lambda: watchdog.beat("UI")
         watchdog.start()
         maintenance = threading.Thread(target=maintain, name="AgentDeck LCD hold", daemon=True)
         maintenance.start()
@@ -1215,7 +1602,8 @@ def main(argv=None, *, ui_factory=None):
             # Tk owns the main thread; HTTP and native input keep running independently.
             http_thread = threading.Thread(target=serve, name="AgentDeck HTTP", daemon=True)
             http_thread.start()
-            watchdog.watch("UI")
+            wake = getattr(target, "wake", None)
+            watchdog.watch("UI", wake=wake if callable(wake) else None)
             overlay.run()
             if server_errors:
                 raise server_errors[0]
@@ -1235,6 +1623,7 @@ def main(argv=None, *, ui_factory=None):
             if isinstance(thread, threading.Thread) and thread.ident is not None:
                 thread.join(timeout=3)
         hub.close()
+        remove_hub_marker(marker)
         if server is not None:
             server.server_close()
         if maintenance is not None:

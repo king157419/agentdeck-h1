@@ -7,6 +7,7 @@ from pathlib import Path
 from queue import Empty, SimpleQueue
 import sys
 import threading
+import time
 
 import agentdeck_theme as theme
 
@@ -24,24 +25,173 @@ STATES = {"think": "RUN", "tool": "RUN", "wait": "ASK", "locked": "ASK",
           "done": "DONE", "error": "ERR", "idle": "IDLE"}
 BACKGROUND = theme.BG
 FOREGROUND = theme.TEXT
+INPUT_NOTICE_SECONDS = 2.0
+DOT_STEP = 14
+EMPTY_TEXT = "还没有会话：新开 Claude/Codex 会话后出现"
+DRIVER_NOTICE = "按键会漏进窗口：先用 Zadig 把接口 0 换成 WinUSB"
+ABSENT_NOTICE = "没检测到宏键盘"
+ANSWER_HINTS = {"AskUserQuestion": "需回答", "ExitPlanMode": "确认计划"}
+PREVIEW_COLS = 46
+PREVIEW_ROWS = 8
+ACTIVITY_CHARS = 20
+
+
+class TkWaker:
+    """Post native messages so Windows Tcl cannot sleep past its Tk timers."""
+
+    def __init__(self, hwnd, interval=.25, post=None):
+        if interval <= 0:
+            raise ValueError("wake interval must be positive")
+        self.hwnd, self.interval = hwnd, interval
+        self._post = post
+        if self._post is None and os.name == "nt" and hwnd:
+            self._post = ctypes.WinDLL("user32", use_last_error=True).PostMessageW
+            self._post.argtypes = [ctypes.c_void_p, ctypes.c_uint,
+                                   ctypes.c_size_t, ctypes.c_ssize_t]
+            self._post.restype = ctypes.c_int
+        self._stop = threading.Event()
+        self._thread = None
+
+    def wake(self):
+        """Safe from any thread: never call Tk, including winfo_id()."""
+        if os.name != "nt" or not self.hwnd:
+            return False
+        try:
+            return bool(self._post(self.hwnd, 0, 0, 0))  # WM_NULL
+        except Exception as error:
+            log.debug("UI wake failed: %s", error)
+            return False
+
+    def _run(self):
+        while not self._stop.wait(self.interval):
+            self.wake()
+
+    def start(self):
+        if os.name != "nt" or not self.hwnd:
+            return
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, name="AgentDeck UI wake", daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        if self._thread is not None and self._thread is not threading.current_thread():
+            self._thread.join(timeout=1.)
 
 
 def overlay_config_file(home=None):
     return (Path.home() if home is None else Path(home)) / ".agentdeck" / "overlay.json"
 
 
-def display_model(state):
-    """Convert a /state snapshot to plain display data without mutating it."""
+def _char_width(char):
+    import unicodedata
+    return 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
+
+
+def _text_width(text):
+    return sum(_char_width(char) for char in text)
+
+
+def wrap_tail(text, cols=PREVIEW_COLS, rows=PREVIEW_ROWS):
+    """The last ``rows`` display lines of ``text``, each at most ``cols`` columns.
+
+    Wide (W/F) characters count as two columns. Code fences and repeated blank
+    lines are dropped; "…" starts the first line when earlier text was cut.
+    """
+    lines = []
+    for raw in str(text).replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        raw = "".join(char for char in raw.expandtabs(4) if char >= " " or char == "\t").rstrip()
+        if raw.lstrip().startswith("```"):
+            continue
+        if not raw.strip():
+            if lines and lines[-1] != "":
+                lines.append("")
+            continue
+        current, width = "", 0
+        for char in raw:
+            size = _char_width(char)
+            if current and width + size > cols:
+                lines.append(current)
+                current, width = "", 0
+            current += char
+            width += size
+        lines.append(current)
+    while lines and lines[-1] == "":
+        lines.pop()
+    truncated = len(lines) > rows
+    lines = lines[-rows:]
+    while lines and lines[0] == "":
+        lines.pop(0)
+    if truncated and lines:
+        first = lines[0]
+        while first and _text_width("…" + first) > cols:
+            first = first[1:]
+        lines[0] = "…" + first
+    return lines
+
+
+def _ago(seconds):
+    if seconds < 60:
+        return "刚刚"
+    if seconds < 3600:
+        return "%d分钟前" % (seconds // 60)
+    if seconds < 86400:
+        return "%d小时前" % (seconds // 3600)
+    return "%d天前" % (seconds // 86400)
+
+
+def _preview(state, sessions, request, now):
+    """Latest line of the selected session, else of the first one waiting for you."""
+    chosen = sessions.get(state.get("selected_slot"))
+    if chosen is None:
+        chosen = next((sessions[number] for number in sorted(sessions)
+                       if sessions[number].get("state") in ("wait", "locked")), None)
+    if chosen is None or not isinstance(chosen.get("last_text"), str) or not chosen["last_text"].strip():
+        return None
+    if request is not None and (request.get("agent"), request.get("session_id")) == (
+            chosen.get("agent"), chosen.get("session_id")):
+        return None  # the approval detail for this session takes the space
+    name = str(chosen.get("name") or chosen.get("project") or "Unnamed")
+    parts = ["#%s %s" % (chosen.get("slot"), name)]
+    if isinstance(chosen.get("last_kind"), str) and chosen["last_kind"]:
+        parts.append(chosen["last_kind"])
+    at = chosen.get("last_text_at")
+    if now is not None and isinstance(at, (int, float)) and not isinstance(at, bool):
+        parts.append(_ago(max(0, now - at)))
+    return {"title": " · ".join(parts), "lines": wrap_tail(chosen["last_text"])}
+
+
+def display_model(state, now=None):
+    """Convert a /state snapshot to plain display data without mutating it.
+
+    ``now`` (wall clock) decides whether the last key result is still shown.
+    """
     sessions = {session["slot"]: session for session in state.get("sessions", ())}
+    windows = {}
+    for session in sessions.values():
+        if type(session.get("hwnd")) is int:
+            windows[session["hwnd"]] = windows.get(session["hwnd"], 0) + 1
     slots = []
     for number in range(1, 7):
         session = sessions.get(number)
         label = STATES.get(session.get("state"), "IDLE") if session else "IDLE"
+        activity = ""
+        if session and session.get("state") in ("think", "tool") and isinstance(session.get("activity"), str):
+            activity = " ".join(session["activity"].split())
+            if len(activity) > ACTIVITY_CHARS:
+                activity = activity[:ACTIVITY_CHARS - 1] + "…"
         slots.append({"number": number,
                       "name": str(session.get("name") or session.get("project") or "Unnamed")
                       if session else "",
                       "label": label, "color": COLORS[label],
                       "occupied": session is not None,
+                      "hint": ANSWER_HINTS.get(session.get("needs_answer"), "") if session else "",
+                      "needs_input": bool(session) and session.get("state") in ("wait", "locked"),
+                      "activity": activity,
+                      # Several sessions in one window (terminal tabs): focus cannot pick the tab.
+                      "same_window": bool(session) and windows.get(session.get("hwnd"), 0) > 1,
                       "selected": state.get("selected_slot") == number})
     pending_list = list(state.get("pending", ()))
     locked_list = list(state.get("locked", ()))
@@ -72,13 +222,25 @@ def display_model(state):
                   "can_approve": not locked, "can_deny": not locked}
     session_count = len(sessions)
     pending_count = len(pending_list)
+    last = state.get("last_input")
+    feedback = None
+    if (isinstance(last, dict) and isinstance(last.get("text"), str) and now is not None
+            and isinstance(last.get("at"), (int, float)) and 0 <= now - last["at"] <= INPUT_NOTICE_SECONDS):
+        feedback = {"text": last["text"], "ok": last.get("ok") is not False}
+    reader = state.get("input_reader")
     return {
         "slots": slots,
         "request": detail,
+        "preview": _preview(state, sessions, request, now),
         "session_count": session_count,
         "pending_count": pending_count,
         "summary_text": "%d 待批" % pending_count if pending_count else "%d 个会话" % session_count,
-        "expanded": bool(pending_count or detail is not None),
+        # The session list is always shown; the request block is extra.
+        "expanded": True,
+        "empty_text": EMPTY_TEXT if not session_count else "",
+        "feedback": feedback,
+        "notice": (DRIVER_NOTICE if reader == "raw" else ABSENT_NOTICE if reader == "absent" else ""),
+        "notice_action": reader == "raw",
     }
 
 
@@ -109,9 +271,12 @@ class NoActivateWindow:
             "SetWindowPos": ([wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
                               ctypes.c_int, ctypes.c_int, wintypes.UINT], wintypes.BOOL),
             "ShowWindow": ([wintypes.HWND, ctypes.c_int], wintypes.BOOL),
+            "IsWindowVisible": ([wintypes.HWND], wintypes.BOOL),
         }
         for name, (args, result) in signatures.items():
-            function = getattr(self.user, name)
+            function = getattr(self.user, name, None)
+            if function is None:
+                continue
             function.argtypes, function.restype = args, result
         self.hwnd = None
         self.old_proc = None
@@ -170,6 +335,44 @@ class NoActivateWindow:
         if not previous and ctypes.get_last_error():
             raise ctypes.WinError(ctypes.get_last_error())
         return previous
+
+    def reapply(self):
+        """Restore TOOLWINDOW | NOACTIVATE (Tk's -alpha rewrites the extended style).
+
+        Without WS_EX_TOOLWINDOW an unowned window gets a taskbar button, which
+        users mistake for the tray icon. Taskbar membership is decided at show
+        time, so a visible window is hidden and re-shown without activation.
+        """
+        if not self.hwnd:
+            return False
+        style = self.get_long(self.hwnd, -20)
+        wanted = (style | 0x08000000 | 0x80) & ~0x40000
+        if wanted == style:
+            return False
+        self._set(-20, wanted)
+        visible = getattr(self.user, "IsWindowVisible", None)
+        shown = bool(visible(self.hwnd)) if callable(visible) else False
+        if shown:
+            self.user.ShowWindow(self.hwnd, 0)  # SW_HIDE
+        self.user.SetWindowPos(self.hwnd, None, 0, 0, 0, 0, 0x37)  # NOSIZE|NOMOVE|NOZORDER|NOACTIVATE|FRAMECHANGED
+        if shown:
+            self.user.ShowWindow(self.hwnd, 4)  # SW_SHOWNOACTIVATE
+        return True
+
+    def set_alpha(self, alpha):
+        """Window opacity without Tk's -alpha, which would drop the tool-window bits."""
+        if not self.hwnd:
+            return False
+        style = self.get_long(self.hwnd, -20)
+        wanted = (style | 0x80000 | 0x08000000 | 0x80) & ~0x40000  # LAYERED + tool + noactivate
+        if wanted != style:
+            self._set(-20, wanted)
+        layered = getattr(self.user, "SetLayeredWindowAttributes", None)
+        if layered is None:
+            return False
+        layered.argtypes = [wintypes.HWND, wintypes.DWORD, ctypes.c_ubyte, wintypes.DWORD]
+        layered.restype = wintypes.BOOL
+        return bool(layered(self.hwnd, 0, max(0, min(255, int(round(alpha * 255)))), 2))  # LWA_ALPHA
 
     def apply(self, child):
         self.hwnd = self.user.GetAncestor(child, 2) or child  # GA_ROOT
@@ -241,6 +444,7 @@ class Overlay:
         self._pos = None
         self._runtime_x = None
         self.root = None
+        self._waker = None
         self.model = display_model({})
         self.message = ""
         self._drag = None
@@ -257,11 +461,22 @@ class Overlay:
         self.body = None
         self.rows = []
         self.detail = None
+        self.preview_box = None
+        self.preview_title = None
+        self.preview = None
+        self._preview_shown = None
         self.risk = None
         self.summary = None
         self.decisions = None
         self.decision_buttons = {}
         self.note = None
+        self.empty_label = None
+        self.notice_label = None
+        self.menu_button = None
+        self.heartbeat = None      # set by hub.main: the UI watchdog's beat
+        self.menu_items = None     # callable -> [(label, callback) | None]; tray app supplies it
+        self.on_driver_help = None
+        self._show_seen = None
         self.state = {}
         self._tasks = self._completed = self._worker = None
         self._worker_stop = threading.Event()
@@ -345,6 +560,10 @@ class Overlay:
         """May be called by another thread; Tk observes it on the next poll."""
         self.stopped.set()
 
+    def wake(self):
+        waker = self._waker
+        return waker.wake() if waker is not None else False
+
     def hide(self):
         """Hide the overlay without stopping Hub or ending the Tk loop."""
         self._dismissed_requests = set(self._active_ids)
@@ -370,12 +589,25 @@ class Overlay:
             self.window.show()
 
     def _apply_alpha(self):
+        alpha = TRANSLUCENT_ALPHA if self.translucent else OPAQUE_ALPHA
+        # Type check: a plain Mock window must not claim native support.
+        if (callable(getattr(type(self.window), "set_alpha", None))
+                and getattr(self.window, "hwnd", None)):
+            try:
+                if self.window.set_alpha(alpha):
+                    return
+            except Exception as error:
+                log.debug("Native overlay alpha unavailable: %s", error)
         if self.root is not None:
             try:
-                self.root.attributes(
-                    "-alpha", TRANSLUCENT_ALPHA if self.translucent else OPAQUE_ALPHA)
+                self.root.attributes("-alpha", alpha)
             except Exception as error:
                 log.debug("Overlay alpha unavailable: %s", error)
+        if callable(getattr(type(self.window), "reapply", None)):
+            try:
+                self.window.reapply()
+            except Exception as error:
+                log.debug("Overlay window style restore failed: %s", error)
 
     def toggle_translucent(self):
         self.translucent = not self.translucent
@@ -482,6 +714,59 @@ class Overlay:
         widget.bind("<B1-Motion>", self._move)
         widget.bind("<ButtonRelease-1>", self._end_drag)
 
+    def _menu_entries(self):
+        entries = None
+        if callable(self.menu_items):
+            try:
+                entries = self.menu_items()
+            except Exception as error:
+                log.warning("Overlay menu unavailable: %s", error)
+        return entries or [("隐藏浮窗", self.hide)]
+
+    def open_menu(self, event=None):
+        """The tray menu without the tray: right-click anywhere or the ≡ button."""
+        import tkinter as tk
+        if self.root is None:
+            return None
+        menu = tk.Menu(self.root, tearoff=False, bg=theme.SURFACE, fg=FOREGROUND,
+                       activebackground=theme.RAISED, activeforeground=FOREGROUND,
+                       font=theme.font(10))
+        for entry in self._menu_entries():
+            if entry is None:
+                menu.add_separator()
+            else:
+                label, callback = entry
+                menu.add_command(label=label, command=callback)
+        if event is not None and hasattr(event, "x_root"):
+            x, y = event.x_root, event.y_root
+        else:
+            x, y = self.root.winfo_rootx(), self.root.winfo_rooty() + self.root.winfo_height()
+        try:
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
+        return menu
+
+    def _dot_slot(self, x):
+        """Header dot under x (canvas pixels) -> slot number, or None."""
+        occupied = [slot for slot in self.model["slots"] if slot["occupied"]]
+        if isinstance(x, bool) or not isinstance(x, (int, float)) or x < 0:
+            return None
+        index = int(x // DOT_STEP)
+        return occupied[index]["number"] if index < len(occupied) else None
+
+    def _dots_release(self, event):
+        clicked = self._drag is not None and not self._dragged
+        self._end_drag(event)
+        if clicked:
+            number = self._dot_slot(getattr(event, "x", None))
+            if number is not None:
+                self._select(number)
+
+    def _driver_help(self, event=None):
+        if callable(self.on_driver_help):
+            self.on_driver_help()
+
     def _work_areas(self):
         # Inspect the adapter type so a plain Mock used by legacy tests does
         # not accidentally claim native positioning support.
@@ -577,6 +862,8 @@ class Overlay:
         self.root.attributes("-topmost", True)
         self.root.configure(bg=theme.BORDER)
         self.root.protocol("WM_DELETE_WINDOW", self.hide)
+        # Toplevel binding: a right-click on any overlay widget opens the menu.
+        self.root.bind("<ButtonRelease-3>", self.open_menu)
         # The 1px hairline border is the outer frame showing around the inner one.
         outer = tk.Frame(self.root, bg=theme.BORDER, padx=1, pady=1)
         outer.pack(fill="both", expand=True)
@@ -595,34 +882,69 @@ class Overlay:
                               highlightthickness=0, bd=0)
         self.dots.pack(side="left", padx=(gap, 0))
         self._bind_drag(self.dots)
+        # A click (not a drag) on a dot selects that session.
+        self.dots.bind("<ButtonRelease-1>", self._dots_release)
+        self.dots.configure(cursor="hand2")
         self._button(self.header, "×", self.hide, bg=BACKGROUND, fg=theme.MUTED,
                      padx=4, font=theme.font(13, latin=True)).pack(side="right")
+        self.menu_button = self._button(self.header, "≡", self.open_menu, bg=BACKGROUND,
+                                        fg=theme.MUTED, padx=4, font=theme.font(12, latin=True))
+        self.menu_button.pack(side="right")
         self.alpha_button = self._button(
             self.header, "◐", self.toggle_translucent, bg=BACKGROUND,
             fg=FOREGROUND if self.translucent else theme.FAINT,
             padx=4, font=theme.font(11, latin=True))
         self.alpha_button.pack(side="right")
+        # Always at the top: while keys also type into windows, nothing else matters more.
+        self.notice_label = tk.Label(self.frame, text="", bg=BACKGROUND, fg=COLORS["ERR"], anchor="w",
+                                     justify="left", wraplength=WIDTH - 2 * pad - 2,
+                                     takefocus=False, font=theme.font(9, True), cursor="hand2")
+        self.notice_label.grid(row=1, column=0, sticky="ew", pady=(gap, 0))
+        self.notice_label.bind("<ButtonRelease-1>", self._driver_help)
         self.body = tk.Frame(self.frame, bg=BACKGROUND)
-        self.body.grid(row=1, column=0, sticky="ew", pady=(gap, 0))
+        self.body.grid(row=2, column=0, sticky="ew", pady=(gap, 0))
         self.body.columnconfigure(0, weight=1)
+        self._bind_drag(self.body)
+        self.empty_label = tk.Label(self.body, text=EMPTY_TEXT, bg=BACKGROUND, fg=theme.MUTED,
+                                    anchor="w", justify="left", takefocus=False, font=theme.font(9),
+                                    wraplength=WIDTH - 2 * pad - 2)
+        self.empty_label.grid(row=9, column=0, sticky="ew")
+        self._bind_drag(self.empty_label)
         self.rows = []
         for number in range(1, 7):
             row = tk.Frame(self.body, bg=BACKGROUND, padx=gap, pady=gap - 1)
             row.grid(row=number - 1, column=0, sticky="ew", pady=1)
-            row.columnconfigure(1, weight=1)
+            row.columnconfigure(2, weight=1)
             number_label = self._button(row, str(number), lambda n=number: self._select(n),
                                         bg=BACKGROUND, fg=theme.FAINT, width=2,
                                         font=theme.font(9, True, latin=True))
             number_label.grid(row=0, column=0)
             name = self._button(row, "", lambda n=number: self._select(n), bg=BACKGROUND,
                                 fg=FOREGROUND, anchor="w", font=theme.font(10))
-            name.grid(row=0, column=1, sticky="ew", padx=gap)
+            name.grid(row=0, column=1, sticky="w", padx=(gap, 0))
+            activity = self._button(row, "", lambda n=number: self._select(n), bg=BACKGROUND,
+                                    fg=theme.MUTED, anchor="w", font=theme.font(9))
+            activity.grid(row=0, column=2, sticky="ew", padx=(gap, gap))
             dot = self._button(row, "●", lambda n=number: self._select(n),
                                bg=BACKGROUND, fg=COLORS["IDLE"], font=theme.font(9, latin=True))
-            dot.grid(row=0, column=2)
-            self.rows.append((row, number_label, name, dot))
+            dot.grid(row=0, column=3)
+            self.rows.append((row, number_label, name, dot, activity))
+        # The selected session's latest message: what you would otherwise switch windows to read.
+        self.preview_box = tk.Frame(self.body, bg=theme.SURFACE, padx=gap, pady=gap)
+        self.preview_box.grid(row=6, column=0, sticky="ew", pady=(gap, 0))
+        self._bind_drag(self.preview_box)
+        self.preview_title = tk.Label(self.preview_box, text="", bg=theme.SURFACE, fg=theme.MUTED,
+                                      anchor="w", takefocus=False, font=theme.font(8))
+        self.preview_title.pack(fill="x")
+        self._bind_drag(self.preview_title)
+        self.preview = tk.Label(self.preview_box, text="", bg=theme.SURFACE, fg=FOREGROUND,
+                                anchor="w", justify="left", takefocus=False, font=theme.font(9),
+                                wraplength=WIDTH - 2 * pad - 2 * gap - 2)
+        self.preview.pack(fill="x")
+        self._bind_drag(self.preview)
+        self._preview_shown = ()  # not a valid value: the first render always applies
         self.detail = tk.Frame(self.body, bg=BACKGROUND)
-        self.detail.grid(row=6, column=0, sticky="ew", pady=(pad, 0))
+        self.detail.grid(row=7, column=0, sticky="ew", pady=(pad, 0))
         self.risk = tk.Label(self.detail, bg=BACKGROUND, anchor="w", takefocus=False,
                              font=theme.font(9, True))
         self.risk.pack(fill="x")
@@ -647,13 +969,19 @@ class Overlay:
         self.note = tk.Label(self.body, text="", bg=BACKGROUND, fg=theme.MUTED, anchor="w",
                              wraplength=WIDTH - 2 * pad - 2, takefocus=False,
                              font=theme.font(8))
-        self.note.grid(row=7, column=0, sticky="ew", pady=(gap, 0))
+        self.note.grid(row=8, column=0, sticky="ew", pady=(gap, 0))
 
     def _render(self):
+        feedback = self.model.get("feedback")
         if self.status_label is not None:
-            self.status_label.configure(
-                text=self.model["summary_text"],
-                fg=COLORS["ASK"] if self.model["pending_count"] else FOREGROUND)
+            if feedback:
+                # Every key press shows its result here for about two seconds.
+                self.status_label.configure(text=feedback["text"],
+                                            fg=FOREGROUND if feedback["ok"] else COLORS["ASK"])
+            else:
+                self.status_label.configure(
+                    text=self.model["summary_text"],
+                    fg=COLORS["ASK"] if self.model["pending_count"] else FOREGROUND)
         if self.alpha_button is not None:
             self.alpha_button.configure(fg=FOREGROUND if self.translucent else theme.FAINT)
         if self.dots is not None:
@@ -667,7 +995,9 @@ class Overlay:
                 self.body.grid()
             else:
                 self.body.grid_remove()
-        for data, (row, number, name, badge) in zip(self.model["slots"], self.rows):
+        for data, widgets in zip(self.model["slots"], self.rows):
+            row, number, name, badge = widgets[:4]
+            activity = widgets[4] if len(widgets) > 4 else None
             background = theme.RAISED if data["selected"] else BACKGROUND
             if data["occupied"]:
                 row.grid()
@@ -677,8 +1007,19 @@ class Overlay:
             number.configure(bg=background, fg=FOREGROUND if data["selected"] else theme.FAINT)
             # Bound the text so a long project name cannot expand the panel.
             text = data["name"]
-            name.configure(text=text if len(text) <= 27 else text[:26] + "…", bg=background)
+            text = text if len(text) <= 27 else text[:26] + "…"
+            if data.get("same_window"):
+                text += " · 同窗"
+            if data.get("hint"):
+                text += " · " + data["hint"]
+            elif data.get("needs_input"):
+                text += " · 等你"
+            name.configure(text=text, bg=background,
+                           fg=COLORS["ASK"] if data.get("needs_input") else FOREGROUND)
+            if activity is not None:
+                activity.configure(text=data.get("activity", ""), bg=background)
             badge.configure(bg=background, fg=data["color"])
+        self._render_preview()
         request = self.model["request"]
         if request is None:
             if self.detail is not None:
@@ -696,8 +1037,50 @@ class Overlay:
                     cursor="hand2" if enabled else "arrow")
         if self.note is not None:
             self.note.configure(text=self.message)
+            if self.message:
+                self.note.grid()
+            else:
+                self.note.grid_remove()
+        if self.empty_label is not None:
+            if self.model.get("empty_text"):
+                self.empty_label.configure(text=self.model["empty_text"])
+                self.empty_label.grid()
+            else:
+                self.empty_label.grid_remove()
+        if self.notice_label is not None:
+            notice = self.model.get("notice")
+            if notice:
+                action = self.model.get("notice_action")
+                self.notice_label.configure(text=notice + ("（点这里看步骤）" if action else ""),
+                                            fg=COLORS["ERR"] if action else theme.MUTED,
+                                            cursor="hand2" if action else "arrow")
+                self.notice_label.grid()
+            else:
+                self.notice_label.grid_remove()
+
+    def _render_preview(self):
+        """Touch the preview widgets only when its text changes (every poll is 300 ms)."""
+        if self.preview is None:
+            return
+        preview = self.model.get("preview")
+        shown = (preview["title"], "\n".join(preview["lines"])) if preview else None
+        if shown == self._preview_shown:
+            return
+        self._preview_shown = shown
+        if shown is None:
+            self.preview_box.grid_remove()
+            return
+        self.preview_title.configure(text=shown[0])
+        self.preview.configure(text=shown[1])
+        self.preview_box.grid()
 
     def _poll(self):
+        # First, so the watchdog sees the Tk loop alive even if a refresh fails.
+        if self.heartbeat is not None:
+            try:
+                self.heartbeat()
+            except Exception as error:
+                log.debug("UI heartbeat failed: %s", error)
         if self.stopped.is_set():
             self.root.quit()
             return
@@ -709,24 +1092,17 @@ class Overlay:
                 state = self.hub.state()
             else:
                 self._drain_completed()
-                if not self._state_pending:
-                    self._state_pending = True
-
-                    def received(value):
-                        self.state = value
-                        self._state_pending = False
-
-                    def failed(error):
-                        self._state_pending = False
-                        self.message = "Hub state unavailable"
-
-                    self.defer(self.hub.state, received, failed)
                 state = self.state
             active_ids = self._request_ids(state)
             self._active_ids = active_ids
             self._dismissed_requests &= active_ids
             reappear = self.hidden and bool(active_ids - self._dismissed_requests)
-            self.model = display_model(state)
+            shows = state.get("show_requests")
+            if type(shows) is int:
+                # The macropad "show" key un-hides the overlay without a mouse.
+                reappear |= self.hidden and self._show_seen is not None and shows != self._show_seen
+                self._show_seen = shows
+            self.model = display_model(state, now=time.time())
             self._render()
             self.root.update_idletasks()
             if self._height is not None:
@@ -758,6 +1134,25 @@ class Overlay:
             log.warning("Overlay refresh failed: %s", error)
             if self.note is not None:
                 self.note.configure(text="Hub state unavailable")
+        finally:
+            # Publish this render before our own next state() can take hub.lock.
+            # Refresh failures must still let the background state fetch retry.
+            if (self._tasks is not None and not self._state_pending
+                    and not self.stopped.is_set() and not self._worker_stop.is_set()):
+                def received(value):
+                    self.state = value
+                    self._state_pending = False
+
+                def failed(error):
+                    self._state_pending = False
+                    self.message = "Hub state unavailable"
+
+                self._state_pending = True
+                try:
+                    self.defer(self.hub.state, received, failed)
+                except Exception as error:
+                    failed(error)
+                    log.warning("Overlay state request failed: %s", error)
         self.root.after(POLL_MS, self._poll)
 
     def run(self, *, on_ready=None):
@@ -774,6 +1169,9 @@ class Overlay:
             self.root = tk.Tk()
             self.root.report_callback_exception = self._callback_exception
             self.root.withdraw()
+            if os.name == "nt":
+                self._waker = TkWaker(int(self.root.winfo_id()))
+                self._waker.start()
             self._build()
             self._start_background()
             self._poll()
@@ -790,6 +1188,8 @@ class Overlay:
                 x, y = right - WIDTH - 24, bottom - height - 64
             self._place(x, y, height)
             self._apply_alpha()
+            if callable(getattr(type(self.window), "reapply", None)):
+                self.window.reapply()  # tool-window bits must be in place before first show
             self.root.deiconify()
             self._apply_alpha()
             if self.window is not None:
@@ -801,6 +1201,9 @@ class Overlay:
                 raise KeyboardInterrupt
         finally:
             self.stopped.set()
+            if self._waker is not None:
+                self._waker.stop()
+                self._waker = None
             self._stop_background()
             try:
                 if self.window is not None:

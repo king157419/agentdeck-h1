@@ -317,6 +317,12 @@ class MacDesktopEffects(DesktopEffects):
     def interrupt(self, session, sessions):
         return self._attempt("interrupt", super().interrupt, session, sessions)
 
+    def nav(self, session, sessions, key):
+        return False  # not implemented on macOS yet: the Hub reports "unavailable"
+
+    def scroll(self, session, sessions, notches):
+        return False
+
     def prompt(self, session, sessions, text):
         return self._attempt("prompt", self._prompt, session, sessions, text)
 

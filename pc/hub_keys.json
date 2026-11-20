@@ -1,15 +1,16 @@
 {
-  "version": 3,
+  "version": 5,
   "_instructions": [
     "Physical codes copied from measured pc/deck_map.json. USB interface 0 must already use WinUSB. This map does not reprogram the keyboard.",
     "E -> slot 1; B -> slot 2; Ctrl+Z -> slot 3; G -> approve; Ctrl+F -> deny; Space -> interrupt; hold H -> voice_down, release H -> voice_up; L (knob 1 press) -> screenshot.",
     "Knob 1 clockwise S -> cycle +1, counterclockwise F -> cycle -1, press L -> screenshot.",
-    "Knob 2 clockwise R -> cycle +1, counterclockwise P -> cycle -1, press Q -> prompt tests.",
-    "Knob 3 clockwise - -> cycle +1, counterclockwise = -> cycle -1, press V -> prompt summary.",
-    "Knob 4 clockwise ] -> cycle +1, counterclockwise [ -> cycle -1, press Ctrl+0 -> prompt continue.",
+    "Knob 2 clockwise R -> cycle +1, counterclockwise P -> cycle -1, press Q -> show (un-hide the overlay; no mouse needed).",
+    "Knob 3 clockwise - -> scroll 1 (wheel down over the selected agent window, toward newer text), counterclockwise = -> scroll -1 (up), press V -> scroll end (to the bottom).",
+    "Knob 4 clockwise ] -> nav down, counterclockwise [ -> nav up (arrow keys; only while the agent asks a question), press Ctrl+0 -> nav enter (Enter; sends dictated text). nav is refused while a permission request is open: use approve/deny.",
+    "Raw Input (interface 0 still on the system HID driver): every key also types into the focused window, so prompt, nav, voice and screenshot are refused until interface 0 uses WinUSB. Dangerous leaks: Ctrl+D (two presses exit Claude Code), Ctrl+C (interrupt / exit), Ctrl+V (paste).",
     "Slots 4..6 are available through HTTP or custom bindings. Only fresh single-key presses with exact device modifiers trigger actions. High-risk approvals need two presses within 1.5 seconds.",
     "A string binding runs on key down. An object can bind down and up separately; up pairs with the accepted physical press even if modifiers change. Voice guards last at most 60 seconds; approvals and other window/input actions require releasing voice first.",
-    "4x5 measured keypad layout: Row 1: E (slot 1), B (slot 2), Ctrl+Z (slot 3), Space (interrupt); Row 2: G (approve), Ctrl+F (deny), hold H (voice_down/up); Row 3: L (screenshot), M (prompt continue), Ctrl+T (prompt tests), Ctrl+D (prompt summary); Row 4: U (prompt commit), X (cycle +1); Row 5: Tab (next_wait), P (cycle -1)."
+    "4x5 measured keypad layout: Row 1: E (slot 1), B (slot 2), Ctrl+Z (slot 3), Space (interrupt); Row 2: G (approve), Ctrl+F (deny), hold H (voice_down/up); Row 3: L (screenshot), M (prompt continue), Ctrl+T (prompt tests), Ctrl+D (prompt summary, dangerous under Raw Input); Row 4: U (prompt commit), X (cycle +1); Row 5: Tab (next_wait), Ctrl+C (unbound, dangerous), Ctrl+V (unbound, dangerous), P (cycle -1)."
   ],
   "bindings": {
     "hid:0x08": "slot 1",
@@ -33,13 +34,13 @@
     "hid:0x09": "cycle -1",
     "hid:0x15": "cycle +1",
     "hid:0x13": "cycle -1",
-    "hid:0x2D": "cycle +1",
-    "hid:0x2E": "cycle -1",
-    "hid:0x30": "cycle +1",
-    "hid:0x2F": "cycle -1",
-    "hid:0x14": "prompt tests",
-    "hid:0x19": "prompt summary",
-    "ctrl+hid:0x27": "prompt continue"
+    "hid:0x2D": "scroll 1",
+    "hid:0x2E": "scroll -1",
+    "hid:0x30": "nav down",
+    "hid:0x2F": "nav up",
+    "hid:0x14": "show",
+    "hid:0x19": "scroll end",
+    "ctrl+hid:0x27": "nav enter"
   },
   "hotkey": {
     "F13": "slot 1",

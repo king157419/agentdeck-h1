@@ -4,8 +4,9 @@
 
 1. 打开 `dist/AgentDeck/`，双击 `AgentDeck.exe`。Hub、USB 键盘后端、热键和浮窗在同一个进程中启动，托盘图标显示总状态；无需安装 Python 或打开终端。保留整个文件夹，包括 `AgentDeck-relay.exe` 和 `_internal/`，不要只复制主程序。
 2. 在托盘菜单点“安装到项目…”，选择工作项目的根目录。安装后，在该项目的 Codex 会话里输入 `/hooks` 并信任 AgentDeck 钩子，再开始任务。Claude Code 也使用同一项目安装；程序不会自动改全局 hooks。
-3. 托盘菜单可显示或隐藏浮窗、切换会话、跳到等待你的会话、查看当前键位和诊断，也可从项目卸载。首次运行的三步引导可勾选“不再提示”。再次双击程序会显示现有浮窗。
-4. 需要登录 Windows 后启动时，勾选“开机自启”；取消勾选会移除当前用户的 AgentDeck 启动项。退出请使用托盘的“退出”。
+3. 每次手动打开（含再次双击）都会弹出“AgentDeck 状态”窗口：钩子、开机自启、读键方式、托盘位置，缺什么点对应按钮；第一次点“开始使用”。窗口开着时每秒刷新（会话数、读键方式在启动后才知道）。托盘图标默认在右下角 ^ 里。托盘菜单和浮窗右键菜单（或浮窗上的 ≡）功能相同：状态、会话、下一个待批、键位、诊断、装驱动说明。
+4. 需要登录 Windows 后启动时，勾选“开机自启”（登录启动带 `--background`，不弹状态窗口）；取消勾选会移除当前用户的 AgentDeck 启动项。退出请使用托盘的“退出”。
+5. exe 写入 Claude 全局钩子时用 exec 形式（`command` + `args`，不经过 shell），Git Bash 不会再吃掉路径里的反斜杠；Codex 钩子命令保持原样，不需要重新信任。旧版写入的 Claude 钩子会在启动时自动改写（先备份）。
 
 首次运行会把默认 `hub_keys.json` 和 `hub_prompts.json` 复制到 `~/.agentdeck/`（Windows 通常是 `%USERPROFILE%\.agentdeck\`）。以后编辑这里的文件，重启程序后生效，升级不会覆盖你的修改。默认使用 `default` 键位；可在同目录 `app.json` 中设置 `"profile": "v2_emulation"` 后重启，键位窗口按当前 profile 显示。日志保存在 `~/.agentdeck/logs/app.log`，可从“打开日志文件夹”进入。键盘先尝试 USB 直读，失败后自动使用 Windows Raw Input，无需更换系统 HID 驱动；程序不会修改驱动。诊断显示当前可用的读键方式。1602 串口被占用时只记日志，Hub 继续工作。
 
@@ -239,11 +240,17 @@ Run one AgentDeck keyboard reader at a time: use Hub's USB mode in place of
 | --- | --- | --- | --- | --- |
 | **第 1 排** | E (`hid:0x08`)<br>`slot 1`（会话 1） | B (`hid:0x05`)<br>`slot 2`（会话 2） | Ctrl+Z (`ctrl+hid:0x1D`)<br>`slot 3`（会话 3） | Space (`hid:0x2C`)<br>`interrupt`（打断） |
 | **第 2 排** | G (`hid:0x0A`)<br>`approve`（✓ 批准） | Ctrl+F (`ctrl+hid:0x09`)<br>`deny`（✗ 拒绝） | H (`hid:0x0B`)<br>`voice_down`/`up`（按住说话） | （第 4 颗无信号） |
-| **第 3 排** | L (`hid:0x0F`)<br>`screenshot`（截图） | M (`hid:0x10`)<br>`prompt continue`（继续） | Ctrl+T (`ctrl+hid:0x17`)<br>`prompt tests`（跑测试） | Ctrl+D (`ctrl+hid:0x07`)<br>`prompt summary`（总结进度） |
+| **第 3 排** | L (`hid:0x0F`)<br>`screenshot`（截图） | M (`hid:0x10`)<br>`prompt continue`（继续） | Ctrl+T (`ctrl+hid:0x17`)<br>`prompt tests`（跑测试） | Ctrl+D (`ctrl+hid:0x07`)<br>`prompt summary`（总结进度）<br>⚠ 危险键（Raw Input 下连按两次退出 Claude Code） |
 | **第 4 排** | U (`hid:0x18`)<br>`prompt commit`（提交） | X (`hid:0x1B`)<br>`cycle +1`（下个会话） | （第 3 颗无信号） | （第 4 颗无信号） |
-| **第 5 排** | Tab (`hid:0x2B`)<br>`next_wait`（跳到等我的会话） | Ctrl+C (`ctrl+hid:0x06`)<br>（留空） | Ctrl+V (`ctrl+hid:0x19`)<br>（留空） | P (`hid:0x13`)<br>`cycle -1`（上个会话） |
+| **第 5 排** | Tab (`hid:0x2B`)<br>`next_wait`（跳到等我的会话） | Ctrl+C (`ctrl+hid:0x06`)<br>（留空）⚠ 危险键 | Ctrl+V (`ctrl+hid:0x19`)<br>（留空）⚠ 危险键 | P (`hid:0x13`)<br>`cycle -1`（上个会话） |
 
-旋钮 1–4：顺时针/逆时针均为切换会话（`cycle +1` / `cycle -1`），按下旋钮 1 为截图（L 键），其余旋钮按下保留兼容映射。详情见 `pc/hub_keys.md`。
+旋钮 1、2：顺时针/逆时针切换会话（`cycle +1` / `cycle -1`），按下旋钮 1 为截图（L 键），按下旋钮 2 为显示浮窗（`show`）。
+旋钮 3：`scroll 1` / `scroll -1`（在所选会话窗口上发鼠标滚轮，往下 / 往上），按下 `scroll end`（滚到底）。
+旋钮 4：`nav down` / `nav up`（方向键，只在会话等你时），按下 `nav enter`（回车）。
+未改动过的 v3 或 v4 键位文件启动时自动升级到 v5（旧文件存为 `hub_keys.json.bak-v3` / `.bak-v4`）。详情见 `pc/hub_keys.md`。
+
+读键方式不是 USB 直读时（Raw Input），每颗键也会打进前台窗口：Hub 拒绝 `prompt`、`nav`、`voice_down`、`voice`、`screenshot`，
+提示“按键会漏进窗口：先用 Zadig 把接口 0 换成 WinUSB”；切会话、批准/拒绝、打断、滚动、显示浮窗照常。
 
 ## 没有 AgentDeck 硬件怎么用
 
@@ -284,9 +291,15 @@ VIA/QMK 键盘或普通宏键盘：在键盘配置工具中把按键改成 F13�
 因此 60 秒超时结束后，下次按键会重新开始。热键按下触发，持续按住不重复。
 若某个组合已被占用，只记录该键的一条警告，其余组合继续工作。
 
-浮窗宽约 360 px，始终置顶。默认缩成一条细条（只显示“N 个会话 / M 个待批”），不遮挡屏幕视野；
-有待批请求时才自动展开显示会话槽位、命令详情与审批按钮，审批完成自动收回细条。
-点关闭（×）只隐藏浮窗，Hub 进程继续在后台运行；有新的待批请求时浮窗会自动重新展开出现。
+浮窗宽约 360 px，始终置顶，不占任务栏按钮（工具窗口样式）。始终列出已有会话（最多 6 行），没有会话时显示“还没有会话”提示；
+等你的会话名字为琥珀色并带“· 等你”；运行中的会话名字后用灰字显示当前工具（取自 PreToolUse，最多 20 字）；多个会话在同一窗口时标“同窗”。
+会话列表下方显示所选会话（未选时为第一个等你的会话）的最新一句话：Stop 的 `last_assistant_message`（回复）、Notification 的 `message`（提醒）、
+AskUserQuestion 的问题和选项（提问）、UserPromptSubmit 的 `prompt`（你）；按显示宽度折行，最多 8 行 × 46 列，只在文字变化时刷新控件。
+Hub 每个会话只保留最后 4000 字（`/state` 里的 `last_text`、`last_kind`、`last_text_at`），relay 也只转发末尾 4000 字。
+有待批请求时在列表下方多出命令详情与审批按钮；显示同一会话的请求时隐藏最新一句话。每次按宏键盘，结果（如“槽位 1 没有会话”）在标题处显示约 2 秒，失败时 LCD 也显示 `KEY: ...`。
+用 Raw Input 读键时浮窗顶部常驻红字“按键会漏进窗口：先用 Zadig 把接口 0 换成 WinUSB”，点它看 `agentdeck/装驱动.md` 的步骤；USB 直读时不显示。点标题处的彩色圆点可选会话。
+点关闭（×）只隐藏浮窗，Hub 进程继续在后台运行；有新的待批请求或按旋钮 2 时浮窗会重新出现。
+Windows 上每 250 ms 唤醒一次界面线程，防止 Tcl 阻塞在 GetMessage 导致浮窗冻结；看门狗发现卡顿时也会发送唤醒。
 Hub 真正退出只通过 `stop_agentdeck.bat` 或终端 Ctrl+C。
 浮窗可用鼠标左键拖动到屏幕任意位置，坐标自动持久化到 `~/.agentdeck/overlay.json`，下次启动沿用。
 标题栏右侧提供“半透明”开关（窗口透明度 0.85，默认开启），点击可在半透明和完全不透明间切换，状态同步保存。
@@ -317,8 +330,20 @@ On first startup Hub creates `%USERPROFILE%/.agentdeck/token`; relay reads this
 file without creating it. Requests other than `GET /health` require the exact
 `X-AgentDeck-Token` header. A missing hub/token, transport error, or timeout
 causes relay to print nothing and exit 0, preserving the native approval flow.
-Relay uses a 0.5-second connect timeout and permission read timeout of
-`approve-timeout + 5` seconds (ordinary events: five seconds).
+The running Hub writes `~/.agentdeck/hub.json` (pid, port); when that process is
+gone the relay returns at once instead of waiting about 2 s for Windows to refuse
+the port. Otherwise it connects with a 0.1-second timeout (0.5 s when the Hub is
+known to run). The permission read timeout is `approve-timeout + 5` seconds counted
+from hook start (ordinary events: five seconds). Permission and gate events are
+forwarded byte-for-byte; ordinary events are reduced to the fields the Hub uses.
+Lone UTF-16 surrogates are replaced with U+FFFD. Empty stdin is a launch probe and
+invalid arguments also exit 0 (never 2, which Claude Code treats as blocking).
+A request whose hook client disconnects (killed relay, native answer, Esc) is
+dropped and audited as `abandoned`; so is one whose session sends a new prompt or
+finishes the identical tool call. `AskUserQuestion` / `ExitPlanMode` permission
+requests go straight to the native UI (the session shows “需回答”); approve then
+focuses that session's window. Window focus, paste, screenshot and dictation run
+outside the Hub lock, so hook events never wait for them.
 
 ## HTTP
 
@@ -397,7 +422,19 @@ Action examples:
 {"action": "screenshot"}
 {"action": "prompt tests"}
 {"action": "prompt 跑测试"}
+{"action": "scroll 3"}
+{"action": "scroll end"}
+{"action": "nav down"}
+{"action": "nav enter"}
 ```
+
+`scroll N` (nonzero, |N| <= 20; `end` = 100) focuses the selected session's window and
+sends one SendInput batch: move the cursor to an unobscured point of that window,
+wheel `-120*N`, move back. `nav up|down|enter` focuses it and sends the arrow key
+or Enter. `nav` returns HTTP 409 while that session has a pending or locked request,
+while its own permission dialog is open (AgentDeck timed out, or a `permission_prompt`
+notification), and `nav up/down` only works while the session waits (questions,
+elicitation). Voice blocks both, like other window actions.
 
 `slot` also accepts `{"action":"slot","slot":2}`; `cycle` accepts a `delta`
 integer; `prompt` accepts a template `name`. Unknown templates or actions are
@@ -453,12 +490,22 @@ press shows `HOLD! press again` using the existing scrolling name field.
 Critical requests show `LOCKED: use terminal` in that same scrolling field,
 using the firmware's existing `wait` state. Firmware changes are unnecessary.
 
-Window actions reuse the deck's project/title matching and reject ambiguous
-matches. Screenshot captures all
+Window actions first use the window the relay recorded for the session: on every
+ordinary hook the relay takes its console window's root owner (Windows Terminal owns
+its hidden ConPTY window), else walks its parent processes (max 12, each parent must
+be older than its child; never past explorer.exe) to the first one owning a visible,
+unowned, titled top-level window, and sends it as `agentdeck_window`. The Hub stores
+`hwnd` and `window_exe`; focus compares window handles only, because Claude Code keeps
+rewriting its terminal title. A closed window (or a reused handle of another program)
+falls back to the deck's project/title matching, which rejects ambiguous matches;
+both failing reports `窗口已关闭或找不到`. Several sessions in one window (terminal
+tabs, or every Claude Code session hosted in the Claude desktop app) can only bring the
+window forward; the slot result then carries `shared_window: true` and the key feedback reads
+“已选槽位 N（同窗：只能调到前台）”. When the recorded window is shared, a different terminal
+window uniquely matching the project name and tool word takes priority. Screenshot captures all
 screens to `%USERPROFILE%/.agentdeck/shots/<timestamp>.png` and pastes its path
 without Enter. Prompt pastes a named template then sends Enter. Clipboard and
-key effects verify the selected foreground window. These actions require a
-session window with a title that can be uniquely matched.
+key effects verify the selected foreground window handle.
 
 Hold H to speak: `voice_down` snapshots the selected session and window handle,
 focuses that window, then sends Win+H. A daemon checks the foreground handle
@@ -481,8 +528,8 @@ the thread stops but Hub keeps dictation ownership and blocks other window/input
 actions and approval. Release the modifier and send `voice_up` again to retry;
 another `voice_down` cannot start or toggle a second interval in this state.
 
-While voice is active, approve, slot/cycle, prompt, screenshot, legacy voice and
-keyboard interrupt return HTTP 409. Explicit denial of a pending request remains
+While voice is active, approve, slot/cycle, prompt, screenshot, scroll, nav, legacy
+voice and keyboard interrupt return HTTP 409. Explicit denial of a pending request remains
 available. The guard never resolves approvals, pastes text, or sends Enter/Esc.
 Its only input is Win+H; when a target disappears, it attempts that global
 shortcut against the current foreground solely to stop dictation. The 100 ms
@@ -494,7 +541,8 @@ and the next check; actual Windows speech-input behavior needs live validation.
 for another flat JSON mapping. `--keys FILE` selects another USB binding map.
 `hub_keys.json` documents every physical key and knob; E/B/Ctrl+Z select slots
 1/2/3, G approves, Ctrl+F denies, Space interrupts, H holds voice, L captures
-a screenshot, and knob rotations cycle sessions.
+a screenshot, knobs 1 and 2 cycle sessions, knob 3 scrolls and knob 4 sends
+arrow keys and Enter.
 
 Use `--profile v2_emulation` with `--backend usb` to select the six-slot emulation
 map in `hub_keys.json`. The default bindings above remain the default profile.
@@ -603,7 +651,7 @@ each audit path. Existing history is scanned when reading/appending.
 
 `python pc/hub.py doctor` performs seven read-only checks: `/health`, nonempty
 token, relay entries for both agents, cc/cx events in the last ten minutes, and
-`claude auth status` (five-second timeout). `/state` supplies `agents_seen`
+`claude auth status` (five-second timeout), plus `cc hook launch` when a Claude relay hook is installed: it starts that hook the way Claude Code does (exec form directly, shell form through Git Bash or PowerShell) with empty stdin; exit 127 means the shell broke the path. `/state` supplies `agents_seen`
 with each agent's last event time in Unix seconds, or null before any event.
 Doctor prints ✓/✗ and repair advice, including Codex `/hooks` trust and Claude
 login guidance, and exits 0 only when all checks pass. It never installs hooks,

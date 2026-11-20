@@ -167,8 +167,10 @@ class FakeClaudeEnvironment:
         )
 
     def _relay(self, event, *, gate=False):
+        # The fake agent has no window of its own; skipping the desktop lookup keeps
+        # the hook timing (e.g. the immediate-Stop race below) independent of this PC.
         return hub_relay.relay(event, "cc", port=self.hub_port, home=self.home,
-                               approve_timeout=3.0, gate=gate)
+                               approve_timeout=3.0, gate=gate, window_finder=lambda: None)
 
     def _simulate_claude(self, prompt, work_dir, session_id, killed):
         sid = session_id or ("verify-" + uuid.uuid4().hex[:10])

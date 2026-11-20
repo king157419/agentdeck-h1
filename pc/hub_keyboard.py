@@ -175,6 +175,16 @@ class KeyboardInput:
         self._next_probe = 0
         self._probe_thread = None
         self._probe_state = None
+        self.mode = None  # "usb" while reading WinUSB directly, "raw" for Raw Input
+        self.driver = None  # last interface-0 driver seen by the read-only probe
+
+    def reader_mode(self):
+        """'usb', 'raw' (keys also type letters), 'absent' (no keyboard) or None."""
+        if self.mode == "usb":
+            return "usb"
+        if self.mode == "raw":
+            return "raw" if self.driver == "hidusb" else "absent" if self.driver is None else None
+        return None
 
     def _beat(self):
         if self.heartbeat is not None:
@@ -210,6 +220,7 @@ class KeyboardInput:
         from deck_usb import interface0_driver
         try:
             driver = interface0_driver()
+            self.driver = driver
             if driver != "winusb":
                 state = ("driver", driver)
                 if state != self._probe_state:
@@ -262,12 +273,14 @@ class KeyboardInput:
                     if self._stop.is_set():
                         break
                     log.info("读键方式：USB 直读 (4132:2107 interface 0)")
+                    self.mode = "usb"
                     self.usb.run(reconnect=False)
                     if self._stop.is_set():
                         break
                 except Exception as error:
                     log.debug("USB input ended (%s); trying Raw Input", error)
                 finally:
+                    self.mode = None
                     self._release_usb()
                 if self._stop.is_set():
                     break
@@ -281,10 +294,12 @@ class KeyboardInput:
                             raw.stop()
                     if not self._stop.is_set():
                         log.info("读键方式：Raw Input (VID_4132 / PID_2107)")
+                        self.mode = "raw"
                         raw.run()
                 except Exception as error:
                     log.warning("Raw Input unavailable (%s); retrying keyboard input", error)
                 finally:
+                    self.mode = None
                     with self._lock:
                         self.raw = None
                     self.raw_keys.release()

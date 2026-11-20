@@ -499,45 +499,54 @@ class VirtualDevice:
 
     def run(self):
         import tkinter as tk
+        from hub_overlay import NoActivateWindow, TkWaker
         if self.window is None and os.name == "nt":
-            from hub_overlay import NoActivateWindow
             self.window = NoActivateWindow()
         self.root = tk.Tk()
-        self.root.withdraw()
-        self.root.title("AgentDeck Virtual Device")
-        self.root.overrideredirect(True)
-        if self.topmost:
-            self.root.attributes("-topmost", True)
-        width, height = int(BODY_W * self.scale), int(BODY_H * self.scale)
-        self.canvas = tk.Canvas(self.root, width=width, height=height, highlightthickness=0,
-                                bg="#010101", takefocus=0)
-        self.canvas.pack()
+        waker = worker = None
         try:
-            self.root.attributes("-transparentcolor", "#010101")
-        except tk.TclError:
-            pass
-        self.canvas.bind("<ButtonPress-1>", self._press)
-        self.canvas.bind("<ButtonRelease-1>", self._release)
-        self.canvas.bind("<B1-Motion>", self._move)
-        self.canvas.bind("<MouseWheel>", self._wheel)
-        self.root.geometry("%dx%d+%d+%d" % (width, height, 80, 80))
-        worker = threading.Thread(target=self._worker, daemon=True)
-        worker.start()
-        self._tick()
-        self.root.update_idletasks()
-        if self.window is not None:
-            self.window.apply(self.root.winfo_id())
-        self.root.deiconify()
-        if self.window is not None:
-            self.window.show()
-        try:
+            self.root.withdraw()
+            if os.name == "nt":
+                waker = TkWaker(int(self.root.winfo_id()))
+                waker.start()
+            self.root.title("AgentDeck Virtual Device")
+            self.root.overrideredirect(True)
+            if self.topmost:
+                self.root.attributes("-topmost", True)
+            width, height = int(BODY_W * self.scale), int(BODY_H * self.scale)
+            self.canvas = tk.Canvas(self.root, width=width, height=height, highlightthickness=0,
+                                    bg="#010101", takefocus=0)
+            self.canvas.pack()
+            try:
+                self.root.attributes("-transparentcolor", "#010101")
+            except tk.TclError:
+                pass
+            self.canvas.bind("<ButtonPress-1>", self._press)
+            self.canvas.bind("<ButtonRelease-1>", self._release)
+            self.canvas.bind("<B1-Motion>", self._move)
+            self.canvas.bind("<MouseWheel>", self._wheel)
+            self.root.geometry("%dx%d+%d+%d" % (width, height, 80, 80))
+            worker = threading.Thread(target=self._worker, daemon=True)
+            worker.start()
+            self._tick()
+            self.root.update_idletasks()
+            if self.window is not None:
+                self.window.apply(self.root.winfo_id())
+            self.root.deiconify()
+            if self.window is not None:
+                self.window.show()
             self.root.mainloop()
         finally:
             self._stop.set()
-            worker.join(timeout=self.client.timeout + .1)
-            if self.window is not None:
-                self.window.close()
-            self.root.destroy()
+            if waker is not None:
+                waker.stop()
+            if worker is not None:
+                worker.join(timeout=self.client.timeout + .1)
+            try:
+                if self.window is not None:
+                    self.window.close()
+            finally:
+                self.root.destroy()
 
 
 def main(argv=None):

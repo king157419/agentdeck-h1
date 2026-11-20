@@ -90,12 +90,14 @@ class WindowControl(ForegroundWindow):
         if any(self.user.GetAsyncKeyState(key) & 0x8000
                for key in (0x10, 0x11, 0x12, 0x5B, 0x5C)):
             return False
-        if self() != expected:
+        # 只比窗口句柄：Claude Code 会不停改终端标题，标题变了仍是同一个窗口。
+        if self()[0] != expected[0]:
             return False
         events = (INPUT * 2)()
+        extended = 1 if vkey in (0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x2D, 0x2E) else 0
         for index, flags in enumerate((0, 2)):
             events[index].type = 1  # INPUT_KEYBOARD
-            events[index].ki = KEYBDINPUT(vkey, 0, flags, 0, 0)
+            events[index].ki = KEYBDINPUT(vkey, 0, flags | extended, 0, 0)
         sent = self.user.SendInput(2, events, ctypes.sizeof(INPUT))
         if sent == 1:
             # 极少数只插入 key-down 的失败，尽力补 key-up，避免卡键。

@@ -23,17 +23,22 @@ class GlobalStatusTests(unittest.TestCase):
         self.addCleanup(real_home.stop)
         self.relay = self.home / "中文 软件" / "AgentDeck-relay.exe"
 
-    def write_hook(self, agent, *, relay=None, command_agent=None):
+    def write_hook(self, agent, *, relay=None, command_agent=None, exec_form=False):
         path = self.home.joinpath(*hub_install.TARGETS[agent])
         path.parent.mkdir(parents=True, exist_ok=True)
-        entry = {"type": "command", "command": subprocess.list2cmdline(
-            [str(self.relay if relay is None else relay), "--agent", command_agent or agent])}
+        target = str(self.relay if relay is None else relay)
+        if exec_form:  # what the current installer writes for the bundled Claude relay
+            entry = {"type": "command", "command": target, "args": ["--agent", command_agent or agent]}
+        else:
+            entry = {"type": "command", "command": subprocess.list2cmdline(
+                [target, "--agent", command_agent or agent])}
         path.write_text(json.dumps({"theme": "keep", "hooks": {"Stop": [{"hooks": [entry]}]}}), encoding="utf-8")
         return path
 
     def test_empty_and_partial_global_install_are_disabled_without_writes(self):
         self.assertEqual(hub_install.global_status(home=self.home),
-                         {"enabled": False, "missing_paths": [], "needs_repair": False, "errors": []})
+                         {"enabled": False, "missing_paths": [], "needs_repair": False,
+                          "shell_form": False, "errors": []})
         self.assertEqual(list(self.home.iterdir()), [])
         self.write_hook("cc")
         with patch.object(hub_install.sys, "frozen", True, create=True), patch.object(
@@ -55,12 +60,18 @@ class GlobalStatusTests(unittest.TestCase):
         self.relay.parent.mkdir()
         self.relay.write_bytes(b"placeholder")
         for agent in hub_install.TARGETS:
-            self.write_hook(agent)
+            self.write_hook(agent, exec_form=agent == "cc")
         before = {path: path.read_bytes() for path in self.home.rglob("*") if path.is_file()}
         with patch.object(hub_install.sys, "frozen", True, create=True), patch.object(
                 hub_install.sys, "executable", str(self.relay.with_name("AgentDeck.exe"))):
             self.assertEqual(hub_install.global_status(home=self.home),
-                             {"enabled": True, "missing_paths": [], "needs_repair": False, "errors": []})
+                             {"enabled": True, "missing_paths": [], "needs_repair": False,
+                              "shell_form": False, "errors": []})
+            # H1: the old shell-form Claude entry cannot start under Git Bash -> repair.
+            self.write_hook("cc")
+            status = hub_install.global_status(home=self.home)
+            self.assertEqual((status["needs_repair"], status["shell_form"]), (True, True))
+            self.write_hook("cc", exec_form=True)
         self.assertEqual(before, {path: path.read_bytes() for path in self.home.rglob("*") if path.is_file()})
 
     def test_missing_relay_keeps_enabled_and_reports_each_path_once(self):
@@ -103,7 +114,7 @@ class GlobalStatusTests(unittest.TestCase):
     @unittest.skipUnless(os.name == "nt", "Windows paths ignore case and slash direction")
     def test_frozen_windows_path_comparison_ignores_case_and_slash_direction(self):
         for agent in hub_install.TARGETS:
-            self.write_hook(agent, relay=str(self.relay).upper().replace("\\", "/"))
+            self.write_hook(agent, relay=str(self.relay).upper().replace("\\", "/"), exec_form=agent == "cc")
         with patch.object(hub_install.sys, "frozen", True, create=True), patch.object(
                 hub_install.sys, "executable", str(self.relay.with_name("AgentDeck.exe"))):
             self.assertFalse(hub_install.global_status(home=self.home)["needs_repair"])

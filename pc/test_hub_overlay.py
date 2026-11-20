@@ -455,7 +455,9 @@ class OverlayViewAndPrefsTests(unittest.TestCase):
         self.assertEqual(idle_model["session_count"], 1)
         self.assertEqual(idle_model["pending_count"], 0)
         self.assertEqual(idle_model["summary_text"], "1 个会话")
-        self.assertFalse(idle_model["expanded"])
+        # F1: the session list is visible even with nothing pending.
+        self.assertTrue(idle_model["expanded"])
+        self.assertTrue(idle_model["slots"][0]["occupied"])
 
         pending_model = display_model({
             "sessions": [{"slot": 1, "name": "app", "state": "wait"},
@@ -468,14 +470,15 @@ class OverlayViewAndPrefsTests(unittest.TestCase):
         self.assertEqual(pending_model["summary_text"], "1 待批")
         self.assertTrue(pending_model["expanded"])
 
-    def test_render_collapses_body_when_not_expanded(self):
+    def test_render_keeps_body_visible_without_pending(self):
         self.overlay.body = Mock()
         self.overlay.status_label = Mock()
         self.overlay.alpha_button = Mock()
         self.overlay.rows = []
         self.overlay.model = display_model({"sessions": [{"slot": 1, "name": "app"}]})
         self.overlay._render()
-        self.overlay.body.grid_remove.assert_called_once_with()
+        self.overlay.body.grid.assert_called_once_with()
+        self.overlay.body.grid_remove.assert_not_called()
         self.overlay.status_label.configure.assert_called_with(text="1 个会话", fg=FOREGROUND)
 
         self.overlay.body.reset_mock()
@@ -558,10 +561,10 @@ class KeyBindingsAndNextWaitTests(unittest.TestCase):
         self.assertNotIn("ctrl+hid:0x06", bindings)
         self.assertNotIn("ctrl+hid:0x19", bindings)
 
-        # Old bindings preserved
-        self.assertEqual(bindings.get("hid:0x14"), "prompt tests")
-        self.assertEqual(bindings.get("hid:0x19"), "prompt summary")
-        self.assertEqual(bindings.get("ctrl+hid:0x27"), "prompt continue")
+        # Knob 2 press shows the overlay (F5); knob 3 scrolls, knob 4 navigates (v5)
+        self.assertEqual(bindings.get("hid:0x14"), "show")
+        self.assertEqual(bindings.get("hid:0x19"), "scroll end")
+        self.assertEqual(bindings.get("ctrl+hid:0x27"), "nav enter")
 
     def test_next_wait_action_cycles_waiting_sessions_and_reports_no_wait(self):
         import hub
