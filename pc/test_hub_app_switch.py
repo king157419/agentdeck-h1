@@ -61,10 +61,7 @@ class AppSwitchTests(unittest.TestCase):
             clock[0] += .5  # Rest: v9 clears the accumulator, so each direction is a fresh first step.
             event = next(iter(ReportState().feed(bytes([0, 0, usage, 0, 0, 0, 0, 0]))))
             calls = len(self.desktop.window.call_args_list)
-            keys(dict(event, t=self.engine.monotonic()))
-            # v9: the first step after rest needs two pulses (threshold 2), so one pulse does nothing.
-            self.assertEqual(len(self.desktop.window.call_args_list), calls)
-            clock[0] += .05
+            # One pulse is one step: the CXT encoder emits one pulse per notch.
             with self.assertLogs("agentdeck.hub", "INFO") as logs:
                 keys(dict(event, t=self.engine.monotonic()))
             # v9: a successful window switch shows no toast; only failures are reported.
@@ -76,9 +73,7 @@ class AppSwitchTests(unittest.TestCase):
         self.desktop.window.return_value = False
         clock[0] += .5
         event = next(iter(ReportState().feed(bytes([0, 0, 0x09, 0, 0, 0, 0, 0]))))
-        for _ in range(2):
-            clock[0] += .05
-            keys(dict(event, t=self.engine.monotonic()))
+        keys(dict(event, t=self.engine.monotonic()))
         last = self.engine.state()["last_input"]
         self.assertEqual(last["text"], "旋钮 1 顺时针 → 此操作不可用")
         self.assertEqual((last["action"], last["kind"]), ("window next", "noop"), last)

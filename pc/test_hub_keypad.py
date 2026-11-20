@@ -598,7 +598,7 @@ class NavScrollActionTests(HubCase):
             press(0x2E, .3)
             press(0x19)
             press(0x30)
-            self.assertEqual(action.call_count, 3, "first list pulse is below the detent threshold")
+            self.assertEqual(action.call_count, 4, "one pulse is one step; the next pulse 20 ms later is rate-limited")
             press(0x30)
             press(0x2F, .3)
             press(0x2F)

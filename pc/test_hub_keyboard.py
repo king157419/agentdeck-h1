@@ -25,71 +25,52 @@ def ordinary(events):
 
 
 class KnobDetentTests(unittest.TestCase):
-    def test_first_step_needs_two_pulses_then_configured_divider(self):
-        for binding, divider in (("hid:0x09", 4), ("hid:0x15", 3), ("hid:0x30", 3)):
+    """CXT encoders: one pulse per notch, slow turns ~0.5 s apart, occasional bounce."""
+
+    def test_every_pulse_is_a_step_even_when_turned_slowly(self):
+        for binding in ("hid:0x09", "hid:0x16", "hid:0x15", "hid:0x13", "hid:0x30", "hid:0x2F"):
             with self.subTest(binding=binding):
                 detents = KnobDetents()
-                self.assertFalse(detents.accept(binding, 0.0))
-                self.assertTrue(detents.accept(binding, .02))
-                for pulse in range(divider - 1):
-                    self.assertFalse(detents.accept(binding, .12 + pulse * .02))
-                self.assertTrue(detents.accept(binding, .12 + (divider - 1) * .02))
+                self.assertTrue(detents.accept(binding, 0.0))
+                self.assertTrue(detents.accept(binding, .55))
+                self.assertTrue(detents.accept(binding, 1.6))
 
-    def test_reverse_requires_two_consecutive_pulses_within_100ms(self):
-        detents = KnobDetents({"2": 2})
-        self.assertFalse(detents.accept("hid:0x15", 0.0))
-        self.assertTrue(detents.accept("hid:0x15", .02))
-        self.assertFalse(detents.accept("hid:0x13", .12))
-        self.assertFalse(detents.accept("hid:0x13", .23))
-        self.assertFalse(detents.accept("hid:0x13", .24))
-        self.assertTrue(detents.accept("hid:0x13", .25))
-
-    def test_forward_pulse_cancels_pending_reverse(self):
-        detents = KnobDetents({"2": 2})
-        for direction, seconds in (("15", 0), ("15", .02), ("13", .12),
-                                   ("15", .13), ("13", .14), ("15", .15)):
-            accepted = detents.accept("hid:0x" + direction, seconds)
-        self.assertTrue(accepted)
-        self.assertEqual(detents._pulses[2]["direction"], 1)
-
-    def test_idle_leaks_partial_pulses_and_restores_first_threshold(self):
+    def test_opposite_pulse_right_after_is_bounce_but_later_is_a_real_reversal(self):
         detents = KnobDetents()
+        self.assertTrue(detents.accept("hid:0x15", 0.0))
+        self.assertFalse(detents.accept("hid:0x13", .05))   # bounce
+        self.assertTrue(detents.accept("hid:0x15", .15))    # still turning forward
+        self.assertTrue(detents.accept("hid:0x13", .40))    # deliberate reversal
+        self.assertTrue(detents.accept("hid:0x13", .70))
+
+    def test_divider_counts_pulses_within_a_run(self):
+        detents = KnobDetents({"2": 2})
         self.assertFalse(detents.accept("hid:0x15", 0))
-        self.assertFalse(detents.accept("hid:0x15", .250))
-        self.assertTrue(detents.accept("hid:0x15", .27))
-        self.assertFalse(detents.accept("hid:0x15", .52))
-        self.assertTrue(detents.accept("hid:0x15", .54))
+        self.assertTrue(detents.accept("hid:0x15", .3))
+        self.assertFalse(detents.accept("hid:0x15", 1.5))   # run expired: count restarts
+        self.assertTrue(detents.accept("hid:0x15", 1.8))
 
     def test_rate_limit_drops_steps_without_queuing(self):
-        detents = KnobDetents({"1": 1})
-        self.assertFalse(detents.accept("hid:0x09", 0))
-        self.assertTrue(detents.accept("hid:0x09", .01))
+        detents = KnobDetents()
+        self.assertTrue(detents.accept("hid:0x09", 0))
         self.assertFalse(detents.accept("hid:0x09", .02))
-        self.assertFalse(detents.accept("hid:0x09", .03))
-        self.assertTrue(detents.accept("hid:0x09", .11))
-        self.assertFalse(detents.accept("hid:0x09", .12))
+        self.assertTrue(detents.accept("hid:0x09", .07))
 
-    def test_scroll_only_direction_locks_and_never_divides(self):
+    def test_scroll_only_drops_bounce_and_never_divides(self):
         detents = KnobDetents({"3": 99})
         self.assertTrue(detents.accept("hid:0x2D", 0))
         self.assertTrue(detents.accept("hid:0x2D", .001))
         self.assertFalse(detents.accept("hid:0x2E", .002))
-        self.assertTrue(detents.accept("hid:0x2E", .003))
-        self.assertTrue(detents.accept("hid:0x2D", .300))
+        self.assertTrue(detents.accept("hid:0x2E", .300))
 
     def test_each_knob_has_independent_state_and_buttons_are_unfiltered(self):
         detents = KnobDetents()
         for binding in ("hid:0x09", "hid:0x15", "hid:0x30"):
-            self.assertFalse(detents.accept(binding, 0))
-        for binding in ("hid:0x09", "hid:0x15", "hid:0x30"):
-            self.assertTrue(detents.accept(binding, .01))
+            self.assertTrue(detents.accept(binding, 0))
+        for binding in ("hid:0x16", "hid:0x13", "hid:0x2F"):
+            self.assertFalse(detents.accept(binding, .01))  # bounce per knob
         for binding in [keys[2] for keys in hub.KNOBS] + ["ctrl+hid:0x09", "alt", "F13"]:
             self.assertTrue(detents.accept(binding, .02))
-
-    def test_one_shared_p_key_pulse_is_inert(self):
-        detents = KnobDetents()
-        self.assertFalse(detents.accept("hid:0x13", 0))
-        self.assertFalse(detents.accept("hid:0x13", 1))
 
     def test_invalid_dividers_fail_before_input_is_read(self):
         for config in ([], 1, {"0": 2}, {"5": 2}, {"1": 0}, {"2": -1},

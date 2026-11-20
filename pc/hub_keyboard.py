@@ -30,9 +30,16 @@ class KnobDetents:
                 or any(key not in ("1", "2", "3", "4") or type(value) is not int or value < 1
                        for key, value in dividers.items())):
             raise ValueError("knob_divider needs knob numbers 1..4 and positive integer values")
-        self.dividers = {1: 4, 2: 3, 4: 3}
+        # Measured on the CXT pad (2026-11-20): one pulse per notch, ~0.1-0.6 s apart,
+        # with an occasional single opposite pulse right after a real one. So one pulse
+        # is one step by default; knob_divider can ask for more pulses per step.
+        self.dividers = {1: 1, 2: 1, 3: 1, 4: 1}
         self.dividers.update({int(key): value for key, value in dividers.items()})
         self._pulses = {}
+
+    JITTER_SECONDS = .120   # opposite pulse this soon after the last one = encoder bounce
+    RUN_SECONDS = .600      # partial pulse counts (divider > 1) expire after this pause
+    STEP_SECONDS = .060     # faster steps are dropped, never queued
 
     def accept(self, binding, received_at):
         rotation = KNOB_ROTATIONS.get(binding)
@@ -40,28 +47,21 @@ class KnobDetents:
             return True
         knob, direction = rotation
         state = self._pulses.get(knob)
-        if state is None or received_at - state["last"] >= .250:
-            state = {"direction": direction, "count": 0, "first": True,
-                     "reverse_at": None, "step_at": float("-inf")}
-            self._pulses[knob] = state
-        state["last"] = received_at
-        if direction != state["direction"]:
-            reverse_at = state["reverse_at"]
-            if reverse_at is None or received_at - reverse_at > .100:
-                state["reverse_at"] = received_at
-                return False
-            state.update(direction=direction, count=0, reverse_at=None)
-        else:
-            state["reverse_at"] = None
+        if state is None:
+            state = self._pulses[knob] = {"direction": direction, "last": float("-inf"),
+                                          "count": 0, "step_at": float("-inf")}
+        if direction != state["direction"] and received_at - state["last"] < self.JITTER_SECONDS:
+            return False  # bounce: keep the previous direction and timestamp
+        if direction != state["direction"] or received_at - state["last"] >= self.RUN_SECONDS:
+            state["count"] = 0
+        state.update(direction=direction, last=received_at)
         if knob == 3:
-            return True
+            return True  # scroll smooths every pulse itself
         state["count"] += 1
-        threshold = 2 if state["first"] else self.dividers[knob]
-        if state["count"] < threshold:
+        if state["count"] < self.dividers[knob]:
             return False
-        state["count"] -= threshold
-        state["first"] = False
-        if received_at - state["step_at"] < .090:
+        state["count"] = 0
+        if received_at - state["step_at"] < self.STEP_SECONDS:
             return False
         state["step_at"] = received_at
         return True
