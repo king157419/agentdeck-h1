@@ -314,10 +314,13 @@ class DesktopEffects:
 
     def __init__(self, windows=None, *, clipboard=None, image_clipboard=None, capture=None,
                  shots_dir=None, now=None, sleeper=None, monotonic=None,
-                 voice_wait=None, dictation_shortcut=None, claude_uia=None, window_switcher=None):
+                 voice_wait=None, dictation_shortcut=None, claude_uia=None, window_switcher=None,
+                 window_switch_release_ms=1200):
         self._windows = windows
         self._claude_uia = claude_uia
         self._window_switcher = window_switcher
+        self._closed = False
+        self.window_switch_release_ms = window_switch_release_ms
         self.clipboard = set_clipboard if clipboard is None else clipboard
         self.image_clipboard = set_image_clipboard if image_clipboard is None else image_clipboard
         self.capture = capture_screen if capture is None else capture
@@ -377,10 +380,13 @@ class DesktopEffects:
 
     @property
     def claude_uia(self):
-        if self._claude_uia is None:
-            from claude_uia import ClaudeUIA
-            self._claude_uia = ClaudeUIA()
-        return self._claude_uia
+        with self._voice_commands:
+            if self._closed:
+                raise RuntimeError("desktop is closed")
+            if self._claude_uia is None:
+                from claude_uia import ClaudeUIA
+                self._claude_uia = ClaudeUIA()
+            return self._claude_uia
 
     def current_session_title(self, sessions):
         """Read only when the session knob starts moving, never on a timer."""
@@ -430,7 +436,8 @@ class DesktopEffects:
                 raise RuntimeError("release voice before switching windows")
             if self._window_switcher is None:
                 from hub_window_switch import WindowSwitcher
-                self._window_switcher = WindowSwitcher(self.windows, monotonic=self.monotonic)
+                self._window_switcher = WindowSwitcher(self.windows, monotonic=self.monotonic,
+                                                       release_ms=self.window_switch_release_ms)
             return self._window_switcher.step(direction)
 
     def release_window_switch(self):
@@ -737,6 +744,8 @@ class DesktopEffects:
         return True
 
     def close(self):
+        with self._voice_commands:
+            self._closed = True
         try:
             if self._window_switcher is not None and not self._window_switcher.close():
                 raise RuntimeError("could not release window-switch keys")

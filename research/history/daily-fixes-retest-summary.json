@@ -1,0 +1,27 @@
+[
+  {
+    "file": "test_agentdeck_app.py",
+    "exit": 0,
+    "seconds": 2.373
+  },
+  {
+    "file": "test_hub_app_switch.py",
+    "exit": 0,
+    "seconds": 2.13
+  },
+  {
+    "file": "test_hub_keypad.py",
+    "exit": 0,
+    "seconds": 2.591
+  },
+  {
+    "file": "test_hub_tk_wake.py",
+    "exit": 0,
+    "seconds": 19.745
+  },
+  {
+    "file": "test_hub_daily_fixes.py",
+    "exit": 0,
+    "seconds": 0.775
+  }
+]

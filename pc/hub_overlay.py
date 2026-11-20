@@ -5,6 +5,7 @@ import logging
 import os
 from pathlib import Path
 from queue import Empty, SimpleQueue
+import re
 import sys
 import threading
 import time
@@ -26,7 +27,9 @@ STATES = {"think": "RUN", "tool": "RUN", "wait": "ASK", "locked": "ASK",
           "done": "DONE", "error": "ERR", "idle": "IDLE"}
 BACKGROUND = theme.BG
 FOREGROUND = theme.TEXT
-INPUT_NOTICE_SECONDS = 2.0
+INPUT_NOTICE_SECONDS = 3.0
+CYCLE_NOTICE_SECONDS = 2.0
+MAX_VISIBLE_SESSIONS = 4
 DOT_STEP = 14
 EMPTY_TEXT = "还没有会话：新开 Claude/Codex 会话后出现"
 DRIVER_NOTICE = "按键会漏进窗口：先用 Zadig 把接口 0 换成 WinUSB"
@@ -95,6 +98,29 @@ def _text_width(text):
     return sum(_char_width(char) for char in text)
 
 
+def plain_text(text):
+    """Remove Markdown presentation while preserving fenced code verbatim."""
+    lines, fence = [], None
+    for line in str(text).replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        marker = re.match(r"^\s*(`{3,}|~{3,})", line)
+        if marker:
+            char = marker[1][0]
+            if fence is None:
+                fence = char
+                continue
+            if char == fence:
+                fence = None
+                continue
+        if fence is None:
+            line = re.sub(r"^\s*(?:>\s*)+", "", line)
+            line = re.sub(r"^\s*#{1,6}\s+", "", line)
+            line = re.sub(r"^\s*(?:[-+*]|\d+[.)])\s+", "", line)
+            line = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", line)
+            line = line.replace("**", "").replace("__", "").replace("`", "")
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def wrap_tail(text, cols=PREVIEW_COLS, rows=PREVIEW_ROWS):
     """The last ``rows`` display lines of ``text``, each at most ``cols`` columns.
 
@@ -161,7 +187,7 @@ def _preview(state, sessions, request, now):
     at = chosen.get("last_text_at")
     if now is not None and isinstance(at, (int, float)) and not isinstance(at, bool):
         parts.append(_ago(max(0, now - at)))
-    return {"title": " · ".join(parts), "lines": wrap_tail(chosen["last_text"])}
+    return {"title": " · ".join(parts), "lines": wrap_tail(plain_text(chosen["last_text"]))}
 
 
 def display_model(state, now=None):
@@ -202,6 +228,14 @@ def display_model(state, now=None):
     # Keep slots indexed by the hardware number; display rank is independent.
     display_order = [session["slot"] for session in sorted(sessions.values(),
                      key=lambda session: (-session.get("last_updated", 0), session["slot"]))]
+    frozen = state.get("display_order")
+    if isinstance(frozen, list):
+        display_order = list(dict.fromkeys(number for number in frozen if number in sessions)) + [
+            number for number in display_order if number not in frozen]
+    selected_index = (display_order.index(state["selected_slot"])
+                      if state.get("selected_slot") in display_order else 0)
+    start = max(0, selected_index - MAX_VISIBLE_SESSIONS + 1)
+    visible_order = display_order[start:start + MAX_VISIBLE_SESSIONS]
     pending_list = list(state.get("pending", ()))
     locked_list = list(state.get("locked", ()))
     displayed = state.get("displayed_request_id")
@@ -234,12 +268,14 @@ def display_model(state, now=None):
     last = state.get("last_input")
     feedback = None
     if (isinstance(last, dict) and isinstance(last.get("text"), str) and now is not None
-            and isinstance(last.get("at"), (int, float)) and 0 <= now - last["at"] <= INPUT_NOTICE_SECONDS):
-        feedback = {"text": last["text"], "ok": last.get("ok") is not False}
+            and isinstance(last.get("at"), (int, float)) and 0 <= now - last["at"] < INPUT_NOTICE_SECONDS):
+        feedback = {"text": last["text"], "ok": last.get("ok") is not False,
+                    "compact": last.get("compact") is True}
     reader = state.get("input_reader")
     return {
         "slots": slots,
         "display_order": display_order,
+        "visible_order": visible_order,
         "request": detail,
         "preview": _preview(state, sessions, request, now),
         "session_count": session_count,
@@ -448,7 +484,13 @@ class Overlay:
         else:
             self.state_path = None
         self.stopped = threading.Event()
-        self.hidden = False
+        self.hidden = True
+        self._starting = False
+        self.width = WIDTH
+        self.corner = 0  # bottom right, top right, top left, bottom left
+        self._corner_anchored = False
+        self._corner_seen = 0
+        self._visible_until = float("-inf")
         self._interrupted = False
         self._dismissed_requests = set()
         self._active_ids = set()
@@ -489,7 +531,7 @@ class Overlay:
         self.heartbeat = None      # set by hub.main: the UI watchdog's beat
         self.menu_items = None     # callable -> [(label, callback) | None]; tray app supplies it
         self.on_driver_help = None
-        self._show_seen = None
+        self._show_seen = 0
         self.state = {}
         self._tasks = self._completed = self._worker = None
         self._worker_stop = threading.Event()
@@ -583,6 +625,10 @@ class Overlay:
         request = self.model.get("request")
         if request and isinstance(request.get("id"), str):
             self._dismissed_requests.add(request["id"])
+        self._withdraw()
+
+    def _withdraw(self):
+        """Automatic hiding preserves request dismissals and saved geometry."""
         self.hidden = True
         self._pressed_decisions.clear()
         self._display_call(lambda: self.hub.hide_display('overlay'))
@@ -591,15 +637,62 @@ class Overlay:
         if self.window is not None:
             self.window.restore()
 
-    def show(self):
+    def show(self, *, transient=True):
         """Re-show a hidden overlay without stealing foreground focus."""
+        if transient:
+            self._visible_until = time.time() + INPUT_NOTICE_SECONDS
         self.hidden = False
         self._dismissed_requests.clear()
-        if self.root is not None:
+        if self.root is not None and not self._starting:
             self.root.deiconify()
             self._apply_alpha()
-        if self.window is not None:
+        if self.window is not None and not self._starting:
             self.window.show()
+
+    def _should_show(self, state, now):
+        shows = state.get("show_requests")
+        if type(shows) is int:
+            if shows != self._show_seen:
+                self._visible_until = now + INPUT_NOTICE_SECONDS
+            self._show_seen = shows
+        corners = state.get("overlay_corner_requests")
+        if type(corners) is int:
+            for _ in range((corners - self._corner_seen) % 4):
+                self.next_corner()
+            self._corner_seen = corners
+        if state.get("overlay_pinned") is True:
+            return True
+        if self._active_ids - self._dismissed_requests:
+            return True
+        cycle_age = state.get("last_cycle_age")
+        if isinstance(cycle_age, (int, float)) and 0 <= cycle_age < CYCLE_NOTICE_SECONDS:
+            return True
+        last = state.get("last_input")
+        if isinstance(last, dict) and not str(last.get("action", "")).startswith("cycle"):
+            at = last.get("at")
+            if isinstance(at, (int, float)) and 0 <= now - at < INPUT_NOTICE_SECONDS:
+                return True
+        for session in list(state.get("sessions", ())) + list(state.get("recent_ended", ())):
+            at = session.get("last_updated")
+            if (session.get("state") in ("error", "done") and isinstance(at, (int, float))
+                    and 0 <= now - at < INPUT_NOTICE_SECONDS):
+                return True
+        return now < self._visible_until
+
+    def next_corner(self):
+        self.corner = (self.corner + 1) % 4
+        self._corner_anchored = True
+        if self.root is not None:
+            areas = self._work_areas()
+            if areas:
+                left, top, right, bottom = next((area for area in areas
+                    if area[0] <= 0 < area[2] and area[1] <= 0 < area[3]), areas[0])
+                width = self._panel_width()
+                height = self._height or self.root.winfo_reqheight()
+                x = right - width - 24 if self.corner in (0, 1) else left + 24
+                y = bottom - height - 24 if self.corner in (0, 3) else top + 24
+                self._place(x, y, height)
+        self._save_prefs()
 
     def _apply_alpha(self):
         alpha = TRANSLUCENT_ALPHA if self.translucent else OPAQUE_ALPHA
@@ -648,11 +741,15 @@ class Overlay:
         translucent = data.get("translucent")
         if type(translucent) is bool:
             self.translucent = translucent
+        if type(data.get("corner")) is int and 0 <= data["corner"] < 4:
+            self.corner = data["corner"]
+        self._corner_anchored = data.get("corner_anchored") is True
 
     def _save_prefs(self):
         if self.state_path is None:
             return
-        data = {"translucent": self.translucent}
+        data = {"translucent": self.translucent, "corner": self.corner,
+                "corner_anchored": self._corner_anchored}
         if self._pos is not None:
             data["x"], data["y"] = int(self._pos[0]), int(self._pos[1])
         try:
@@ -762,7 +859,7 @@ class Overlay:
 
     def _dot_slot(self, x):
         """Header dot under x (canvas pixels) -> slot number, or None."""
-        occupied = [self.model["slots"][number - 1] for number in self.model["display_order"]]
+        occupied = [self.model["slots"][number - 1] for number in self.model["visible_order"]]
         if isinstance(x, bool) or not isinstance(x, (int, float)) or x < 0:
             return None
         index = int(x // DOT_STEP)
@@ -790,13 +887,19 @@ class Overlay:
             return ((0, 0, width, height),)
         return ()
 
+    def _panel_width(self):
+        width = self.root.winfo_screenwidth()
+        if type(width) is int and width > 0:
+            return min(WIDTH, max(1, int(width * .22)))
+        return WIDTH
+
     def _place(self, x, y, height, *, size=True):
         areas = self._work_areas()
-        width = WIDTH
+        self.width = width = self._panel_width()
         if areas:
             candidates = []
             for left, top, right, bottom in areas:
-                w, h = min(WIDTH, right - left), min(height, bottom - top)
+                w, h = min(self.width, right - left), min(height, bottom - top)
                 px = min(max(x, left), right - w)
                 py = min(max(y, top), bottom - h)
                 candidates.append(((px - x) ** 2 + (py - y) ** 2, px, py, w, h))
@@ -834,6 +937,7 @@ class Overlay:
             x = event.x_root - self._drag[0]
             y = event.y_root - self._drag[1]
             self._place(x, y, self._height or self.root.winfo_reqheight(), size=False)
+            self._corner_anchored = False
             self._dragged = True
 
     def _end_drag(self, event=None):
@@ -870,6 +974,7 @@ class Overlay:
     def _build(self):
         import tkinter as tk
         pad, gap = theme.S3, theme.S2
+        self.width = self._panel_width()
         self.root.title("AgentDeck")
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
@@ -880,7 +985,7 @@ class Overlay:
         # The 1px hairline border is the outer frame showing around the inner one.
         outer = tk.Frame(self.root, bg=theme.BORDER, padx=1, pady=1)
         outer.pack(fill="both", expand=True)
-        self.frame = tk.Frame(outer, bg=BACKGROUND, padx=pad, pady=gap, width=WIDTH)
+        self.frame = tk.Frame(outer, bg=BACKGROUND, padx=pad, pady=gap, width=self.width)
         self.frame.pack(fill="both", expand=True)
         self.frame.columnconfigure(0, weight=1)
         self._bind_drag(self.frame)
@@ -909,13 +1014,13 @@ class Overlay:
             padx=4, font=theme.font(11, latin=True))
         self.alpha_button.pack(side="right")
         self.feedback_label = tk.Label(self.frame, text="", bg=BACKGROUND, fg=FOREGROUND,
-                                       anchor="w", justify="left", wraplength=WIDTH - 2 * pad - 6,
+                                       anchor="w", justify="left", wraplength=self.width - 2 * pad - 6,
                                        takefocus=False, font=theme.font(9, True))
         self.feedback_label.grid(row=2, column=0, sticky="ew", pady=(gap, 0))
         self._bind_drag(self.feedback_label)
         # Always at the top: while keys also type into windows, nothing else matters more.
         self.notice_label = tk.Label(self.frame, text="", bg=BACKGROUND, fg=COLORS["ERR"], anchor="w",
-                                     justify="left", wraplength=WIDTH - 2 * pad - 2,
+                                     justify="left", wraplength=self.width - 2 * pad - 2,
                                      takefocus=False, font=theme.font(9, True), cursor="hand2")
         self.notice_label.grid(row=1, column=0, sticky="ew", pady=(gap, 0))
         self.notice_label.bind("<ButtonRelease-1>", self._driver_help)
@@ -925,7 +1030,7 @@ class Overlay:
         self._bind_drag(self.body)
         self.empty_label = tk.Label(self.body, text=EMPTY_TEXT, bg=BACKGROUND, fg=theme.MUTED,
                                     anchor="w", justify="left", takefocus=False, font=theme.font(9),
-                                    wraplength=WIDTH - 2 * pad - 2)
+                                    wraplength=self.width - 2 * pad - 2)
         self.empty_label.grid(row=9, column=0, sticky="ew")
         self._bind_drag(self.empty_label)
         self.rows = []
@@ -957,7 +1062,7 @@ class Overlay:
         self._bind_drag(self.preview_title)
         self.preview = tk.Label(self.preview_box, text="", bg=theme.SURFACE, fg=FOREGROUND,
                                 anchor="w", justify="left", takefocus=False, font=theme.font(9),
-                                wraplength=WIDTH - 2 * pad - 2 * gap - 2)
+                                wraplength=self.width - 2 * pad - 2 * gap - 2)
         self.preview.pack(fill="x")
         self._bind_drag(self.preview)
         self._preview_shown = ()  # not a valid value: the first render always applies
@@ -967,7 +1072,7 @@ class Overlay:
                              font=theme.font(9, True))
         self.risk.pack(fill="x")
         self.summary = tk.Label(self.detail, bg=theme.SURFACE, fg=FOREGROUND, anchor="w",
-                                justify="left", wraplength=WIDTH - 2 * pad - 2 * gap - 2,
+                                justify="left", wraplength=self.width - 2 * pad - 2 * gap - 2,
                                 padx=gap, pady=gap, takefocus=False,
                                 font=theme.font(9, mono=True))
         self.summary.pack(fill="x", pady=(gap - 2, pad))
@@ -985,18 +1090,19 @@ class Overlay:
             label.grid(row=0, column=column, sticky="ew", padx=(0, gap) if column == 0 else 0)
             self.decision_buttons[action] = label
         self.note = tk.Label(self.body, text="", bg=BACKGROUND, fg=theme.MUTED, anchor="w",
-                             wraplength=WIDTH - 2 * pad - 2, takefocus=False,
+                             wraplength=self.width - 2 * pad - 2, takefocus=False,
                              font=theme.font(8))
         self.note.grid(row=8, column=0, sticky="ew", pady=(gap, 0))
 
     def _render(self):
         feedback = self.model.get("feedback")
+        compact = feedback and feedback.get("compact")
         if self.status_label is not None:
             self.status_label.configure(
-                text=self.model["summary_text"],
-                fg=COLORS["ASK"] if self.model["pending_count"] else FOREGROUND)
+                text=feedback["text"] if compact else self.model["summary_text"],
+                fg=COLORS["ASK"] if compact or self.model["pending_count"] else FOREGROUND)
         if self.feedback_label is not None:
-            if feedback:
+            if feedback and not compact:
                 # Physical names can be long; keep header controls visible.
                 self.feedback_label.configure(text=feedback["text"],
                                               fg=FOREGROUND if feedback["ok"] else COLORS["ASK"])
@@ -1006,7 +1112,7 @@ class Overlay:
         if self.alpha_button is not None:
             self.alpha_button.configure(fg=FOREGROUND if self.translucent else theme.FAINT)
         if self.dots is not None:
-            occupied = [self.model["slots"][number - 1] for number in self.model["display_order"]]
+            occupied = [self.model["slots"][number - 1] for number in self.model["visible_order"]]
             self.dots.delete("all")
             self.dots.configure(width=max(1, 14 * len(occupied) - 4))
             for index, slot in enumerate(occupied):
@@ -1020,8 +1126,8 @@ class Overlay:
             row, number, name, badge = widgets[:4]
             activity = widgets[4] if len(widgets) > 4 else None
             background = theme.RAISED if data["selected"] else BACKGROUND
-            if data["occupied"]:
-                row.grid(row=self.model["display_order"].index(data["number"]))
+            if data["number"] in self.model["visible_order"]:
+                row.grid(row=self.model["visible_order"].index(data["number"]))
             else:
                 row.grid_remove()  # empty slots take no space; the number key still maps
             row.configure(bg=background)
@@ -1117,24 +1223,26 @@ class Overlay:
             active_ids = self._request_ids(state)
             self._active_ids = active_ids
             self._dismissed_requests &= active_ids
-            reappear = self.hidden and bool(active_ids - self._dismissed_requests)
-            shows = state.get("show_requests")
-            if type(shows) is int:
-                # The macropad "show" key un-hides the overlay without a mouse.
-                reappear |= self.hidden and self._show_seen is not None and shows != self._show_seen
-                self._show_seen = shows
-            self.model = display_model(state, now=time.time())
+            now = time.time()
+            visible = self._should_show(state, now)
+            self.model = display_model(state, now=now)
             self._render()
             self.root.update_idletasks()
-            if self._height is not None:
+            compact = (self.model.get("feedback") or {}).get("compact")
+            previous_compact = (previous_model.get("feedback") or {}).get("compact")
+            if self._height is not None and not (compact or previous_compact):
                 height = self.root.winfo_reqheight()
                 if height != self._height or self._work_areas() != self._areas:
                     anchor = (self.root.winfo_y() + self._height
                               if self._anchor_bottom is None else self._anchor_bottom)
                     x = self._runtime_x if self._runtime_x is not None else self.root.winfo_x()
-                    self._place(x, anchor - height, height)
-            if reappear:
-                self.show()
+                    y = (self._pos[1] if self._corner_anchored and self.corner in (1, 2)
+                         and self._pos is not None else anchor - height)
+                    self._place(x, y, height)
+            if visible and self.hidden:
+                self.show(transient=False)
+            elif not visible and not self.hidden:
+                self._withdraw()
             request = self.model["request"]
             # Startup and hidden states keep the window withdrawn; acknowledge only visible pixels.
             if not self.hidden and self.root.state() != "withdrawn":
@@ -1195,6 +1303,7 @@ class Overlay:
                 self._waker.start()
             self._build()
             self._start_background()
+            self._starting = True
             self._poll()
             self.root.update_idletasks()
             height = self.root.winfo_reqheight()
@@ -1206,15 +1315,17 @@ class Overlay:
             else:
                 _, _, right, bottom = next((a for a in areas if a[0] <= 0 < a[2]
                                            and a[1] <= 0 < a[3]), areas[0])
-                x, y = right - WIDTH - 24, bottom - height - 64
+                x, y = right - self.width - 24, bottom - height - 24
             self._place(x, y, height)
             self._apply_alpha()
             if callable(getattr(type(self.window), "reapply", None)):
                 self.window.reapply()  # tool-window bits must be in place before first show
-            self.root.deiconify()
-            self._apply_alpha()
-            if self.window is not None:
-                self.window.show()
+            self._starting = False
+            if not self.hidden:
+                self.root.deiconify()
+                self._apply_alpha()
+                if self.window is not None:
+                    self.window.show()
             if on_ready is not None:
                 on_ready()
             self.root.mainloop()

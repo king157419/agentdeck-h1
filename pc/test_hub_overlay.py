@@ -185,7 +185,8 @@ class OverlayActionsTests(unittest.TestCase):
         self.overlay.root.update_idletasks.side_effect = None
         with patch.object(self.overlay, "_render"):
             self.overlay._poll()
-        self.hub.record_rendered.assert_called_once_with(None, None, source="overlay")
+        self.hub.record_rendered.assert_not_called()
+        self.hub.hide_display.assert_called_with('overlay')
 
     def test_empty_or_locked_display_cannot_decide(self):
         self.overlay.dispatch("approve")
@@ -295,6 +296,7 @@ class OverlayActionsTests(unittest.TestCase):
         self.assertEqual(buttons["approve"].configure.call_count, 2)
 
     def test_run_applies_noactivate_before_show_and_cleans_up(self):
+        self.overlay.hidden = False  # explicit show, startup otherwise remains withdrawn
         root = Mock()
         root.winfo_reqheight.return_value = 240
         root.winfo_screenwidth.return_value = 1600
@@ -342,6 +344,7 @@ class BackgroundOverlayTests(unittest.TestCase):
         self.overlay._poll()
         self.assertTrue(entered.wait(1))
         self.hub.record_rendered.reset_mock()
+        self.hub.hide_display.reset_mock()
         before = time.monotonic()
         self.overlay._poll()
         self.assertLess(time.monotonic() - before, .2)
@@ -553,7 +556,8 @@ class OverlayViewAndPrefsTests(unittest.TestCase):
         self.overlay._save_prefs()
         self.assertTrue(self.state_path.exists())
         data = json.loads(self.state_path.read_text(encoding="utf-8"))
-        self.assertEqual(data, {"translucent": True, "x": 210, "y": 320})
+        self.assertEqual(data, {"translucent": True, "corner": 0, "corner_anchored": False,
+                                "x": 210, "y": 320})
 
         another = Overlay(self.hub, state_path=self.state_path)
         another._load_prefs()

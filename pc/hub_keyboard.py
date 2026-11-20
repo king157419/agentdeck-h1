@@ -9,6 +9,49 @@ from deck_usb import RECONNECT_SECONDS, ReportState
 
 log = logging.getLogger("agentdeck.hub.keyboard")
 
+# Bare usages are shared with ordinary keys on this device; modifiers make a
+# different binding (for example Ctrl+F is a button, not a knob pulse).
+KNOB_ROTATIONS = {
+    binding: (number, direction)
+    for number, pair in enumerate((("hid:0x09", "hid:0x16"),
+                                   ("hid:0x15", "hid:0x13"),
+                                   ("hid:0x2D", "hid:0x2E"),
+                                   ("hid:0x30", "hid:0x2F")), 1)
+    for binding, direction in zip(pair, (1, -1))
+}
+
+
+class KnobDetents:
+    """Drop fast reverse pulses and optionally combine pulses into one step."""
+
+    def __init__(self, dividers=None):
+        dividers = {} if dividers is None else dividers
+        if (not isinstance(dividers, dict)
+                or any(key not in ("1", "2", "3", "4") or type(value) is not int or value < 1
+                       for key, value in dividers.items())):
+            raise ValueError("knob_divider needs knob numbers 1..4 and positive integer values")
+        self.dividers = {int(key): value for key, value in dividers.items()}
+        self._steps = {}
+        self._pulses = {}
+
+    def accept(self, binding, received_at):
+        rotation = KNOB_ROTATIONS.get(binding)
+        if rotation is None:
+            return True
+        knob, direction = rotation
+        previous = self._steps.get(knob)
+        if previous is not None and direction != previous[0] and received_at < previous[1] + .120:
+            return False
+        pulse_direction, count = self._pulses.get(knob, (direction, 0))
+        count = count + 1 if pulse_direction == direction else 1
+        if count < self.dividers.get(knob, 1):
+            self._pulses[knob] = (direction, count)
+            return False
+        self._pulses[knob] = (direction, 0)
+        self._steps[knob] = (direction, received_at)
+        return True
+
+
 # Windows virtual keys to USB keyboard usages. No mapping file is rewritten.
 VKEY_USAGES = {**{0x41 + n: 0x04 + n for n in range(26)},
                **{0x31 + n: 0x1E + n for n in range(9)}, 0x30: 0x27,

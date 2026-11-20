@@ -148,11 +148,11 @@ INPUT_ERRORS = (  # (substring of HubError text, overlay text, LCD ASCII text)
     ("hub is shutting down", "正在退出", "Shutting down"),
     ("keys leak into the window", LEAK_TEXT, "Need WinUSB"),
     ("use approve/deny", "有待批请求：用 ✓/✗ 处理", "Use approve/deny"),
-    ("only while the agent asks", "agent 提问时才能上下选", "No question"),
+    ("only while the agent asks", "只有 agent 提问时才能用", "No question"),
     ("没找到 Claude 桌面版窗口", "没找到 Claude 桌面版窗口", "Claude not found"),
 )
 INPUT_RESULTS = {"allowed": "已批准", "denied": "已拒绝", "confirm": "再按一次确认",
-                 "locked": "需在终端确认", "no_request": "没有待批请求",
+                 "locked": "需在终端确认", "no_request": "现在没有要批准的请求",
                  "no_waiting_session": "没有等你的会话", "unavailable": "此操作不可用",
                  "focus": "去窗口里回答", "shown": "已显示浮窗"}
 INPUT_SENT = {"prompt": "已发送预设", "screenshot": "已截图并粘贴路径", "voice_down": "开始说话",
@@ -393,6 +393,11 @@ class Hub:
         self.input_seq = 0
         self.show_requests = 0        # "show" key presses; the overlay un-hides on change
         self.last_cycle = float("-inf")
+        self.cycle_order = []
+        self.cycle_generation = 0
+        self.cycle_reader = None
+        self.overlay_pinned = False
+        self.overlay_corner_requests = 0
         self.input_reader = None      # callable -> "usb" / "raw" / None (set by main)
         self.sessions_path = Path(sessions_path) if sessions_path is not None else None
         self.window_alive = window_alive or self._window_alive
@@ -538,6 +543,17 @@ class Hub:
                 self.input_notice = (str(lcd), self.monotonic() + INPUT_NOTICE_SECONDS)
                 if self.selected in self.sessions:
                     self._show()
+
+    def note_action(self, action, result=None, error=None, control=None):
+        """Publish the same feedback metadata for keyboard and global hotkeys."""
+        text, ok, lcd = describe_input(action, result, error)
+        compact = ((isinstance(result, dict) and result.get("status") == "no_request")
+                   or (action.startswith("nav ") and error is not None
+                       and "only while the agent asks" in str(error)))
+        with self.lock:
+            self.note_input(text if compact or not control else control + " → " + text, ok, lcd)
+            if self.last_input is not None:
+                self.last_input.update(compact=compact, action=action)
 
     def _send(self, lines, focus=False, rendered=None):
         if not self.lcd_enabled:
@@ -1149,6 +1165,11 @@ class Hub:
                     "deck_connected": connected, "hold_mode": self.hold_mode,
                     "hold_active": self.hold_mode == "always" or (self.hold_mode == "auto" and connected),
                     "show_requests": self.show_requests,
+                    "overlay_pinned": self.overlay_pinned,
+                    "overlay_corner_requests": self.overlay_corner_requests,
+                    "last_cycle_age": (max(0.0, self.monotonic() - self.last_cycle)
+                                       if math.isfinite(self.last_cycle) else None),
+                    "display_order": [self.sessions[identity]["slot"] for identity in self._session_order()],
                     "locked": [p.public() for p in self.locked.values()],
                     "agents_seen": dict(self.agents_seen),
                     "recent_ended": [dict(entry) for entry in self.recent_ended],
@@ -1222,9 +1243,9 @@ class Hub:
         command = parts[0]
         argument = parts[1] if len(parts) == 2 else None
         if command not in ("slot", "cycle", "next_wait", "approve", "deny", "interrupt", "voice",
-                           "voice_down", "voice_up", "screenshot", "prompt", "show", "scroll", "nav", "hold", "app", "window"):
+                           "voice_down", "voice_up", "screenshot", "prompt", "show", "scroll", "nav", "hold", "app", "window", "overlay"):
             raise HubError("unknown action")
-        if command not in ("slot", "cycle", "prompt", "scroll", "nav", "hold", "app", "window") and argument is not None:
+        if command not in ("slot", "cycle", "prompt", "scroll", "nav", "hold", "app", "window", "overlay") and argument is not None:
             raise HubError("unexpected action argument")
         if command == "scroll":
             if argument == "end":
@@ -1244,44 +1265,79 @@ class Hub:
             raise HubError("window needs next or prev")
         if command == "hold" and argument not in ("auto", "always", "never"):
             raise HubError("hold needs auto, always or never")
+        if command == "overlay" and argument not in ("toggle", "corner"):
+            raise HubError("overlay needs toggle or corner")
         if command != "window" and self.desktop is not None:
             release = getattr(self.desktop, "release_window_switch", None)
             if callable(release) and release() is False:
                 raise HubError("could not release window-switch keys", 409)
-        origin = self._cycle_origin(received_at) if command == "cycle" else None
+        start_reader = False
         with self.lock:
+            self.cycle_generation += 1
+            generation = self.cycle_generation
             if command == "cycle":
+                start_reader = received_at - self.last_cycle >= CYCLE_BURST_SECONDS
+                if start_reader:
+                    self.cycle_order = self._session_order(frozen=False)
                 self.last_cycle = received_at
-                if origin in self.sessions:
-                    self.selected = origin
             else:
                 self.last_cycle = float("-inf")
             outcome = self._action_locked(payload, command, argument, source, received_at)
+        if start_reader:
+            self._start_cycle_origin(generation)
         if callable(outcome):
             return outcome()
         return outcome
 
-    def _cycle_origin(self, received_at):
-        """One on-demand UIA read at the start of a rotation burst, outside the lock."""
+    def _session_order(self, frozen=True):
+        """Keep rotation and the overlay in the same order for a whole burst."""
+        recent = sorted(self.sessions, key=lambda identity: (
+            -self.sessions[identity]["last_updated"], self.sessions[identity]["slot"]))
+        if frozen and self.monotonic() - self.last_cycle < CYCLE_BURST_SECONDS:
+            self.cycle_order = ([identity for identity in self.cycle_order if identity in self.sessions]
+                                + [identity for identity in recent if identity not in self.cycle_order])
+            return list(self.cycle_order)
+        return recent
+
+    def _start_cycle_origin(self, generation):
+        """Read UIA once in the background; a second step invalidates the result."""
         with self.lock:
-            if self.closed or received_at - self.last_cycle < CYCLE_BURST_SECONDS:
-                return None
-            sessions = [dict(session) for session in self.sessions.values()]
-            candidates = [session for session in sessions if session.get("title")
+            if self.closed or (self.cycle_reader is not None and self.cycle_reader.is_alive()):
+                return
+            candidates = [dict(session) for session in self.sessions.values() if session.get("title")
                           and str(session.get("window_exe", "")).replace("\\", "/").rsplit("/", 1)[-1].lower() == "claude.exe"]
-        if not candidates or not self.desktop_enabled:
-            return None
-        try:
-            method = getattr(self._desktop(), "current_session_title", None)
-            title = method(candidates) if callable(method) else None
-            if isinstance(title, str) and title:
-                matches = [session for session in candidates if session["title"] == title]
-                if matches:
-                    chosen = min(matches, key=lambda session: (-session["last_updated"], session["slot"]))
-                    return chosen["agent"], chosen["session_id"]
-        except Exception as error:
-            log.warning("Cannot read current Claude session: %s", error)
-        return None
+            if not candidates or not self.desktop_enabled:
+                return
+
+            def read():
+                try:
+                    method = getattr(self._desktop(), "current_session_title", None)
+                    title = method(candidates) if callable(method) else None
+                    with self.lock:
+                        if (self.closed or self.cycle_generation != generation
+                                or self.monotonic() - self.last_cycle >= CYCLE_BURST_SECONDS):
+                            return
+                        matches = [session for session in candidates if session["title"] == title
+                                   and (session["agent"], session["session_id"]) in self.sessions]
+                        if matches:
+                            chosen = min(matches, key=lambda session: (-session["last_updated"], session["slot"]))
+                            self._select_session((chosen["agent"], chosen["session_id"]))
+                except Exception as error:
+                    log.warning("Cannot read current Claude session: %s", error)
+
+            self.cycle_reader = threading.Thread(target=read, name="AgentDeck current session", daemon=True)
+            self.cycle_reader.start()
+
+    def _select_session(self, selected):
+        previous = self.pending.get(self.displayed_request_id)
+        if previous is not None:
+            previous.armed_at = None
+        self.selected = selected
+        self.confirm_target = None
+        self.confirm_until = float('-inf')
+        self._set_displayed(next((p.id for p in self.pending.values() if p.session == selected), None) or next(
+            (p.id for p in self.locked.values() if p.session == selected), None))
+        self._show()
 
     def _focus_effect(self, command, selected, result):
         """Snapshot under the lock; the returned callable focuses without it."""
@@ -1326,6 +1382,13 @@ class Hub:
             self._validate_decision(payload, command, source, received_at)
         self._update_voice()
         self._expire()
+        if command == "overlay":
+            if argument == "toggle":
+                self.overlay_pinned = not self.overlay_pinned
+            else:
+                self.overlay_corner_requests += 1
+            return {"action": command, "status": "ok", "pinned": self.overlay_pinned,
+                    "corner_requests": self.overlay_corner_requests}
         if command == "hold":
             self.hold_mode = argument
             self._release_unheld()
@@ -1399,8 +1462,8 @@ class Hub:
             if voice_active:
                 raise HubError("release voice before sending input", 409)
         if command in ("slot", "cycle", "next_wait"):
-            sessions = sorted(self.sessions.items(), key=lambda pair: (
-                -pair[1]["last_updated"], pair[1]["slot"]) if command == "cycle" else (pair[1]["slot"],))
+            sessions = ([(identity, self.sessions[identity]) for identity in self._session_order()]
+                        if command == "cycle" else sorted(self.sessions.items(), key=lambda pair: pair[1]["slot"]))
             if command == "next_wait":
                 identities = [identity for identity, _ in sessions]
                 index = identities.index(self.selected) if self.selected in identities else -1
@@ -1435,17 +1498,10 @@ class Hub:
                     selected = identities[(index + number) % len(identities)] if identities else None
                 if selected is None:
                     raise HubError("no session in that slot", 404)
-            previous = self.pending.get(self.displayed_request_id)
-            if previous is not None:
-                previous.armed_at = None
-            self.selected = selected
-            self.confirm_target = None
-            self.confirm_until = float('-inf')
-            self._set_displayed(next((p.id for p in self.pending.values() if p.session == selected), None) or next(
-                (p.id for p in self.locked.values() if p.session == selected), None))
-            self._show()
-            return self._focus_effect(command, selected, {
-                "action": command, "status": "selected", "request_id": self.displayed_request_id})
+            self._select_session(selected)
+            result = {"action": command, "status": "selected", "request_id": self.displayed_request_id,
+                      "slot": self.sessions[selected]["slot"]}
+            return result if command == "cycle" else self._focus_effect(command, selected, result)
         session = self.sessions.get(self.selected)
         if session is None and command not in ("app", "window"):
             raise HubError("select a session first", 409)
@@ -1531,12 +1587,15 @@ class Hub:
         return run_effect
 
     def _desktop(self):
-        if not self.desktop_enabled:
-            raise HubError("desktop output disabled", 409)
-        if self.desktop is None:
-            from hub_desktop import DesktopEffects
-            self.desktop = DesktopEffects(monotonic=self.monotonic)
-        return self.desktop
+        with self.lock:
+            if self.closed:
+                raise HubError("hub is shutting down", 503)
+            if not self.desktop_enabled:
+                raise HubError("desktop output disabled", 409)
+            if self.desktop is None:
+                from hub_desktop import DesktopEffects
+                self.desktop = DesktopEffects(monotonic=self.monotonic)
+            return self.desktop
 
     def maintain(self):
         with self.lock:
@@ -1553,17 +1612,21 @@ class Hub:
     def close(self):
         with self.lock:
             self.closed = True
-            if self.desktop is not None:
-                try:
-                    self.desktop.close()
-                except Exception as error:
-                    log.warning("Voice shutdown failed: %s", error)
+            self.cycle_generation += 1
+            reader = self.cycle_reader
             for request in list(self.pending.values()):
                 self._resolve(request)
             self.locked.clear()
             self.displayed_request_id = None
             if self.lcd_thread is not None:
                 self.lcd_jobs.put(None)
+        if self.desktop is not None:
+            try:
+                self.desktop.close()
+            except Exception as error:
+                log.warning("Desktop shutdown failed: %s", error)
+        if reader is not None and reader is not threading.current_thread():
+            reader.join(timeout=3.5)
         self._save_sessions(force=True)
 
 
@@ -1726,8 +1789,10 @@ def control_name(binding):
 class USBKeys:
     """Dispatch bindings and pair releases with the accepted physical press."""
 
-    def __init__(self, hub, mapping=None, monotonic=None, profile="default"):
+    def __init__(self, hub, mapping=None, monotonic=None, profile="default", knob_divider=None):
+        from hub_keyboard import KnobDetents
         self.hub = hub
+        self.detents = KnobDetents(knob_divider)
         config = load_json(Path(__file__).with_name("hub_keys.json")) if mapping is None else mapping
         if profile != "default":
             config = config.get(profile)
@@ -1792,6 +1857,8 @@ class USBKeys:
                 continue
             if modifiers and tuple(event.get("new_modifiers", ())) != modifiers:
                 continue
+            if not self.detents.accept(binding, received_at):
+                return
             action = actions.get("down") if isinstance(actions, dict) else actions
             if action is None or self._dispatch(binding, action, shown, received_at, reader):
                 if isinstance(actions, dict) and "up" in actions:
@@ -1829,8 +1896,11 @@ class USBKeys:
         if not callable(note):
             return
         try:
-            text, ok, lcd = describe_input(action, result, error)
-            note(control_name(binding) + " → " + text, ok, lcd)
+            if isinstance(self.hub, Hub):
+                self.hub.note_action(action, result, error, control_name(binding))
+            else:
+                text, ok, lcd = describe_input(action, result, error)
+                note(control_name(binding) + " → " + text, ok, lcd)
         except Exception as failure:
             log.debug("Key feedback unavailable: %s", failure)
 
@@ -1888,6 +1958,8 @@ def main(argv=None, *, ui_factory=None):
         options['require_nonce'] = args.require_nonce
     desktop_options = {"shots_dir": home / ".agentdeck" / "shots"}
     desktop_options["dictation_shortcut"] = config.get("dictation_shortcut")
+    if "window_switch_release_ms" in config:
+        desktop_options["window_switch_release_ms"] = config["window_switch_release_ms"]
     hub = Hub(approve_timeout=args.approve_timeout, prompts=load_json(args.prompts),
               risk_rules=load_json(args.risk_rules) if args.risk_rules else None,
               critical_rules=load_json(args.critical_rules) if args.critical_rules else None,
@@ -1928,7 +2000,8 @@ def main(argv=None, *, ui_factory=None):
     try:
         if "usb" in args.backend:
             from hub_keyboard import KeyboardInput
-            keyboard = KeyboardInput(USBKeys(hub, mapping, profile=args.profile), monotonic=hub.monotonic)
+            keyboard = KeyboardInput(USBKeys(hub, mapping, profile=args.profile,
+                                            knob_divider=config.get("knob_divider")), monotonic=hub.monotonic)
             keyboard.heartbeat = lambda: watchdog.beat("keyboard")
             hub.input_reader = getattr(keyboard, "reader_mode", None)
             readers.append((keyboard, "AgentDeck USB"))

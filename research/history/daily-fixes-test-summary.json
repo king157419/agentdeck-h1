@@ -1,0 +1,299 @@
+{
+  "python": "D:/conda/miniconda3/python.exe",
+  "isolation": [
+    "HOME",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA"
+  ],
+  "files": 48,
+  "failed": 0,
+  "results": [
+    {
+      "file": "test_agentdeck_app.py",
+      "exit": 0,
+      "seconds": 2.373
+    },
+    {
+      "file": "test_capture_etl.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 3.592
+    },
+    {
+      "file": "test_claude_uia.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 0.619
+    },
+    {
+      "file": "test_daemon.py",
+      "exit": 0,
+      "seconds": 0.601
+    },
+    {
+      "file": "test_deck.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 2.035
+    },
+    {
+      "file": "test_deck_exclusive.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 0.44
+    },
+    {
+      "file": "test_deck_input.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 0.393
+    },
+    {
+      "file": "test_deck_keymap.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 0.681
+    },
+    {
+      "file": "test_deck_probe.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 0.437
+    },
+    {
+      "file": "test_deck_usb.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 0.59
+    },
+    {
+      "file": "test_focus_lock.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 0.802
+    },
+    {
+      "file": "test_hub.py",
+      "exit": 0,
+      "seconds": 7.112
+    },
+    {
+      "file": "test_hub_app_support.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 1.288
+    },
+    {
+      "file": "test_hub_app_switch.py",
+      "exit": 0,
+      "seconds": 2.13
+    },
+    {
+      "file": "test_hub_daily_fixes.py",
+      "exit": 0,
+      "seconds": 0.762
+    },
+    {
+      "file": "test_hub_demo.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 0.626
+    },
+    {
+      "file": "test_hub_desktop.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 1.116
+    },
+    {
+      "file": "test_hub_desktop_mac.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 0.807
+    },
+    {
+      "file": "test_hub_doctor.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 0.952
+    },
+    {
+      "file": "test_hub_fixes.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 5.672
+    },
+    {
+      "file": "test_hub_gate.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 3.204
+    },
+    {
+      "file": "test_hub_hold.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 2.138
+    },
+    {
+      "file": "test_hub_hotkey.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 0.464
+    },
+    {
+      "file": "test_hub_input_capture.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 0.784
+    },
+    {
+      "file": "test_hub_install.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 2.517
+    },
+    {
+      "file": "test_hub_keyboard.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 0.687
+    },
+    {
+      "file": "test_hub_keypad.py",
+      "exit": 0,
+      "seconds": 2.591
+    },
+    {
+      "file": "test_hub_macos_fix.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 0.703
+    },
+    {
+      "file": "test_hub_nonce.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 2.1
+    },
+    {
+      "file": "test_hub_nonce_integration.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 1.656
+    },
+    {
+      "file": "test_hub_overlay.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 0.762
+    },
+    {
+      "file": "test_hub_overlay_daily.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 0.534
+    },
+    {
+      "file": "test_hub_overlay_position.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 0.524
+    },
+    {
+      "file": "test_hub_relay.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 6.716
+    },
+    {
+      "file": "test_hub_risk.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 0.285
+    },
+    {
+      "file": "test_hub_runtime.py",
+      "exit": 0,
+      "seconds": 1.492
+    },
+    {
+      "file": "test_hub_screenshot.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 0.978
+    },
+    {
+      "file": "test_hub_tk_wake.py",
+      "exit": 0,
+      "seconds": 19.745
+    },
+    {
+      "file": "test_hub_ui_live.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 28.937
+    },
+    {
+      "file": "test_hub_virtual_device.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 0.527
+    },
+    {
+      "file": "test_hub_virtual_nonce_integration.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 5.883
+    },
+    {
+      "file": "test_hub_voice_tap.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 0.796
+    },
+    {
+      "file": "test_hub_watchdog.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 4.304
+    },
+    {
+      "file": "test_hub_window_switch.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 0.308
+    },
+    {
+      "file": "test_pc.py",
+      "exit": 0,
+      "seconds": 0.472
+    },
+    {
+      "file": "test_session_titles_uia.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 0.891
+    },
+    {
+      "file": "test_ui.py",
+      "exit": 0,
+      "seconds": 0.157
+    },
+    {
+      "file": "test_verify_real_session.py",
+      "attempt": 1,
+      "exit": 0,
+      "seconds": 53.482
+    }
+  ],
+  "other_checks": [
+    {
+      "file": "sim.py",
+      "exit": 0,
+      "seconds": 0.667
+    }
+  ],
+  "static_checks": "AST, compile, tabnanny and git diff --check; no external linter/typechecker installed or configured"
+}

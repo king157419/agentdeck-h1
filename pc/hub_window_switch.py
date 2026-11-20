@@ -1,6 +1,7 @@
 """Own Alt only for a short Alt+Tab burst; importing never sends input."""
 import ctypes
 import logging
+import math
 import threading
 import time
 
@@ -8,7 +9,7 @@ import time
 ALT = 0x12
 SHIFT = 0x10
 TAB = 0x09
-RELEASE_SECONDS = 0.9
+RELEASE_SECONDS = 1.2
 SCANS = {ALT: 0x38, SHIFT: 0x2A, TAB: 0x0F}
 log = logging.getLogger("agentdeck.hub.window")
 
@@ -20,8 +21,12 @@ class WindowSwitcher:
     inserted. Tests can substitute it and ``timer_factory`` without native I/O.
     """
 
-    def __init__(self, windows, *, monotonic=None, timer_factory=None, sender=None):
+    def __init__(self, windows, *, monotonic=None, timer_factory=None, sender=None, release_ms=1200):
+        if (isinstance(release_ms, bool) or not isinstance(release_ms, (int, float))
+                or not math.isfinite(release_ms) or release_ms <= 0):
+            raise ValueError("release_ms must be positive and finite")
         self.windows = windows
+        self.release_seconds = release_ms / 1000.0
         self.monotonic = time.monotonic if monotonic is None else monotonic
         self.timer_factory = threading.Timer if timer_factory is None else timer_factory
         self.sender = self._send if sender is None else sender
@@ -79,11 +84,13 @@ class WindowSwitcher:
                         for key in (SHIFT, 0x11, ALT, 0x5B, 0x5C, *range(0xA0, 0xA6))):
                     return False
             self._cancel_timer()
-            transitions = [] if ALT in self._owned else [(ALT, 0)]
-            if direction == "prev":
+            first = ALT not in self._owned
+            transitions = [(ALT, 0)] if first else []
+            reverse = direction == "prev" and not first
+            if reverse:
                 transitions.append((SHIFT, 0))
             transitions.extend(((TAB, 0), (TAB, 2)))
-            if direction == "prev":
+            if reverse:
                 transitions.append((SHIFT, 2))
             original = list(self._owned)
             # If SendInput raises after insertion, cleanup still knows every key
@@ -104,9 +111,9 @@ class WindowSwitcher:
             if sent != len(transitions):
                 self.release()
                 return False
-            self._deadline = self.monotonic() + RELEASE_SECONDS
+            self._deadline = self.monotonic() + self.release_seconds
             try:
-                self._arm(RELEASE_SECONDS)
+                self._arm(self.release_seconds)
             except BaseException:
                 self.release()
                 raise

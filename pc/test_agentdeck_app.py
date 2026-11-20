@@ -2101,7 +2101,7 @@ class OverlayReadyTests(unittest.TestCase):
             def ready():
                 self.assertEqual(threading.get_ident(), owner)
                 self.assertIs(overlay.root, root)
-                self.assertEqual(events, [("apply", 123), "visible", "show"])
+                self.assertEqual(events, [("apply", 123)])  # Ready while the idle overlay stays hidden.
                 events.append("ready")
                 if fail_callback:
                     raise RuntimeError("tray initialization failed")
@@ -2124,11 +2124,11 @@ class OverlayReadyTests(unittest.TestCase):
             return events
 
     def test_ready_callback_runs_after_setup_before_mainloop_on_caller_thread(self):
-        self.assertEqual(self.run_overlay(), [("apply", 123), "visible", "show", "ready", "mainloop",
+        self.assertEqual(self.run_overlay(), [("apply", 123), "ready", "mainloop",
                                                "close", "destroy", "on_close"])
 
     def test_ready_callback_failure_closes_native_window_and_destroys_tk(self):
-        self.assertEqual(self.run_overlay(True), [("apply", 123), "visible", "show", "ready",
+        self.assertEqual(self.run_overlay(True), [("apply", 123), "ready",
                                                   "close", "destroy", "on_close"])
 
     def test_hub_runtime_uses_supplied_ui_factory_and_stops_server(self):

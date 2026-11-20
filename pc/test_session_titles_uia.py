@@ -157,21 +157,25 @@ class HubTests(unittest.TestCase):
         self.assertEqual(self.engine.state()["sessions"], [])
         self.assertEqual(json.loads(self.path.read_text(encoding="utf-8")), [])
 
-    def test_cycle_starts_from_current_title_once_per_burst_with_no_background_poll(self):
+    def test_cycle_reads_current_title_asynchronously_once_per_burst_without_polling(self):
         self.event("alpha", "Alpha")
         self.clock += 1
         self.event("beta", "Beta")
         self.clock += 1
         self.event("gamma", "Gamma")
         self.uia.list.return_value["current_title"] = "Beta"
-        self.assertEqual(self.engine.action({"action": "cycle +1"})["slot"], 1)
         self.assertEqual(self.engine.action({"action": "cycle +1"})["slot"], 3)
+        self.engine.cycle_reader.join(timeout=1)
+        self.assertFalse(self.engine.cycle_reader.is_alive())
+        self.assertEqual(self.engine.state()["selected_slot"], 2)
+        self.assertEqual(self.engine.action({"action": "cycle +1"})["slot"], 1)
         self.uia.list.assert_called_once_with(hwnd=11)
         self.engine.maintain()
         self.engine.state()
         self.uia.list.assert_called_once()
         self.clock += hub.CYCLE_BURST_SECONDS + 0.1
-        self.assertEqual(self.engine.action({"action": "cycle -1"})["slot"], 3)
+        self.assertEqual(self.engine.action({"action": "cycle -1"})["slot"], 2)
+        self.engine.cycle_reader.join(timeout=1)
         self.assertEqual(self.uia.list.call_count, 2)
 
     def test_show_activates_invokes_and_confirms_target(self):

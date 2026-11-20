@@ -60,19 +60,19 @@ class WindowSwitchTests(unittest.TestCase):
 
     def test_prev_first_detent_and_repeated_release_are_balanced(self):
         self.switcher.step("prev")
-        self.assertEqual(self.events[0], [(ALT, 0), (SHIFT, 0), (TAB, 0), (TAB, 2), (SHIFT, 2)])
+        self.assertEqual(self.events[0], [(ALT, 0), (TAB, 0), (TAB, 2)])
         self.assertTrue(self.switcher.release())
         self.assertEqual(self.events[-1], [(ALT, 2)])
         self.assertTrue(self.switcher.release())
         self.assertEqual(len(self.events), 2)
 
-    def test_idle_timeout_is_900ms_and_early_callback_rearms(self):
+    def test_idle_timeout_is_1200ms_and_early_callback_rearms(self):
         self.switcher.step("next")
-        self.clock.value = 0.899
+        self.clock.value = 1.199
         self.timers[-1].callback()
         self.assertEqual(len(self.events), 1)
         self.assertAlmostEqual(self.timers[-1].seconds, 0.001)
-        self.clock.value = 0.9
+        self.clock.value = 1.2
         self.timers[-1].callback()
         self.assertEqual(self.events[-1], [(ALT, 2)])
         self.assertEqual(self.switcher._owned, [])
@@ -85,7 +85,7 @@ class WindowSwitchTests(unittest.TestCase):
         self.clock.value = 0.9
         first.callback()
         self.assertEqual(self.switcher._owned, [ALT])
-        self.clock.value = 1.701
+        self.clock.value = 2.001
         self.timers[-1].callback()
         self.assertEqual(self.switcher._owned, [])
 
@@ -116,11 +116,40 @@ class WindowSwitchTests(unittest.TestCase):
 
         self.switcher.sender = partial
         self.assertFalse(self.switcher.step("prev"))
-        self.assertEqual(calls[-1], [(SHIFT, 2), (ALT, 2)])
+        self.assertEqual(calls[-1], [(TAB, 2), (ALT, 2)])
         self.assertEqual(self.switcher._owned, [])
         self.assertEqual(self.timers, [])
 
     def test_input_exception_releases_all_keys_that_might_have_been_inserted(self):
+        calls = []
+
+        def interrupted(events):
+            calls.append(events)
+            if len(calls) == 1:
+                raise OSError("input failed")
+            return len(events)
+
+        self.switcher.sender = interrupted
+        with self.assertRaisesRegex(OSError, "input failed"):
+            self.switcher.step("prev")
+        self.assertEqual(calls[-1], [(TAB, 2), (ALT, 2)])
+        self.assertEqual(self.switcher._owned, [])
+
+    def test_partial_later_reverse_releases_shift_and_owned_alt(self):
+        self.switcher.step("next")
+        calls = []
+
+        def partial(events):
+            calls.append(events)
+            return 1 if len(calls) == 1 else len(events)
+
+        self.switcher.sender = partial
+        self.assertFalse(self.switcher.step("prev"))
+        self.assertEqual(calls[-1], [(SHIFT, 2), (ALT, 2)])
+        self.assertEqual(self.switcher._owned, [])
+
+    def test_later_reverse_exception_releases_every_possible_key(self):
+        self.switcher.step("next")
         calls = []
 
         def interrupted(events):
@@ -160,6 +189,32 @@ class WindowSwitchTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "next or prev"):
             self.switcher.step("forward")
         self.assertEqual(self.events, [])
+
+    def test_reverse_detents_after_first_use_shift_and_new_bursts_start_with_tab(self):
+        self.switcher.step("prev")
+        self.switcher.step("prev")
+        self.assertEqual(self.events[-1], [(SHIFT, 0), (TAB, 0), (TAB, 2), (SHIFT, 2)])
+        self.switcher.release()
+        self.switcher.step("prev")
+        self.assertEqual(self.events[-1], [(ALT, 0), (TAB, 0), (TAB, 2)])
+
+    def test_release_delay_is_configurable(self):
+        switcher = WindowSwitcher(None, monotonic=self.clock, timer_factory=FakeTimer,
+                                  sender=lambda events: len(events), release_ms=1750)
+        self.addCleanup(switcher.close)
+        self.assertTrue(switcher.step("next"))
+        self.assertEqual(switcher._timer.seconds, 1.75)
+        self.clock.value = 1.749
+        switcher._timer.callback()
+        self.assertEqual(switcher._owned, [ALT])
+        self.clock.value = 1.75
+        switcher._timer.callback()
+        self.assertEqual(switcher._owned, [])
+
+    def test_release_delay_must_be_positive_and_finite(self):
+        for value in (0, -1, True, "1200", float("inf"), float("nan")):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "release_ms"):
+                WindowSwitcher(None, sender=lambda events: len(events), release_ms=value)
 
 
 class NativeShapeTests(unittest.TestCase):

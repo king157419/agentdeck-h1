@@ -310,7 +310,7 @@ class FeedbackTests(unittest.TestCase):
             self.assertGreater(engine.state()["last_input"]["seq"], 2)
 
     def test_describe_input_texts(self):
-        self.assertEqual(hub.describe_input("approve", {"status": "no_request"})[0], "没有待批请求")
+        self.assertEqual(hub.describe_input("approve", {"status": "no_request"})[0], "现在没有要批准的请求")
         self.assertEqual(hub.describe_input("approve", error=hub.HubError("switch_guard"))[:2],
                          ("请求刚切换，稍后再按", False))
         self.assertEqual(hub.describe_input("slot 3", {"status": "selected", "slot": 3, "window": "x"})[0],

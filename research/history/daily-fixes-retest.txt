@@ -1,0 +1,304 @@
+
+$ python pc/test_agentdeck_app.py
+test_autostart_actions_all_use_helper (__main__.ApplicationTests.test_autostart_actions_all_use_helper) ... ok
+test_autostart_menu_toggles_registration_and_checkmark (__main__.ApplicationTests.test_autostart_menu_toggles_registration_and_checkmark) ... ok
+test_closing_status_without_start_changes_nothing (__main__.ApplicationTests.test_closing_status_without_start_changes_nothing) ... ok
+test_concurrent_live_autostart_toggles_finish_disabled (__main__.ApplicationTests.test_concurrent_live_autostart_toggles_finish_disabled) ... ok
+test_construction_performs_no_scheduler_call_and_startup_upgrades (__main__.ApplicationTests.test_construction_performs_no_scheduler_call_and_startup_upgrades) ... ok
+test_diagnostics_queues_report_for_gui_thread (__main__.ApplicationTests.test_diagnostics_queues_report_for_gui_thread) ... ok
+test_driver_guide_covers_zadig_steps (__main__.ApplicationTests.test_driver_guide_covers_zadig_steps) ... ok
+test_dynamic_session_menu_preserves_full_identity (__main__.ApplicationTests.test_dynamic_session_menu_preserves_full_identity) ... ok
+test_exit_stops_overlay (__main__.ApplicationTests.test_exit_stops_overlay) ... ok
+test_global_backup_failure_does_not_continue_to_install (__main__.ApplicationTests.test_global_backup_failure_does_not_continue_to_install) ... ok
+test_global_checkmark_reads_both_configs_each_time_instead_of_preferences (__main__.ApplicationTests.test_global_checkmark_reads_both_configs_each_time_instead_of_preferences) ... ok
+test_global_enable_cancel_leaves_home_untouched (__main__.ApplicationTests.test_global_enable_cancel_leaves_home_untouched) ... ok
+test_global_enable_migrates_legacy_with_backups_and_disable_does_not_restore_it (__main__.ApplicationTests.test_global_enable_migrates_legacy_with_backups_and_disable_does_not_restore_it) ... ok
+test_keys_window_has_voice_shortcut_entry (__main__.ApplicationTests.test_keys_window_has_voice_shortcut_entry) ... ok
+test_legacy_removal_passes_explicit_confirmation_and_temp_home (__main__.ApplicationTests.test_legacy_removal_passes_explicit_confirmation_and_temp_home) ... ok
+test_legacy_removal_requires_user_confirmation (__main__.ApplicationTests.test_legacy_removal_requires_user_confirmation) ... ok
+test_live_autostart_work_is_daemon_thread_and_notifies_via_dispatch (__main__.ApplicationTests.test_live_autostart_work_is_daemon_thread_and_notifies_via_dispatch) ... ok
+test_live_menu_actions_defer_hub_locks_and_native_focus (__main__.ApplicationTests.test_live_menu_actions_defer_hub_locks_and_native_focus) ... ok
+test_live_pump_uses_background_snapshot_without_hub_lock (__main__.ApplicationTests.test_live_pump_uses_background_snapshot_without_hub_lock) ... ok
+test_logs_action_opens_only_app_log_folder (__main__.ApplicationTests.test_logs_action_opens_only_app_log_folder) ... ok
+test_macro_keyboard_row_reports_connection_and_driver_action (__main__.ApplicationTests.test_macro_keyboard_row_reports_connection_and_driver_action) ... ok
+test_manual_launch_opens_status_and_login_launch_stays_silent (__main__.ApplicationTests.test_manual_launch_opens_status_and_login_launch_stays_silent) ... ok
+test_menu_callbacks_enqueue_without_native_actions (__main__.ApplicationTests.test_menu_callbacks_enqueue_without_native_actions) ... ok
+test_menu_open_uses_latest_cached_sessions_without_timer_rebuild (__main__.ApplicationTests.test_menu_open_uses_latest_cached_sessions_without_timer_rebuild) ... ok
+test_overlay_menu_mirrors_tray_and_offers_driver_guide_in_raw_mode (__main__.ApplicationTests.test_overlay_menu_mirrors_tray_and_offers_driver_guide_in_raw_mode) ... ok
+test_project_install_and_uninstall_are_local_and_remembered (__main__.ApplicationTests.test_project_install_and_uninstall_are_local_and_remembered) ... ok
+test_project_picker_cancel_does_not_write_any_config (__main__.ApplicationTests.test_project_picker_cancel_does_not_write_any_config) ... ok
+test_promote_writes_only_this_programs_record (__main__.ApplicationTests.test_promote_writes_only_this_programs_record) ... ok
+test_pump_updates_icon_and_dispatches_queued_actions_on_tk_thread (__main__.ApplicationTests.test_pump_updates_icon_and_dispatches_queued_actions_on_tk_thread) ... ok
+test_recycled_slot_is_rejected_by_hub_under_its_lock (__main__.ApplicationTests.test_recycled_slot_is_rejected_by_hub_under_its_lock) ... ok
+test_run_always_stops_tray_even_when_overlay_fails (__main__.ApplicationTests.test_run_always_stops_tray_even_when_overlay_fails) ... ok
+test_select_and_next_wait_use_existing_hub_action (__main__.ApplicationTests.test_select_and_next_wait_use_existing_hub_action) ... ok
+test_selection_does_not_hold_hub_lock_during_focus (__main__.ApplicationTests.test_selection_does_not_hold_hub_lock_during_focus) ... ok
+test_show_and_toggle_use_overlay_visibility_methods (__main__.ApplicationTests.test_show_and_toggle_use_overlay_visibility_methods) ... ok
+test_stale_or_same_prefix_session_never_focuses_recycled_slot (__main__.ApplicationTests.test_stale_or_same_prefix_session_never_focuses_recycled_slot) ... ok
+test_status_autostart_rows_use_cached_state_only (__main__.ApplicationTests.test_status_autostart_rows_use_cached_state_only) ... 计划任务不可用，保留注册表自启：拒绝访问
+ok
+test_status_model_explains_setup_reader_and_tray (__main__.ApplicationTests.test_status_model_explains_setup_reader_and_tray) ... ok
+test_status_window_refreshes_sessions_and_reader_while_open (__main__.ApplicationTests.test_status_window_refreshes_sessions_and_reader_while_open)
+Acceptance 2026-11-19: opened at startup with an empty state, the window kept ... ok
+test_status_window_start_button_initializes_and_has_done_button (__main__.ApplicationTests.test_status_window_start_button_initializes_and_has_done_button) ... ok
+test_synchronous_autostart_work_reraises_failure (__main__.ApplicationTests.test_synchronous_autostart_work_reraises_failure) ... ok
+test_tray_hint_only_when_icon_is_hidden (__main__.ApplicationTests.test_tray_hint_only_when_icon_is_hidden) ... ok
+test_voice_settings_cancel_and_rerecord_never_apply_partial_chords (__main__.ApplicationTests.test_voice_settings_cancel_and_rerecord_never_apply_partial_chords) ... ok
+test_voice_settings_destroy_unhooks_and_rerecord_creates_new_capture (__main__.ApplicationTests.test_voice_settings_destroy_unhooks_and_rerecord_creates_new_capture) ... ok
+test_voice_settings_focus_loss_discards_incomplete_chord_without_refocusing (__main__.ApplicationTests.test_voice_settings_focus_loss_discards_incomplete_chord_without_refocusing) ... ok
+test_voice_settings_native_error_disables_save_and_keeps_dialog_open (__main__.ApplicationTests.test_voice_settings_native_error_disables_save_and_keeps_dialog_open) ... ok
+test_voice_settings_offers_and_persists_single_tap (__main__.ApplicationTests.test_voice_settings_offers_and_persists_single_tap) ... ok
+test_voice_settings_records_chord_then_saves_selected_mode_and_closes (__main__.ApplicationTests.test_voice_settings_records_chord_then_saves_selected_mode_and_closes) ... ok
+test_voice_shortcut_bad_config_and_invalid_chord_preserve_file_and_desktop (__main__.ApplicationTests.test_voice_shortcut_bad_config_and_invalid_chord_preserve_file_and_desktop) ... ok
+test_voice_shortcut_changes_are_blocked_while_voice_is_active (__main__.ApplicationTests.test_voice_shortcut_changes_are_blocked_while_voice_is_active) ... ok
+test_voice_shortcut_save_default_mode_and_restart_read (__main__.ApplicationTests.test_voice_shortcut_save_default_mode_and_restart_read) ... ok
+test_voice_shortcut_save_failure_rolls_back_memory_and_preserves_existing_config (__main__.ApplicationTests.test_voice_shortcut_save_failure_rolls_back_memory_and_preserves_existing_config) ... ok
+test_voice_shortcut_save_preserves_other_hub_config_and_applies_immediately (__main__.ApplicationTests.test_voice_shortcut_save_preserves_other_hub_config_and_applies_immediately) ... ok
+test_disable_delete_failure_still_removes_run_and_raises (__main__.AutostartTests.test_disable_delete_failure_still_removes_run_and_raises) ... ok
+test_disable_removes_task_and_run_and_reports_surviving_task (__main__.AutostartTests.test_disable_removes_task_and_run_and_reports_surviving_task) ... ok
+test_frozen_launch_command_quotes_exe_without_python (__main__.AutostartTests.test_frozen_launch_command_quotes_exe_without_python) ... ok
+test_launch_target_separates_command_arguments_and_working_directory (__main__.AutostartTests.test_launch_target_separates_command_arguments_and_working_directory) ... ok
+test_login_registration_uses_background_and_upgrades_legacy_value (__main__.AutostartTests.test_login_registration_uses_background_and_upgrades_legacy_value) ... ok
+test_matching_task_preserves_stale_run_path (__main__.AutostartTests.test_matching_task_preserves_stale_run_path) ... ok
+test_matching_task_removes_only_owned_run_without_create (__main__.AutostartTests.test_matching_task_removes_only_owned_run_without_create) ... ok
+test_refresh_timeout_is_cached_and_enabled_does_not_repeat_io (__main__.AutostartTests.test_refresh_timeout_is_cached_and_enabled_does_not_repeat_io) ... ok
+test_register_and_unregister_only_agentdeck_value (__main__.AutostartTests.test_register_and_unregister_only_agentdeck_value) ... ok
+test_set_enabled_falls_back_and_propagates_registry_failure (__main__.AutostartTests.test_set_enabled_falls_back_and_propagates_registry_failure) ... 计划任务不可用，保留注册表自启：拒绝访问
+ok
+test_sid_is_computed_only_when_building_task (__main__.AutostartTests.test_sid_is_computed_only_when_building_task) ... ok
+test_snapshot_and_describe_do_not_wait_for_scheduler_lock (__main__.AutostartTests.test_snapshot_and_describe_do_not_wait_for_scheduler_lock) ... ok
+test_source_launch_command_uses_pythonw_and_absolute_script (__main__.AutostartTests.test_source_launch_command_uses_pythonw_and_absolute_script) ... ok
+test_stale_autostart_path_is_not_reported_as_current (__main__.AutostartTests.test_stale_autostart_path_is_not_reported_as_current) ... ok
+test_upgrade_accepts_all_current_run_forms_and_verifies_before_delete (__main__.AutostartTests.test_upgrade_accepts_all_current_run_forms_and_verifies_before_delete) ... ok
+test_upgrade_create_failure_preserves_quoted_run_fallback (__main__.AutostartTests.test_upgrade_create_failure_preserves_quoted_run_fallback) ... ok
+test_upgrade_query_failure_does_not_treat_unreadable_task_as_missing (__main__.AutostartTests.test_upgrade_query_failure_does_not_treat_unreadable_task_as_missing) ... ok
+test_upgrade_readback_mismatch_preserves_run (__main__.AutostartTests.test_upgrade_readback_mismatch_preserves_run) ... ok
+test_upgrade_respects_off_stale_run_and_foreign_or_disabled_task (__main__.AutostartTests.test_upgrade_respects_off_stale_run_and_foreign_or_disabled_task) ... ok
+test_upgrade_retries_after_prior_create_denial (__main__.AutostartTests.test_upgrade_retries_after_prior_create_denial) ... ok
+test_source_console_streams_are_retained_without_native_calls (__main__.CliOutputTests.test_source_console_streams_are_retained_without_native_calls) ... ok
+test_windowed_build_attaches_existing_parent_console_when_handles_absent (__main__.CliOutputTests.test_windowed_build_attaches_existing_parent_console_when_handles_absent) ... ok
+test_windowed_build_reuses_inherited_pipe_without_attaching_console (__main__.CliOutputTests.test_windowed_build_reuses_inherited_pipe_without_attaching_console) ... ok
+test_defaults_copied_into_temporary_home_once (__main__.ConfigTests.test_defaults_copied_into_temporary_home_once) ... ok
+test_frozen_defaults_come_from_bundle (__main__.ConfigTests.test_frozen_defaults_come_from_bundle) ... ok
+test_invalid_preferences_fail_with_clear_error (__main__.ConfigTests.test_invalid_preferences_fail_with_clear_error) ... ok
+test_keymap_has_twenty_positions_and_four_separate_knobs (__main__.ConfigTests.test_keymap_has_twenty_positions_and_four_separate_knobs) ... ok
+test_keymap_uses_selected_profile_and_live_user_values (__main__.ConfigTests.test_keymap_uses_selected_profile_and_live_user_values) ... ok
+test_preferences_remember_projects_and_dismissal (__main__.ConfigTests.test_preferences_remember_projects_and_dismissal) ... ok
+test_prepare_configs_keeps_edited_v5_byte_identical (__main__.ConfigTests.test_prepare_configs_keeps_edited_v5_byte_identical) ... ok
+test_prepare_configs_upgrades_untouched_v5_and_keeps_original_backup (__main__.ConfigTests.test_prepare_configs_upgrades_untouched_v5_and_keeps_original_backup) ... ok
+test_session_label_prefers_title_and_bounds_its_length (__main__.ConfigTests.test_session_label_prefers_title_and_bounds_its_length) ... ok
+test_source_resource_path_is_independent_of_current_directory (__main__.ConfigTests.test_source_resource_path_is_independent_of_current_directory) ... ok
+test_primary_launch_calls_in_process_hub_with_required_inputs_and_ui_factory (__main__.EntryPointTests.test_primary_launch_calls_in_process_hub_with_required_inputs_and_ui_factory) ... ok
+test_secondary_launch_never_loads_configuration_or_starts_hub (__main__.EntryPointTests.test_secondary_launch_never_loads_configuration_or_starts_hub) ... ok
+test_moved_bundle_repairs_both_configs_once_without_confirmation (__main__.GlobalRepairTests.test_moved_bundle_repairs_both_configs_once_without_confirmation) ... ok
+test_partial_or_absent_installation_is_not_enabled_automatically (__main__.GlobalRepairTests.test_partial_or_absent_installation_is_not_enabled_automatically) ... ok
+test_repair_failure_is_logged_without_interrupting_startup (__main__.GlobalRepairTests.test_repair_failure_is_logged_without_interrupting_startup) ... ok
+test_source_launch_never_rewrites_global_paths (__main__.GlobalRepairTests.test_source_launch_never_rewrites_global_paths) ... ok
+test_init_simulation_skips_autostart_but_installs_hooks (__main__.HomeGuardTests.test_init_simulation_skips_autostart_but_installs_hooks) ... ok
+test_simulated_home_never_touches_scheduler_or_registry (__main__.HomeGuardTests.test_simulated_home_never_touches_scheduler_or_registry) ... ok
+test_uninstall_with_simulated_home_uses_exploding_defaults_safely (__main__.HomeGuardTests.test_uninstall_with_simulated_home_uses_exploding_defaults_safely) ... ok
+test_backup_failure_stops_install_and_startup_and_does_not_mark_initialized (__main__.InitializationTests.test_backup_failure_stops_install_and_startup_and_does_not_mark_initialized) ... ok
+test_cli_failure_reports_to_stderr_without_a_dialog (__main__.InitializationTests.test_cli_failure_reports_to_stderr_without_a_dialog) ... ok
+test_cli_init_and_uninstall_are_mutually_exclusive (__main__.InitializationTests.test_cli_init_and_uninstall_are_mutually_exclusive) ... ok
+test_cli_init_and_uninstall_bypass_all_runtime_and_gui_startup (__main__.InitializationTests.test_cli_init_and_uninstall_bypass_all_runtime_and_gui_startup) ... ok
+test_cli_uninstall_failure_keeps_completion_marker_and_startup (__main__.InitializationTests.test_cli_uninstall_failure_keeps_completion_marker_and_startup) ... ok
+test_hook_install_failure_does_not_enable_startup_or_mark_initialized (__main__.InitializationTests.test_hook_install_failure_does_not_enable_startup_or_mark_initialized) ... ok
+test_initialization_backs_up_migrates_preserves_settings_and_is_idempotent (__main__.InitializationTests.test_initialization_backs_up_migrates_preserves_settings_and_is_idempotent) ... ok
+test_startup_failure_can_be_retried_without_duplicate_hooks (__main__.InitializationTests.test_startup_failure_can_be_retried_without_duplicate_hooks) ... ok
+test_listener_accepts_fragmented_show_message_and_acknowledges (__main__.InstanceTests.test_listener_accepts_fragmented_show_message_and_acknowledges) ... ok
+test_non_collision_bind_failure_propagates (__main__.InstanceTests.test_non_collision_bind_failure_propagates) ... ok
+test_owner_binds_loopback_and_closes_listener (__main__.InstanceTests.test_owner_binds_loopback_and_closes_listener) ... ok
+test_second_instance_requests_show_and_exits_without_listener_thread (__main__.InstanceTests.test_second_instance_requests_show_and_exits_without_listener_thread) ... ok
+test_unrelated_port_owner_is_an_error_not_a_second_hub (__main__.InstanceTests.test_unrelated_port_owner_is_an_error_not_a_second_hub) ... ok
+test_untouched_v3_keymap_is_upgraded_and_edited_one_kept (__main__.KeymapUpgradeTests.test_untouched_v3_keymap_is_upgraded_and_edited_one_kept) ... ok
+test_callback_exception_unhooks_and_is_contained (__main__.NativeShortcutCaptureTests.test_callback_exception_unhooks_and_is_contained) ... ok
+test_extended_control_alt_and_shift_scan_preserve_sides (__main__.NativeShortcutCaptureTests.test_extended_control_alt_and_shift_scan_preserve_sides) ... ok
+test_foreground_loss_unhooks_and_never_swallows_another_windows_input (__main__.NativeShortcutCaptureTests.test_foreground_loss_unhooks_and_never_swallows_another_windows_input) ... ok
+test_install_failure_never_owns_or_intercepts_keyboard (__main__.NativeShortcutCaptureTests.test_install_failure_never_owns_or_intercepts_keyboard) ... ok
+test_keyup_without_owned_keydown_passes_through (__main__.NativeShortcutCaptureTests.test_keyup_without_owned_keydown_passes_through) ... ok
+test_negative_hook_code_and_injected_events_pass_through (__main__.NativeShortcutCaptureTests.test_negative_hook_code_and_injected_events_pass_through) ... ok
+test_ordinary_chord_is_suppressed_and_close_unhooks_once (__main__.NativeShortcutCaptureTests.test_ordinary_chord_is_suppressed_and_close_unhooks_once) ... ok
+test_hub_runtime_uses_supplied_ui_factory_and_stops_server (__main__.OverlayReadyTests.test_hub_runtime_uses_supplied_ui_factory_and_stops_server) ... 2026-11-20 08:18:43,192 agentdeck.hub WARNING Cannot load sessions from C:\Users\king\AppData\Local\Temp\tmptssroalh\.agentdeck\sessions.json: [Errno 2] No such file or directory: 'C:\\Users\\king\\AppData\\Local\\Temp\\tmptssroalh\\.agentdeck\\sessions.json'
+2026-11-20 08:18:43,213 agentdeck.hub INFO Hub listening on 127.0.0.1:47800 (none)
+ok
+test_ready_callback_failure_closes_native_window_and_destroys_tk (__main__.OverlayReadyTests.test_ready_callback_failure_closes_native_window_and_destroys_tk) ... ok
+test_ready_callback_runs_after_setup_before_mainloop_on_caller_thread (__main__.OverlayReadyTests.test_ready_callback_runs_after_setup_before_mainloop_on_caller_thread) ... ok
+test_create_timeout_still_removes_temporary_file (__main__.SchedulerTests.test_create_timeout_still_removes_temporary_file) ... ok
+test_create_writes_utf16_bom_and_always_removes_temporary_xml (__main__.SchedulerTests.test_create_writes_utf16_bom_and_always_removes_temporary_xml) ... ok
+test_delete_checks_presence_after_nonzero_without_parsing_localized_error (__main__.SchedulerTests.test_delete_checks_presence_after_nonzero_without_parsing_localized_error) ... ok
+test_module_guards_reject_uninjected_os_adapters (__main__.SchedulerTests.test_module_guards_reject_uninjected_os_adapters) ... ok
+test_query_decodes_oem_bytes_missing_and_timeout (__main__.SchedulerTests.test_query_decodes_oem_bytes_missing_and_timeout) ... ok
+test_task_matches_exported_defaults_account_name_and_oem_path (__main__.SchedulerTests.test_task_matches_exported_defaults_account_name_and_oem_path) ... ok
+test_xml_has_per_user_interactive_trigger_normal_priority_and_all_settings (__main__.SchedulerTests.test_xml_has_per_user_interactive_trigger_normal_priority_and_all_settings) ... ok
+test_chord_is_complete_only_after_every_key_is_released (__main__.ShortcutRecordingTests.test_chord_is_complete_only_after_every_key_is_released) ... ok
+test_modifier_only_chord_preserves_sides (__main__.ShortcutRecordingTests.test_modifier_only_chord_preserves_sides) ... ok
+test_ordinary_key_and_unknown_release (__main__.ShortcutRecordingTests.test_ordinary_key_and_unknown_release) ... ok
+test_right_modifier_with_main_key_keeps_its_specific_virtual_key (__main__.ShortcutRecordingTests.test_right_modifier_with_main_key_keeps_its_specific_virtual_key) ... ok
+test_single_side_modifier_is_not_discarded (__main__.ShortcutRecordingTests.test_single_side_modifier_is_not_discarded) ... ok
+test_empty_status_and_tooltip (__main__.StatusTests.test_empty_status_and_tooltip) ... ok
+test_error_has_priority_over_waiting (__main__.StatusTests.test_error_has_priority_over_waiting) ... ok
+test_idle_and_completed_sessions_keep_gray_icon (__main__.StatusTests.test_idle_and_completed_sessions_keep_gray_icon) ... ok
+test_label_falls_back_to_name_then_cwd (__main__.StatusTests.test_label_falls_back_to_name_then_cwd) ... ok
+test_label_includes_chinese_state_tool_and_project (__main__.StatusTests.test_label_includes_chinese_state_tool_and_project) ... ok
+test_locked_and_pending_requests_count_as_waiting_sessions (__main__.StatusTests.test_locked_and_pending_requests_count_as_waiting_sessions) ... ok
+test_running_sessions_are_green (__main__.StatusTests.test_running_sessions_are_green) ... ok
+test_waiting_overrides_running_without_double_counting (__main__.StatusTests.test_waiting_overrides_running_without_double_counting) ... ok
+test_other_tray_messages_do_not_rebuild_menu (__main__.TrayMessageTests.test_other_tray_messages_do_not_rebuild_menu) ... ok
+test_right_click_refreshes_before_opening_menu_on_same_thread (__main__.TrayMessageTests.test_right_click_refreshes_before_opening_menu_on_same_thread) ... ok
+
+----------------------------------------------------------------------
+Ran 140 tests in 1.519s
+
+OK
+
+{"file": "test_agentdeck_app.py", "exit": 0, "seconds": 2.373}
+
+$ python pc/test_hub_app_switch.py
+test_feedback_names_approval_voice_and_shared_controls (__main__.AppSwitchTests.test_feedback_names_approval_voice_and_shared_controls) ... ok
+test_invalid_arguments_and_active_voice_do_not_dispatch (__main__.AppSwitchTests.test_invalid_arguments_and_active_voice_do_not_dispatch) ... ok
+test_missing_window_error_uses_requested_feedback (__main__.AppSwitchTests.test_missing_window_error_uses_requested_feedback) ... Desktop action failed: 没找到 Claude 桌面版窗口
+USB hid:0x09 (F; 旋钮 1 顺时针) app next blocked: 没找到 Claude 桌面版窗口
+ok
+test_next_prev_preserve_selected_slot_and_dispatch_snapshot (__main__.AppSwitchTests.test_next_prev_preserve_selected_slot_and_dispatch_snapshot) ... ok
+test_no_sessions_still_dispatches_for_desktop_window_fallback (__main__.AppSwitchTests.test_no_sessions_still_dispatches_for_desktop_window_fallback) ... ok
+test_raw_input_refuses_both_app_directions_and_names_control (__main__.AppSwitchTests.test_raw_input_refuses_both_app_directions_and_names_control) ... Raw Input hid:0x09 (F; 旋钮 1 顺时针) app next blocked: keys leak into the window under Raw Input; install WinUSB
+Raw Input hid:0x16 (S; 旋钮 1 逆时针) app prev blocked: keys leak into the window under Raw Input; install WinUSB
+ok
+test_raw_input_refuses_both_window_directions (__main__.AppSwitchTests.test_raw_input_refuses_both_window_directions) ... Raw Input hid:0x09 (F; 旋钮 1 顺时针) window next blocked: keys leak into the window under Raw Input; install WinUSB
+Raw Input hid:0x16 (S; 旋钮 1 逆时针) window prev blocked: keys leak into the window under Raw Input; install WinUSB
+ok
+test_usb_knob_reports_dispatch_window_and_name_both_directions (__main__.AppSwitchTests.test_usb_knob_reports_dispatch_window_and_name_both_directions) ... ok
+test_window_dispatch_without_sessions_preserves_selection (__main__.AppSwitchTests.test_window_dispatch_without_sessions_preserves_selection) ... ok
+test_window_invalid_arguments_and_voice_are_rejected (__main__.AppSwitchTests.test_window_invalid_arguments_and_voice_are_rejected) ... ok
+test_long_shared_control_feedback_wraps_and_keeps_header_buttons_visible (__main__.FeedbackLayoutTests.test_long_shared_control_feedback_wraps_and_keeps_header_buttons_visible) ... ok
+test_custom_v6_bindings_hotkeys_and_profiles_stay_byte_identical (__main__.V8MigrationTests.test_custom_v6_bindings_hotkeys_and_profiles_stay_byte_identical) ... ok
+test_custom_v7_bindings_hotkeys_and_profiles_stay_byte_identical (__main__.V8MigrationTests.test_custom_v7_bindings_hotkeys_and_profiles_stay_byte_identical) ... ok
+test_v6_untouched_upgrade_backup_and_idempotence (__main__.V8MigrationTests.test_v6_untouched_upgrade_backup_and_idempotence) ... ok
+test_v7_untouched_upgrade_keeps_original_backup_and_is_idempotent (__main__.V8MigrationTests.test_v7_untouched_upgrade_keeps_original_backup_and_is_idempotent) ... ok
+
+----------------------------------------------------------------------
+Ran 15 tests in 1.384s
+
+OK
+
+{"file": "test_hub_app_switch.py", "exit": 0, "seconds": 2.13}
+
+$ python pc/test_hub_keypad.py
+test_both_paths_failing_reports_closed_window (__main__.DesktopFocusTests.test_both_paths_failing_reports_closed_window) ... ok
+test_closed_handle_falls_back_to_title_matching (__main__.DesktopFocusTests.test_closed_handle_falls_back_to_title_matching) ... ok
+test_handle_focuses_a_window_whose_title_lacks_the_project (__main__.DesktopFocusTests.test_handle_focuses_a_window_whose_title_lacks_the_project) ... ok
+test_nav_keys_and_scroll_go_through_focus (__main__.DesktopFocusTests.test_nav_keys_and_scroll_go_through_focus) ... ok
+test_only_integer_handles_count_as_a_shared_binding (__main__.DesktopFocusTests.test_only_integer_handles_count_as_a_shared_binding) ... ok
+test_reused_handle_of_another_program_is_not_trusted (__main__.DesktopFocusTests.test_reused_handle_of_another_program_is_not_trusted) ... ok
+test_shared_binding_matching_its_own_handle_keeps_bound_window (__main__.DesktopFocusTests.test_shared_binding_matching_its_own_handle_keeps_bound_window) ... ok
+test_shared_host_prefers_each_sessions_unique_terminal (__main__.DesktopFocusTests.test_shared_host_prefers_each_sessions_unique_terminal) ... ok
+test_shared_host_without_a_unique_match_keeps_bound_window (__main__.DesktopFocusTests.test_shared_host_without_a_unique_match_keeps_bound_window) ... ok
+test_unshared_binding_never_tries_title_matching (__main__.DesktopFocusTests.test_unshared_binding_never_tries_title_matching) ... ok
+test_arrows_only_while_the_agent_asks (__main__.NavScrollActionTests.test_arrows_only_while_the_agent_asks) ... ok
+test_default_keymap_knobs_three_and_four_from_usb_reports (__main__.NavScrollActionTests.test_default_keymap_knobs_three_and_four_from_usb_reports) ... ok
+test_desktop_without_support_reports_unavailable (__main__.NavScrollActionTests.test_desktop_without_support_reports_unavailable) ... ok
+test_native_permission_dialog_and_permission_notification_block_nav (__main__.NavScrollActionTests.test_native_permission_dialog_and_permission_notification_block_nav) ... ok
+test_nav_returns_409_over_http_while_a_request_is_pending (__main__.NavScrollActionTests.test_nav_returns_409_over_http_while_a_request_is_pending) ... ok
+test_pending_request_blocks_nav_and_desktop_is_not_called (__main__.NavScrollActionTests.test_pending_request_blocks_nav_and_desktop_is_not_called) ... ok
+test_scroll_arguments (__main__.NavScrollActionTests.test_scroll_arguments) ... ok
+test_shipped_keymap_and_upgrade_from_v3_and_v4 (__main__.NavScrollActionTests.test_shipped_keymap_and_upgrade_from_v3_and_v4) ... ok
+test_voice_active_blocks_nav_and_scroll (__main__.NavScrollActionTests.test_voice_active_blocks_nav_and_scroll) ... ok
+test_activity_shows_in_gray_while_running (__main__.OverlayRenderTests.test_activity_shows_in_gray_while_running) ... ok
+test_preview_configured_only_on_change_and_hidden_for_a_request (__main__.OverlayRenderTests.test_preview_configured_only_on_change_and_hidden_for_a_request) ... ok
+test_waiting_row_preview_and_red_banner (__main__.OverlayRenderTests.test_waiting_row_preview_and_red_banner) ... ok
+test_first_waiting_session_without_selection_and_same_window_flag (__main__.PreviewTests.test_first_waiting_session_without_selection_and_same_window_flag) ... ok
+test_kinds_activity_and_wait_flags (__main__.PreviewTests.test_kinds_activity_and_wait_flags) ... ok
+test_long_text_is_capped_and_preview_bounded (__main__.PreviewTests.test_long_text_is_capped_and_preview_bounded) ... ok
+test_preview_hidden_while_the_same_session_shows_a_request (__main__.PreviewTests.test_preview_hidden_while_the_same_session_shows_a_request) ... ok
+test_stop_reply_reaches_state_and_preview (__main__.PreviewTests.test_stop_reply_reaches_state_and_preview) ... ok
+test_wrap_tail (__main__.PreviewTests.test_wrap_tail) ... ok
+test_dangerous_keys_are_marked_in_keymap_window_docs_and_manual (__main__.RawInputGuardTests.test_dangerous_keys_are_marked_in_keymap_window_docs_and_manual) ... ok
+test_docs_follow_the_measured_layout (__main__.RawInputGuardTests.test_docs_follow_the_measured_layout) ... ok
+test_overlay_banner_for_raw_input_is_red_and_at_the_top (__main__.RawInputGuardTests.test_overlay_banner_for_raw_input_is_red_and_at_the_top) ... ok
+test_paste_enter_voice_screenshot_refused_with_the_banner_text (__main__.RawInputGuardTests.test_paste_enter_voice_screenshot_refused_with_the_banner_text) ... Raw Input hid:0x10 (M; 第 3 排第 2 颗) prompt continue blocked: keys leak into the window under Raw Input; install WinUSB
+Raw Input hid:0x10 (M; 第 3 排第 2 颗) nav enter blocked: keys leak into the window under Raw Input; install WinUSB
+Raw Input hid:0x10 (M; 第 3 排第 2 颗) nav down blocked: keys leak into the window under Raw Input; install WinUSB
+Raw Input hid:0x10 (M; 第 3 排第 2 颗) voice_down blocked: keys leak into the window under Raw Input; install WinUSB
+Raw Input hid:0x10 (M; 第 3 排第 2 颗) voice blocked: keys leak into the window under Raw Input; install WinUSB
+Raw Input hid:0x10 (M; 第 3 排第 2 颗) screenshot blocked: keys leak into the window under Raw Input; install WinUSB
+ok
+test_usb_reads_and_harmless_raw_actions_still_work (__main__.RawInputGuardTests.test_usb_reads_and_harmless_raw_actions_still_work) ... ok
+test_hub_accepts_the_relay_body_end_to_end (__main__.RelayBodyTests.test_hub_accepts_the_relay_body_end_to_end) ... ok
+test_preview_fields_survive_and_are_capped (__main__.RelayBodyTests.test_preview_fields_survive_and_are_capped) ... ok
+test_covered_points_are_skipped_and_all_covered_is_an_error (__main__.WheelTests.test_covered_points_are_skipped_and_all_covered_is_an_error) ... ok
+test_negative_virtual_desktop_origin_and_foreground_change (__main__.WheelTests.test_negative_virtual_desktop_origin_and_foreground_change) ... ok
+test_scroll_end_is_one_hundred_notches_and_up_is_positive (__main__.WheelTests.test_scroll_end_is_one_hundred_notches_and_up_is_positive) ... ok
+test_scroll_one_moves_wheels_and_returns_in_one_batch (__main__.WheelTests.test_scroll_one_moves_wheels_and_returns_in_one_batch) ... ok
+test_send_key_marks_arrows_extended_and_compares_handles_only (__main__.WheelTests.test_send_key_marks_arrows_extended_and_compares_handles_only) ... ok
+test_event_stores_and_refreshes_a_valid_handle_only (__main__.WindowBindingTests.test_event_stores_and_refreshes_a_valid_handle_only) ... ok
+test_shared_binding_with_a_boolean_focus_result_keeps_shared_feedback (__main__.WindowBindingTests.test_shared_binding_with_a_boolean_focus_result_keeps_shared_feedback) ... ok
+test_shared_binding_with_a_distinct_focused_window_has_normal_feedback (__main__.WindowBindingTests.test_shared_binding_with_a_distinct_focused_window_has_normal_feedback) ... ok
+test_slot_in_a_shared_window_says_it_can_only_bring_it_forward (__main__.WindowBindingTests.test_slot_in_a_shared_window_says_it_can_only_bring_it_forward)
+Acceptance 2026-11-19: every Claude Code session hosted in the Claude desktop ... ok
+
+----------------------------------------------------------------------
+Ran 44 tests in 1.762s
+
+OK
+
+{"file": "test_hub_keypad.py", "exit": 0, "seconds": 2.591}
+
+$ python pc/test_hub_tk_wake.py
+test_background_state_failure_is_consumed_and_retried (__main__.PollReceiptTests.test_background_state_failure_is_consumed_and_retried) ... ok
+test_each_poll_acknowledges_before_its_next_state_request (__main__.PollReceiptTests.test_each_poll_acknowledges_before_its_next_state_request) ... ok
+test_failed_submission_clears_pending_and_retries (__main__.PollReceiptTests.test_failed_submission_clears_pending_and_retries) ... ok
+test_hidden_poll_hides_before_its_next_state_request (__main__.PollReceiptTests.test_hidden_poll_hides_before_its_next_state_request) ... ok
+test_render_failure_still_submits_next_state_request (__main__.PollReceiptTests.test_render_failure_still_submits_next_state_request) ... ok
+test_missing_handle_and_non_windows_do_not_post (__main__.TkWakerTests.test_missing_handle_and_non_windows_do_not_post) ... ok
+test_overlay_without_waker_returns_false (__main__.TkWakerTests.test_overlay_without_waker_returns_false) ... ok
+test_periodic_posts_and_idempotent_stop (__main__.TkWakerTests.test_periodic_posts_and_idempotent_stop) ... ok
+test_post_exception_does_not_end_thread (__main__.TkWakerTests.test_post_exception_does_not_end_thread) ... ok
+test_setup_failure_also_stops_waker_before_destroy (__main__.VirtualDeviceWakeTests.test_setup_failure_also_stops_waker_before_destroy) ... ok
+test_waker_stops_before_destroy (__main__.VirtualDeviceWakeTests.test_waker_stops_before_destroy) ... ok
+test_stalled_target_wakes_on_every_check_and_stops_on_recovery (__main__.WatchdogWakeTests.test_stalled_target_wakes_on_every_check_and_stops_on_recovery) ... ok
+test_wake_runs_outside_lock_and_exceptions_preserve_warning (__main__.WatchdogWakeTests.test_wake_runs_outside_lock_and_exceptions_preserve_warning) ... ok
+test_main_does_not_wake_healthy_overlay (__main__.WatchdogWiringTests.test_main_does_not_wake_healthy_overlay) ... 2026-11-20 08:18:51,104 agentdeck.hub WARNING Cannot load sessions from C:\Users\king\AppData\Local\Temp\tmpzj7cuuk5\.agentdeck\sessions.json: [Errno 2] No such file or directory: 'C:\\Users\\king\\AppData\\Local\\Temp\\tmpzj7cuuk5\\.agentdeck\\sessions.json'
+2026-11-20 08:18:51,137 agentdeck.hub INFO Hub listening on 127.0.0.1:64625 (none)
+ok
+test_main_wakes_stalled_direct_overlay (__main__.WatchdogWiringTests.test_main_wakes_stalled_direct_overlay) ... 2026-11-20 08:18:51,785 agentdeck.hub WARNING Cannot load sessions from C:\Users\king\AppData\Local\Temp\tmpp6dvtqcx\.agentdeck\sessions.json: [Errno 2] No such file or directory: 'C:\\Users\\king\\AppData\\Local\\Temp\\tmpp6dvtqcx\\.agentdeck\\sessions.json'
+2026-11-20 08:18:51,803 agentdeck.hub INFO Hub listening on 127.0.0.1:64639 (none)
+ok
+test_main_wakes_stalled_tray_overlay (__main__.WatchdogWiringTests.test_main_wakes_stalled_tray_overlay) ... 2026-11-20 08:18:55,910 agentdeck.hub WARNING Cannot load sessions from C:\Users\king\AppData\Local\Temp\tmpxik5el0i\.agentdeck\sessions.json: [Errno 2] No such file or directory: 'C:\\Users\\king\\AppData\\Local\\Temp\\tmpxik5el0i\\.agentdeck\\sessions.json'
+2026-11-20 08:18:55,927 agentdeck.hub INFO Hub listening on 127.0.0.1:64663 (none)
+ok
+test_bare_tk_without_waker_reproduces_block (__main__.WindowsMessageWakeTests.test_bare_tk_without_waker_reproduces_block) ... ok
+test_overlay_wakes_blocked_getmessage_and_resumes_heartbeats (__main__.WindowsMessageWakeTests.test_overlay_wakes_blocked_getmessage_and_resumes_heartbeats) ... ok
+
+----------------------------------------------------------------------
+Ran 18 tests in 18.999s
+
+OK
+
+{"file": "test_hub_tk_wake.py", "exit": 0, "seconds": 19.745}
+
+$ python pc/test_hub_daily_fixes.py
+test_blocked_read_does_not_block_first_step_and_late_read_anchors (__main__.DailyFixTests.test_blocked_read_does_not_block_first_step_and_late_read_anchors) ... ok
+test_config_passes_release_timeout_and_knob_divider_to_runtime (__main__.DailyFixTests.test_config_passes_release_timeout_and_knob_divider_to_runtime) ... 2026-11-20 08:19:08,492 agentdeck.hub INFO Hub listening on 127.0.0.1:<MagicMock name='HubServer().server_port' id='1879225168768'> (usb)
+ok
+test_cycle_never_activates_or_invokes_but_press_still_does (__main__.DailyFixTests.test_cycle_never_activates_or_invokes_but_press_still_does) ... ok
+test_empty_approval_and_blocked_navigation_publish_compact_feedback (__main__.DailyFixTests.test_empty_approval_and_blocked_navigation_publish_compact_feedback) ... 2026-11-20 08:19:08,505 agentdeck.hub INFO USB hid:0x0A (第 2 排第 1 颗) -> {'action': 'approve', 'request_id': None, 'status': 'no_request'}
+2026-11-20 08:19:08,505 agentdeck.hub INFO USB hid:0x0A (第 2 排第 1 颗) -> {'action': 'deny', 'request_id': None, 'status': 'no_request'}
+2026-11-20 08:19:08,505 agentdeck.hub WARNING USB hid:0x0F (L; 第 3 排第 1 颗 / 旋钮 1 按下) nav up blocked: nav up/down works only while the agent asks a question
+ok
+test_hotkeys_publish_the_same_compact_and_cycle_metadata (__main__.DailyFixTests.test_hotkeys_publish_the_same_compact_and_cycle_metadata) ... ok
+test_new_sessions_keep_their_positions_during_rotation (__main__.DailyFixTests.test_new_sessions_keep_their_positions_during_rotation) ... ok
+test_overlay_actions_need_no_session_or_desktop (__main__.DailyFixTests.test_overlay_actions_need_no_session_or_desktop) ... ok
+test_rotation_and_overlay_share_frozen_order_until_five_second_pause (__main__.DailyFixTests.test_rotation_and_overlay_share_frozen_order_until_five_second_pause) ... ok
+test_second_step_or_other_action_invalidates_late_read (__main__.DailyFixTests.test_second_step_or_other_action_invalidates_late_read) ... ok
+test_shutdown_during_background_read_never_creates_uia_after_close (__main__.DailyFixTests.test_shutdown_during_background_read_never_creates_uia_after_close) ... 2026-11-20 08:19:08,542 agentdeck.hub WARNING Cannot read current Claude session: desktop is closed
+ok
+test_usb_filter_is_applied_to_real_dispatch_and_leaves_buttons_alone (__main__.DailyFixTests.test_usb_filter_is_applied_to_real_dispatch_and_leaves_buttons_alone) ... 2026-11-20 08:19:08,545 agentdeck.hub INFO USB hid:0x15 (旋钮 2 顺时针) -> <Mock name='mock.action()' id='1879226222976'>
+2026-11-20 08:19:08,546 agentdeck.hub INFO USB hid:0x14 (旋钮 2 按下) -> <Mock name='mock.action()' id='1879226222976'>
+ok
+
+----------------------------------------------------------------------
+Ran 11 tests in 0.088s
+
+OK
+
+{"file": "test_hub_daily_fixes.py", "exit": 0, "seconds": 0.775}

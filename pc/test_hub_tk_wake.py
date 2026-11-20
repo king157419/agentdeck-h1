@@ -213,6 +213,7 @@ class WatchdogWiringTests(unittest.TestCase):
 class PollReceiptTests(unittest.TestCase):
     def make_overlay(self):
         engine = FakeHub()
+        engine.value["overlay_pinned"] = True
         entered = threading.Event()
 
         def slow_state():
@@ -223,6 +224,8 @@ class PollReceiptTests(unittest.TestCase):
 
         engine.state = slow_state
         overlay = Overlay(engine, window=Mock())
+        overlay.hidden = False
+        overlay.state = dict(engine.value)
         overlay.root = Mock()
         overlay.root.state.return_value = "normal"
         overlay._render = Mock()
@@ -253,6 +256,8 @@ class PollReceiptTests(unittest.TestCase):
 
     def test_hidden_poll_hides_before_its_next_state_request(self):
         overlay, engine = self.make_overlay()
+        engine.value["overlay_pinned"] = False
+        overlay.state = dict(engine.value)
         overlay.hidden = True
         counts = []
         for _ in range(3):
@@ -286,8 +291,11 @@ class PollReceiptTests(unittest.TestCase):
 
     def test_background_state_failure_is_consumed_and_retried(self):
         engine = FakeHub()
+        engine.value["overlay_pinned"] = True
         engine.state = Mock(side_effect=[RuntimeError("injected state failure"), engine.value])
         overlay = Overlay(engine, window=Mock())
+        overlay.hidden = False
+        overlay.state = dict(engine.value)
         overlay.root = Mock()
         overlay.root.state.return_value = "normal"
         overlay._render = Mock()

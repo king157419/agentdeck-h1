@@ -54,8 +54,11 @@ class AppSwitchTests(unittest.TestCase):
         self.desktop.app.assert_not_called()
 
     def test_usb_knob_reports_dispatch_window_and_name_both_directions(self):
+        clock = [self.engine.monotonic()]
+        self.engine.monotonic = lambda: clock[0]
         keys = hub.USBKeys(self.engine)
         for usage, direction, name in ((0x09, "next", "顺时针"), (0x16, "prev", "逆时针")):
+            clock[0] += .13  # A deliberate reversal, not an encoder bounce.
             event = next(iter(ReportState().feed(bytes([0, 0, usage, 0, 0, 0, 0, 0]))))
             with self.assertLogs("agentdeck.hub", "INFO") as logs:
                 keys(dict(event, t=self.engine.monotonic()))

@@ -1,7 +1,7 @@
 """Overlay and UI-loop regressions (F1, F2, F3, F5 show key, F6).
 
 Pure tests use substitutes. The marked live tests open a real Tk overlay for a
-few seconds and read Raw Input from the macropad (read-only, never USB/0xFF00).
+few seconds; keyboard, driver discovery and registry access use substitutes.
 They use a temporary home and a random port, never the running AgentDeck.
 Set AGENTDECK_SOAK_SECONDS to lengthen the soak (default 6).
 """
@@ -59,10 +59,11 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(model["empty_text"], "")
         self.assertEqual(display_model({})["empty_text"], EMPTY_TEXT)
 
-    def test_key_feedback_lasts_two_seconds(self):
+    def test_key_feedback_lasts_three_seconds(self):
         state = {"last_input": {"text": "槽位 1 没有会话", "ok": False, "at": 100.0}}
-        self.assertEqual(display_model(state, now=101.0)["feedback"], {"text": "槽位 1 没有会话", "ok": False})
-        self.assertIsNone(display_model(state, now=102.5)["feedback"])
+        self.assertEqual(display_model(state, now=102.5)["feedback"],
+                         {"text": "槽位 1 没有会话", "ok": False, "compact": False})
+        self.assertIsNone(display_model(state, now=103.0)["feedback"])
         self.assertIsNone(display_model(state)["feedback"])
 
     def test_reader_notice_only_for_raw_input(self):
@@ -130,17 +131,17 @@ class PollTests(unittest.TestCase):
         overlay.root.after.assert_called_once()
 
     def test_show_key_unhides_overlay(self):
-        hub_ = FakeHub({"sessions": [], "show_requests": 3})
+        hub_ = FakeHub({"sessions": [], "show_requests": 0})
         overlay = Overlay(hub_, window=Mock())
         overlay.root = Mock()
         overlay.root.state.return_value = "withdrawn"
         overlay.hidden = True
         with patch.object(overlay, "_render"), patch.object(overlay, "show") as show:
-            overlay._poll()  # first value is only remembered
+            overlay._poll()  # no explicit show request at startup
             show.assert_not_called()
-            hub_.value["show_requests"] = 4
+            hub_.value["show_requests"] = 1
             overlay._poll()
-            show.assert_called_once_with()
+            show.assert_called_once()
 
 
 class FakeUI:
@@ -200,7 +201,8 @@ class LiveOverlayTests(unittest.TestCase):
         styles = []
         watchdog = Watchdog()
         with tempfile.TemporaryDirectory() as directory:
-            overlay = Overlay(FakeHub({"sessions": [{"slot": 1, "name": "demo", "state": "think"}]}),
+            overlay = Overlay(FakeHub({"sessions": [{"slot": 1, "name": "demo", "state": "think"}],
+                                       "overlay_pinned": True}),
                               state_path=Path(directory) / "overlay.json")
             overlay.heartbeat = lambda: watchdog.beat("UI")
 
@@ -410,13 +412,40 @@ class RealTkWindowTests(unittest.TestCase):
             self.assertEqual(refresh_timers(), [])
 
 
-@unittest.skipUnless(sys.platform == "win32", "Raw Input soak")
 class SoakTests(unittest.TestCase):
     """F2: the app spawns no child processes (each spawn shows a busy cursor)."""
 
-    def test_hub_with_real_keyboard_reader_spawns_nothing(self):
-        # Real reader on purpose: it guards against driver detection spawning
-        # PowerShell again. Raw Input and the registry are only read.
+    def test_hub_with_isolated_keyboard_reader_spawns_nothing(self):
+        # Keep the real reader coordinator and retry/poll loop, substituting all
+        # native endpoints so this regression never opens a device or registry.
+        class FakeUSB:
+            def __init__(self, callback, **kwargs):
+                self.heartbeat = None
+
+            def open(self):
+                raise AssertionError("HidUsb must not open the USB endpoint")
+
+            def run(self, **kwargs):
+                raise AssertionError("USB reads must stay isolated")
+
+            def stop(self):
+                pass
+
+            def close(self):
+                pass
+
+        class FakeRaw:
+            def __init__(self, callback, *, poll, **kwargs):
+                self.poll = poll
+                self.stopped = threading.Event()
+
+            def run(self):
+                while not self.stopped.wait(0.05):
+                    self.poll()
+
+            def stop(self):
+                self.stopped.set()
+
         spawned = []
         real_popen = subprocess.Popen
 
@@ -426,13 +455,19 @@ class SoakTests(unittest.TestCase):
 
         polls = max(1, int(SOAK_SECONDS / 0.3))
         uis = []
-        with patch("subprocess.Popen", side_effect=refuse), self.assertNoLogs("agentdeck.hub.watchdog", "WARNING"):
+        with patch("deck_usb.USBInput", side_effect=FakeUSB) as usb, patch(
+                "deck_input.RawInput", side_effect=FakeRaw) as raw, patch(
+                "deck_usb.interface0_driver", return_value="hidusb") as driver, patch(
+                "subprocess.Popen", side_effect=refuse), self.assertNoLogs("agentdeck.hub.watchdog", "WARNING"):
             with tempfile.TemporaryDirectory() as home:
                 code = hub.main(["--backend", "usb", "--overlay", "--no-lcd", "--no-desktop", "--port", "0",
                                  "--home", home], ui_factory=lambda engine: uis.append(FakeUI(engine, polls)) or uis[-1])
         self.assertIs(subprocess.Popen, real_popen)
         self.assertEqual(code, 0)
         self.assertEqual(spawned, [])
+        usb.assert_called_once()
+        raw.assert_called_once()
+        driver.assert_called()
         readers = {state.get("input_reader") for state in uis[0].states}
         self.assertTrue(readers <= {None, "raw", "usb", "absent"}, readers)
 

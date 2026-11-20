@@ -567,10 +567,13 @@ class NavScrollActionTests(HubCase):
     def test_default_keymap_knobs_three_and_four_from_usb_reports(self):
         self.event("SessionStart")
         self.event("PreToolUse", tool_name="AskUserQuestion", tool_input={"questions": []})
-        callback = hub.USBKeys(self.engine)
         parser = ReportState()
+        clock = [self.engine.monotonic()]
+        self.engine.monotonic = lambda: clock[0]
+        callback = hub.USBKeys(self.engine)
 
         def press(report):
+            clock[0] += .13  # Intentional reversal, outside the 120 ms bounce window.
             for event in parser.feed(bytes(report)):
                 callback(dict(event, t=self.engine.monotonic()))
             for event in parser.feed(bytes(8)):

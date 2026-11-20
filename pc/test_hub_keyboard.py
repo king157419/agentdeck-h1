@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 import hub
 from deck_usb import ReportState
 import deck_input
-from hub_keyboard import KeyboardInput, RawKeys, VKEY_USAGES
+from hub_keyboard import KeyboardInput, KnobDetents, RawKeys, VKEY_USAGES
 from test_deck_input import Backend
 
 
@@ -22,6 +22,66 @@ def report(*keys, bits=0):
 
 def ordinary(events):
     return [e for e in events if not e.get("modifier")]
+
+
+class KnobDetentTests(unittest.TestCase):
+    def test_each_knob_drops_a_fast_reverse_without_changing_the_last_step(self):
+        for clockwise, reverse, _ in hub.KNOBS:
+            with self.subTest(clockwise=clockwise):
+                detents = KnobDetents()
+                self.assertTrue(detents.accept(clockwise, 0.0))
+                self.assertTrue(detents.accept(clockwise, .05))
+                self.assertFalse(detents.accept(reverse, .15))
+                self.assertTrue(detents.accept(clockwise, .16))
+                self.assertFalse(detents.accept(reverse, .27))
+                self.assertTrue(detents.accept(reverse, .28))
+
+    def test_reverse_at_exactly_120ms_is_allowed(self):
+        detents = KnobDetents()
+        self.assertTrue(detents.accept("hid:0x15", 0.0))
+        self.assertFalse(detents.accept("hid:0x13", .119))
+        self.assertTrue(detents.accept("hid:0x13", .120))
+
+    def test_each_knob_has_independent_direction_and_divider(self):
+        detents = KnobDetents({"1": 2, "2": 3})
+        self.assertFalse(detents.accept("hid:0x09", 0.0))
+        self.assertFalse(detents.accept("hid:0x15", .01))
+        self.assertTrue(detents.accept("hid:0x30", .02))
+        self.assertTrue(detents.accept("hid:0x09", .03))
+        self.assertFalse(detents.accept("hid:0x15", .04))
+        self.assertTrue(detents.accept("hid:0x15", .05))
+        self.assertFalse(detents.accept("hid:0x09", .06))
+        self.assertTrue(detents.accept("hid:0x09", .07))
+
+    def test_divider_resets_partial_count_when_direction_changes(self):
+        detents = KnobDetents({"2": 2})
+        self.assertFalse(detents.accept("hid:0x15", 0.0))
+        self.assertFalse(detents.accept("hid:0x13", .01))
+        self.assertTrue(detents.accept("hid:0x13", .02))
+        self.assertFalse(detents.accept("hid:0x15", .13))
+        self.assertFalse(detents.accept("hid:0x15", .15))
+        self.assertTrue(detents.accept("hid:0x15", .16))
+
+    def test_buttons_and_modifier_chords_are_not_filtered(self):
+        detents = KnobDetents({"1": 4, "2": 4, "3": 4, "4": 4})
+        bindings = [keys[2] for keys in hub.KNOBS]
+        bindings += ["hid:0x08", "ctrl+hid:0x09", "ctrl+hid:0x13", "F13"]
+        for binding in bindings:
+            with self.subTest(binding=binding):
+                self.assertTrue(detents.accept(binding, 0.0))
+                self.assertTrue(detents.accept(binding, .01))
+
+    def test_shared_p_key_is_filtered_as_knob_two(self):
+        detents = KnobDetents({"2": 2})
+        self.assertFalse(detents.accept("hid:0x13", 0.0))
+        self.assertTrue(detents.accept("hid:0x13", .01))
+        self.assertFalse(detents.accept("hid:0x15", .02))
+
+    def test_invalid_dividers_fail_before_input_is_read(self):
+        for config in ([], 1, {"0": 2}, {"5": 2}, {"1": 0}, {"2": -1},
+                       {"1": True}, {"1": 1.5}, {"1": "2"}):
+            with self.subTest(config=config), self.assertRaisesRegex(ValueError, "knob_divider"):
+                KnobDetents(config)
 
 
 class AdapterTests(unittest.TestCase):

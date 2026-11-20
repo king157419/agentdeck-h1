@@ -101,8 +101,11 @@ class HotkeyKeys:
         if not callable(note):
             return
         try:
-            from hub import describe_input
-            note(*describe_input(action, result, error))
+            from hub import Hub, describe_input
+            if isinstance(self.hub, Hub):
+                self.hub.note_action(action, result, error)
+            else:
+                note(*describe_input(action, result, error))
         except Exception as failure:
             log.debug("Hotkey feedback unavailable: %s", failure)
 
