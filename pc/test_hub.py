@@ -284,6 +284,8 @@ class HubTests(unittest.TestCase):
         self.decision(first_result, "deny")
 
     def test_slot_numbers_stay_stable_and_released_slot_is_reused(self):
+        # Equal activity timestamps use the fixed hardware slot as a tie-breaker.
+        self.engine.wall_time = lambda: 1000.0
         for sid in ("one", "two", "three"):
             self.event("SessionStart", sid)
         self.event("SessionEnd", "two")
@@ -419,12 +421,12 @@ class HubTests(unittest.TestCase):
         self.assertTrue(thread.is_alive())
         self.assertEqual(result, [])
 
-    def test_idle_sessions_expire_only_after_six_hours_and_clear_lcd_selection(self):
+    def test_idle_sessions_expire_only_after_idle_limit_and_clear_lcd_selection(self):
         wall = Clock()
         self.engine.wall_time = wall
         self.event("SessionStart", "stale")
         self.engine.gate_passed[(("cc", "stale"), "old-command")] = self.clock()
-        wall.value += 6 * 60 * 60
+        wall.value += hub.SESSION_IDLE_SECONDS
         self.engine.maintain()
         self.assertIn(("cc", "stale"), self.engine.sessions)
         self.calls.clear()
@@ -439,7 +441,7 @@ class HubTests(unittest.TestCase):
         self.assertEqual(self.engine.gate_passed, {})
         self.assertEqual(self.calls, ["end cc-stale", "focus -"])
 
-    def test_six_hour_expiry_preserves_pending_locked_and_voice_sessions(self):
+    def test_idle_expiry_preserves_pending_locked_and_voice_sessions(self):
         wall = Clock()
         self.engine.wall_time = wall
         thread, result = self.permission("pending")
@@ -450,7 +452,7 @@ class HubTests(unittest.TestCase):
         self.event("SessionStart", "idle")
         before = self.engine.state()
         self.calls.clear()
-        wall.value += 6 * 60 * 60 + 1
+        wall.value += hub.SESSION_IDLE_SECONDS + 1
 
         self.engine.maintain()
         state = self.engine.state()
@@ -468,12 +470,12 @@ class HubTests(unittest.TestCase):
         self.assertNotIn(("cc", "voice"), self.engine.sessions)
         self.assertEqual(self.engine.selected, ("cc", "pending"))
 
-    def test_six_hour_expiry_uses_last_update_and_runs_during_state_poll(self):
+    def test_idle_expiry_uses_last_update_and_runs_during_state_poll(self):
         wall = Clock()
         self.engine.wall_time = wall
         self.event("SessionStart", "stale")
         self.event("SessionStart", "fresh")
-        wall.value += 6 * 60 * 60 - 1
+        wall.value += hub.SESSION_IDLE_SECONDS - 1
         self.event("UserPromptSubmit", "fresh")
         wall.value += 2
 

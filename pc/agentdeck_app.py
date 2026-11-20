@@ -53,12 +53,13 @@ GUIDE_FALLBACK = """让宏键盘不再打字：装 WinUSB 驱动
 """
 # Default bindings of earlier keymap versions, as changes from the shipped
 # default; None means absent in that version. User edits are never upgraded.
+V7_CHANGED = {"hid:0x16": "app prev", "hid:0x09": "app next"}
 V6_CHANGED = {"hid:0x16": "cycle -1", "hid:0x09": "cycle +1"}
 V5_CHANGED = dict(V6_CHANGED, **{"hid:0x06": None, "hid:0x16": "cycle +1", "hid:0x09": "cycle -1"})
 V4_CHANGED = dict(V5_CHANGED, **{"hid:0x2D": "cycle +1", "hid:0x2E": "cycle -1", "hid:0x30": "cycle +1",
               "hid:0x2F": "cycle -1", "hid:0x19": "prompt summary", "ctrl+hid:0x27": "prompt continue"})
 V3_CHANGED = dict(V4_CHANGED, **{"hid:0x14": "prompt tests"})
-OLD_DEFAULTS = {3: V3_CHANGED, 4: V4_CHANGED, 5: V5_CHANGED, 6: V6_CHANGED}
+OLD_DEFAULTS = {3: V3_CHANGED, 4: V4_CHANGED, 5: V5_CHANGED, 6: V6_CHANGED, 7: V7_CHANGED}
 # Keys whose own letters are harmful when they leak into an agent window (Raw Input).
 DANGER_KEYS = {"Ctrl+C": "危险：漏键会打断", "Ctrl+D": "危险：连按两次会退出",
                "Ctrl+V": "危险：漏键会粘贴"}
@@ -135,7 +136,7 @@ def upgrade_keymap(target, source):
                        if value is not None}
         if current.get("bindings") != old_default:
             return False  # the user edited it: never overwrite
-        if version == 6 and any(current.get(key) != shipped.get(key) for key in
+        if version >= 6 and any(current.get(key) != shipped.get(key) for key in
                                 (set(current) | set(shipped)) - {"version", "bindings", "_instructions"}):
             return False  # custom hotkeys/profiles are user edits too
         backup = target.with_name(target.name + ".bak-v%d" % version)
@@ -218,7 +219,8 @@ def tray_status(state):
 def session_label(session):
     return "%s %s %s" % (STATES.get(session.get("state"), session.get("state", "")),
                           TOOLS.get(session.get("agent"), session.get("agent", "Agent")),
-                          session.get("project") or session.get("name") or session.get("cwd", ""))
+                          (session.get("title") or session.get("project") or session.get("name")
+                           or session.get("cwd", ""))[:48])
 
 
 def keymap_model(config, profile="default"):
@@ -1026,7 +1028,9 @@ class TrayApplication:
             knobs.columnconfigure(number, weight=1, uniform="knob")
             card = tk.Frame(knobs, bg=theme.SURFACE, padx=theme.S3, pady=theme.S3)
             card.grid(row=0, column=number, padx=theme.S1, sticky="nsew")
-            theme.label(card, "旋钮 %d" % (number + 1), color=theme.TEXT, size=10, bold=True,
+            usage = (" · 切窗口" if (cw, ccw) == ("window next", "window prev") else
+                     " · 选会话 / 按下切过去" if (cw, ccw, press) == ("cycle +1", "cycle -1", "show") else "")
+            theme.label(card, "旋钮 %d%s" % (number + 1, usage), color=theme.TEXT, size=10, bold=True,
                         bg=theme.SURFACE).pack(anchor="w")
             for mark, value in (("顺", cw), ("逆", ccw), ("按", press)):
                 theme.label(card, "%s  %s" % (mark, value), color=theme.MUTED, size=9, bg=theme.SURFACE,

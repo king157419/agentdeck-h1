@@ -12,7 +12,8 @@ import time
 # _body(); dropping tool_response and cutting replies/prompts to TEXT_LIMIT keeps
 # huge payloads (60 KB answers, 1 MiB tool output) far below the hub's body limit.
 ORDINARY_KEYS = ("hook_event_name", "session_id", "thread_id", "conversation_id", "cwd",
-                 "tool_name", "notification_type", "agentdeck_window", "agent_id")
+                 "tool_name", "notification_type", "agentdeck_window", "agent_id",
+                 "transcript_path", "session_title")  # hub reads the Claude sidebar title from these
 MESSAGE_LIMIT = 300
 TEXT_LIMIT = 4000            # last reply / prompt kept for the overlay preview
 CONNECT_TIMEOUT = 0.1        # unknown hub state: a listening loopback port accepts in ms

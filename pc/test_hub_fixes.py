@@ -406,7 +406,7 @@ class RelayStartTests(unittest.TestCase):
         hub_relay.relay(event, "cc", home=self.home, connection_factory=lambda *args, **kwargs: connection)
         body = json.loads(connection.request.call_args.kwargs["body"])
         self.assertEqual(body, {"hook_event_name": "PostToolUse", "session_id": "x", "cwd": "D:/a",
-                                "tool_name": "Read",
+                                "tool_name": "Read", "transcript_path": "C:/t.jsonl",
                                 "tool_input_hash": hub.tool_input_hash({"file_path": "a"})})
 
 

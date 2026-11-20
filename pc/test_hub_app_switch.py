@@ -1,4 +1,4 @@
-"""Offline app dispatch, measured control feedback and v6 migration regressions."""
+"""Offline app/window dispatch, measured feedback and keymap migration."""
 import json
 from pathlib import Path
 import tempfile
@@ -17,6 +17,7 @@ class AppSwitchTests(unittest.TestCase):
         self.addCleanup(folder.cleanup)
         self.desktop = Mock(voice_active=False)
         self.desktop.app.return_value = True
+        self.desktop.window.return_value = True
         self.engine = hub.Hub(desktop=self.desktop, home=Path(folder.name), lcd_enabled=False)
         self.addCleanup(self.engine.close)
 
@@ -52,16 +53,33 @@ class AppSwitchTests(unittest.TestCase):
                 self.engine.action({"action": action})
         self.desktop.app.assert_not_called()
 
-    def test_usb_knob_reports_dispatch_app_and_name_both_directions(self):
+    def test_usb_knob_reports_dispatch_window_and_name_both_directions(self):
         keys = hub.USBKeys(self.engine)
         for usage, direction, name in ((0x09, "next", "顺时针"), (0x16, "prev", "逆时针")):
             event = next(iter(ReportState().feed(bytes([0, 0, usage, 0, 0, 0, 0, 0]))))
             with self.assertLogs("agentdeck.hub", "INFO") as logs:
                 keys(dict(event, t=self.engine.monotonic()))
-            text = "旋钮 1 %s → Claude：%s一个会话" % (name, "下" if direction == "next" else "上")
+            text = "旋钮 1 %s → 切到%s一个窗口" % (name, "下" if direction == "next" else "上")
             self.assertEqual(self.engine.state()["last_input"]["text"], text)
             self.assertIn("旋钮 1 " + name, "\n".join(logs.output))
-            self.assertEqual(self.desktop.app.call_args.args[-1], direction)
+            self.assertEqual(self.desktop.window.call_args.args[-1], direction)
+
+    def test_window_dispatch_without_sessions_preserves_selection(self):
+        for direction in ("next", "prev"):
+            result = self.engine.action({"action": "window " + direction})
+            self.assertEqual(result, {"action": "window", "status": "sent"})
+            self.desktop.window.assert_called_with(None, [], direction)
+            self.assertIsNone(self.engine.selected)
+
+    def test_window_invalid_arguments_and_voice_are_rejected(self):
+        for action in ("window", "window forward", "window next extra"):
+            with self.subTest(action=action), self.assertRaisesRegex(hub.HubError, "window needs next or prev"):
+                self.engine.action({"action": action})
+        self.desktop.voice_active = True
+        for action in ("window next", "window prev"):
+            with self.assertRaisesRegex(hub.HubError, "release voice"):
+                self.engine.action({"action": action})
+        self.desktop.window.assert_not_called()
 
     def test_raw_input_refuses_both_app_directions_and_names_control(self):
         keys = hub.USBKeys(self.engine)
@@ -71,6 +89,15 @@ class AppSwitchTests(unittest.TestCase):
             self.assertEqual(last["text"], hub.control_name(binding) + " → " + hub.LEAK_TEXT)
             self.assertFalse(last["ok"])
         self.desktop.app.assert_not_called()
+
+    def test_raw_input_refuses_both_window_directions(self):
+        keys = hub.USBKeys(self.engine)
+        for binding, direction in (("hid:0x09", "next"), ("hid:0x16", "prev")):
+            self.assertFalse(keys._dispatch(binding, "window " + direction, {}, self.engine.monotonic(), "Raw Input"))
+            last = self.engine.state()["last_input"]
+            self.assertEqual(last["text"], hub.control_name(binding) + " → " + hub.LEAK_TEXT)
+            self.assertFalse(last["ok"])
+        self.desktop.window.assert_not_called()
 
     def test_missing_window_error_uses_requested_feedback(self):
         self.desktop.app.side_effect = RuntimeError("没找到 Claude 桌面版窗口")
@@ -126,7 +153,43 @@ class FeedbackLayoutTests(unittest.TestCase):
         self.assertFalse(overlay.feedback_label.winfo_ismapped())
 
 
-class V7MigrationTests(unittest.TestCase):
+class V8MigrationTests(unittest.TestCase):
+    def test_v7_untouched_upgrade_keeps_original_backup_and_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            target = app.data_dir(home) / "hub_keys.json"
+            target.parent.mkdir()
+            shipped = hub.load_json(app.resource_dir() / "hub_keys.json")
+            original = json.dumps(dict(shipped, version=7,
+                                       bindings=dict(shipped["bindings"], **app.V7_CHANGED)), indent=3).encode("utf-8")
+            target.write_bytes(original)
+            app.prepare_configs(home)
+            self.assertEqual(hub.load_json(target), shipped)
+            self.assertEqual(shipped["version"], 8)
+            backup = target.with_name("hub_keys.json.bak-v7")
+            self.assertEqual(backup.read_bytes(), original)
+            app.prepare_configs(home)
+            self.assertEqual(backup.read_bytes(), original)
+            self.assertFalse(app.upgrade_keymap(target, app.resource_dir() / "hub_keys.json"))
+
+    def test_custom_v7_bindings_hotkeys_and_profiles_stay_byte_identical(self):
+        source = app.resource_dir() / "hub_keys.json"
+        for section in ("bindings", "hotkey", "v2_emulation"):
+            with self.subTest(section=section), tempfile.TemporaryDirectory() as directory:
+                old = hub.load_json(source)
+                old["version"] = 7
+                old["bindings"].update(app.V7_CHANGED)
+                if section == "v2_emulation":
+                    old[section]["bindings"]["hid:0x08"] = "slot 6"
+                else:
+                    old[section]["hid:0x08" if section == "bindings" else "F13"] = "slot 6"
+                original = json.dumps(old, indent=3).encode("utf-8")
+                target = Path(directory) / "hub_keys.json"
+                target.write_bytes(original)
+                self.assertFalse(app.upgrade_keymap(target, source))
+                self.assertEqual(target.read_bytes(), original)
+                self.assertFalse(target.with_name("hub_keys.json.bak-v7").exists())
+
     def test_v6_untouched_upgrade_backup_and_idempotence(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)

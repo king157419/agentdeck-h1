@@ -8,7 +8,7 @@ root = Path(SPECPATH)
 pc = root / "pc"
 icon = str(pc / "agentdeck.ico")
 data = [(str(pc / name), ".") for name in
-        ("hub_keys.json", "hub_prompts.json", "agentdeck.ico")]
+        ("hub_keys.json", "hub_prompts.json", "agentdeck.ico", "claude_uia.ps1")]
 data.append((str(root / "agentdeck" / "装驱动.md"), "."))  # tray: 装驱动说明
 data += collect_data_files("libusb_package")
 binaries = collect_dynamic_libs("libusb_package")
@@ -22,7 +22,7 @@ app = Analysis(
     datas=data,
     hiddenimports=["pystray._win32", "PIL.ImageTk", "tkinter", "tkinter.filedialog",
                    "tkinter.messagebox", "usb.backend.libusb1", "libusb_package",
-                   "deck_input", "hub_keyboard"],
+                   "deck_input", "hub_keyboard", "claude_uia", "hub_window_switch", "session_titles"],
     hookspath=[], hooksconfig={}, runtime_hooks=[], excludes=excludes,
     noarchive=False, optimize=0,
 )

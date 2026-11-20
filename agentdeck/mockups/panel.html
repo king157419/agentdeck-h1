@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgentDeck 面板效果图</title>
+<style>
+:root{
+  --bg:#f4f4f5; --win:#ffffff; --side:#fafafa; --line:#e7e7ea; --line2:#efeff1;
+  --text:#18181b; --sub:#71717a; --faint:#a1a1aa;
+  --accent:#4f46e5; --accent-soft:#eef2ff;
+  --run:#3b82f6; --done:#16a34a; --wait:#f59e0b; --err:#ef4444; --idle:#a1a1aa;
+  --cap:#fbfbfc; --cap-edge:#dcdce0;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+  font:14px/1.5 "Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI","PingFang SC",sans-serif;
+  -webkit-font-smoothing:antialiased;padding:32px 16px 64px}
+h1{font-size:15px;font-weight:600;color:var(--sub);margin:40px auto 14px;max-width:1040px;letter-spacing:.02em}
+h1:first-child{margin-top:0}
+.win{max-width:1040px;margin:0 auto;background:var(--win);border:1px solid var(--line);border-radius:12px;
+  box-shadow:0 1px 2px rgba(0,0,0,.04),0 12px 32px rgba(0,0,0,.06);overflow:hidden}
+.bar{display:flex;align-items:center;gap:14px;height:48px;padding:0 16px;border-bottom:1px solid var(--line)}
+.brand{font-weight:600;font-size:14px}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--sub);
+  padding:3px 10px;border:1px solid var(--line);border-radius:999px;background:#fff}
+.dot{width:8px;height:8px;border-radius:50%;flex:none}
+.spacer{flex:1}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;font-size:12.5px}
+.seg span{padding:4px 10px;color:var(--sub)}
+.seg span.on{background:var(--text);color:#fff}
+.seg-label{font-size:12.5px;color:var(--sub)}
+
+/* A */
+.a{display:grid;grid-template-columns:360px 1fr;min-height:560px}
+.sessions{border-right:1px solid var(--line);background:var(--side);padding:10px}
+.sec{font-size:12px;color:var(--faint);padding:8px 10px 6px}
+.row{display:grid;grid-template-columns:10px 1fr auto;gap:10px;align-items:start;padding:10px;border-radius:8px}
+.row+.row{margin-top:2px}
+.row .dot{margin-top:7px}
+.row .t{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .m{font-size:12.5px;color:var(--sub)}
+.row .ago{font-size:12px;color:var(--faint);margin-top:2px}
+.row.sel{background:#fff;box-shadow:0 0 0 1px var(--line),0 1px 2px rgba(0,0,0,.04)}
+.row.open .t::after{content:"Claude 里正打开";font-size:11px;font-weight:500;color:var(--accent);
+  background:var(--accent-soft);border-radius:4px;padding:1px 6px;margin-left:8px;vertical-align:1px}
+.ask{grid-column:2/4;margin-top:8px;background:#fff7e6;border:1px solid #fde7b0;border-radius:8px;padding:8px 10px}
+.ask code{font:12.5px/1.5 "Cascadia Mono",Consolas,monospace;color:#7c4a03}
+.keys{display:flex;gap:8px;margin-top:8px;font-size:12px;color:var(--sub)}
+.k{display:inline-flex;align-items:center;gap:6px}
+.kc{display:inline-grid;place-items:center;min-width:22px;height:20px;padding:0 5px;border:1px solid var(--cap-edge);
+  border-bottom-width:2px;border-radius:5px;background:#fff;font-size:11px;color:var(--text)}
+
+.device{padding:22px 28px;display:grid;grid-template-columns:auto 1fr;gap:28px;align-items:start}
+.pad{background:#f6f6f7;border:1px solid var(--line);border-radius:16px;padding:16px}
+.knobs{display:grid;grid-template-columns:repeat(4,64px);gap:10px;margin-bottom:14px}
+.knob{height:64px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#fff,#e9e9ec 70%);
+  border:1px solid var(--cap-edge);display:grid;place-items:center;text-align:center;font-size:11px;line-height:1.25;color:var(--sub)}
+.grid{display:grid;grid-template-columns:repeat(4,64px);gap:10px}
+.cap{height:64px;border-radius:10px;background:var(--cap);border:1px solid var(--cap-edge);border-bottom-width:3px;
+  display:grid;place-items:center;text-align:center;font-size:12px;line-height:1.25;padding:4px;color:var(--text)}
+.cap.empty{color:var(--faint);background:#f3f3f4}
+.cap.slot{box-shadow:inset 0 -3px 0 var(--c)}
+.cap.on,.knob.on{outline:2px solid var(--accent);outline-offset:2px}
+.cap.hot{background:#eef2ff;border-color:#c7d2fe}
+.detail h3{margin:0 0 4px;font-size:16px}
+.detail .where{color:var(--sub);font-size:13px;margin-bottom:16px}
+.field{border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.opt{display:flex;align-items:center;gap:10px;padding:10px 12px;border-top:1px solid var(--line2);font-size:13.5px}
+.opt:first-child{border-top:0}
+.radio{width:14px;height:14px;border-radius:50%;border:1.5px solid var(--cap-edge)}
+.opt.on .radio{border:4px solid var(--accent)}
+.opt .d{color:var(--faint);font-size:12px;margin-left:auto}
+.live{margin-top:18px;font-size:12.5px;color:var(--sub);display:flex;align-items:center;gap:8px}
+
+/* B */
+.tabs{display:flex;gap:4px;padding:10px 16px 0;border-bottom:1px solid var(--line)}
+.tab{padding:8px 12px;font-size:13.5px;color:var(--sub);border-bottom:2px solid transparent;margin-bottom:-1px}
+.tab.on{color:var(--text);border-color:var(--text);font-weight:500}
+.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;padding:18px 16px}
+.card{border:1px solid var(--line);border-radius:12px;padding:14px;min-height:132px;display:flex;flex-direction:column;gap:6px;position:relative}
+.card .top{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--sub)}
+.card .t{font-weight:600;font-size:15px}
+.card .s{font-size:13px;color:var(--sub)}
+.card .bind{margin-top:auto;font-size:12px;color:var(--faint);display:flex;align-items:center;gap:6px}
+.card.waiting{border-color:#fcd34d;background:#fffbeb}
+.card.sel{box-shadow:0 0 0 2px var(--accent)}
+.card.empty{border-style:dashed;color:var(--faint);align-items:center;justify-content:center}
+.strip{display:flex;align-items:center;gap:12px;padding:0 16px 18px;color:var(--sub);font-size:12.5px}
+
+/* overlay */
+.ov-wrap{max-width:1040px;margin:0 auto;display:grid;grid-template-columns:repeat(3,1fr);gap:16px;
+  background:linear-gradient(135deg,#dfe3ea,#cfd6e0);border-radius:12px;padding:28px}
+.ov{background:rgba(255,255,255,.92);backdrop-filter:blur(12px);border:1px solid rgba(0,0,0,.06);border-radius:14px;
+  box-shadow:0 8px 28px rgba(0,0,0,.14);padding:12px 14px;align-self:start}
+.ov .h{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--sub)}
+.ov .t{font-weight:600;margin-top:2px}
+.ov code{display:block;margin-top:8px;font:12.5px/1.5 "Cascadia Mono",Consolas,monospace;background:#f4f4f5;border-radius:6px;padding:6px 8px}
+.ov.danger code{background:#fef2f2;color:#991b1b}
+.toast{display:flex;align-items:center;gap:10px;border-radius:999px;padding:8px 14px}
+.cap-note{max-width:1040px;margin:10px auto 0;font-size:12.5px;color:var(--sub)}
+@media (max-width:860px){.a,.device{grid-template-columns:1fr}.sessions{border-right:0;border-bottom:1px solid var(--line)}
+  .cards,.ov-wrap{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<h1>方案 A：会话在左，键盘在右（点一颗键，右边改它的功能）</h1>
+<div class="win">
+  <div class="bar">
+    <span class="brand">AgentDeck</span>
+    <span class="pill"><span class="dot" style="background:var(--done)"></span>宏键盘已连接</span>
+    <span class="spacer"></span>
+    <span class="seg-label">拦截批准</span>
+    <span class="seg"><span class="on">自动</span><span>总是</span><span>从不</span></span>
+  </div>
+  <div class="a">
+    <div class="sessions">
+      <div class="sec">最近活动</div>
+      <div class="row sel">
+        <span class="dot" style="background:var(--wait)"></span>
+        <div><div class="t">网站运营实习</div><div class="m">Claude · webip · 等你批准</div></div>
+        <div class="ago">刚刚</div>
+        <div class="ask"><code>git push origin main</code>
+          <div class="keys"><span class="k"><span class="kc">2·1</span>批准</span><span class="k"><span class="kc">2·2</span>拒绝</span></div>
+        </div>
+      </div>
+      <div class="row open">
+        <span class="dot" style="background:var(--run)"></span>
+        <div><div class="t">现状与前景讨论</div><div class="m">Claude · h1 · 思考中</div></div>
+        <div class="ago">1 分钟</div>
+      </div>
+      <div class="row">
+        <span class="dot" style="background:var(--done)"></span>
+        <div><div class="t">全书审校与排版</div><div class="m">Claude · llm · 完成</div></div>
+        <div class="ago">8 分钟</div>
+      </div>
+      <div class="row">
+        <span class="dot" style="background:var(--err)"></span>
+        <div><div class="t">xmomo 首页改版</div><div class="m">Claude · xmomo · 出错</div></div>
+        <div class="ago">25 分钟</div>
+      </div>
+      <div class="row">
+        <span class="dot" style="background:var(--idle)"></span>
+        <div><div class="t">修复登录页跳转</div><div class="m">Codex · webip · 空闲</div></div>
+        <div class="ago">1 小时</div>
+      </div>
+    </div>
+    <div class="device">
+      <div class="pad">
+        <div class="knobs">
+          <div class="knob">切窗口</div>
+          <div class="knob on">选会话</div>
+          <div class="knob">滚动</div>
+          <div class="knob">选项</div>
+        </div>
+        <div class="grid">
+          <div class="cap slot" style="--c:var(--wait)">会话 1</div>
+          <div class="cap slot" style="--c:var(--run)">会话 2</div>
+          <div class="cap slot" style="--c:var(--done)">会话 3</div>
+          <div class="cap">打断</div>
+          <div class="cap hot">批准</div>
+          <div class="cap hot">拒绝</div>
+          <div class="cap">语音</div>
+          <div class="cap empty">空</div>
+          <div class="cap">截图</div>
+          <div class="cap">继续</div>
+          <div class="cap">跑测试</div>
+          <div class="cap">总结</div>
+          <div class="cap empty">空</div>
+          <div class="cap empty">空</div>
+          <div class="cap">提交</div>
+          <div class="cap">下一个</div>
+          <div class="cap">下个待批</div>
+          <div class="cap empty">空</div>
+          <div class="cap empty">空</div>
+          <div class="cap">上一个</div>
+        </div>
+      </div>
+      <div class="detail">
+        <h3>旋钮 2</h3>
+        <div class="where">左上第 2 个旋钮</div>
+        <div class="field">
+          <div class="opt on"><span class="radio"></span>选会话，按下切过去<span class="d">默认</span></div>
+          <div class="opt"><span class="radio"></span>切窗口（Alt+Tab）</div>
+          <div class="opt"><span class="radio"></span>滚动当前对话</div>
+          <div class="opt"><span class="radio"></span>调整思考强度</div>
+          <div class="opt"><span class="radio"></span>自定义快捷键…</div>
+        </div>
+        <div class="live"><span class="dot" style="background:var(--accent)"></span>你按哪颗，图上哪颗就亮</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<h1>方案 B：会话卡片为主，键位放第二页</h1>
+<div class="win">
+  <div class="bar">
+    <span class="brand">AgentDeck</span>
+    <span class="pill"><span class="dot" style="background:var(--done)"></span>宏键盘已连接</span>
+    <span class="spacer"></span>
+    <span class="seg-label">拦截批准</span>
+    <span class="seg"><span class="on">自动</span><span>总是</span><span>从不</span></span>
+  </div>
+  <div class="tabs"><span class="tab on">会话</span><span class="tab">键位</span><span class="tab">语音与截图</span></div>
+  <div class="cards">
+    <div class="card waiting sel">
+      <div class="top"><span class="dot" style="background:var(--wait)"></span>等你批准 · 刚刚</div>
+      <div class="t">网站运营实习</div>
+      <div class="s">git push origin main</div>
+      <div class="bind"><span class="kc">1·1</span>会话 1</div>
+    </div>
+    <div class="card">
+      <div class="top"><span class="dot" style="background:var(--run)"></span>思考中 · 1 分钟</div>
+      <div class="t">现状与前景讨论</div>
+      <div class="s">Claude · h1</div>
+      <div class="bind"><span class="kc">1·2</span>会话 2</div>
+    </div>
+    <div class="card">
+      <div class="top"><span class="dot" style="background:var(--done)"></span>完成 · 8 分钟</div>
+      <div class="t">全书审校与排版</div>
+      <div class="s">Claude · llm</div>
+      <div class="bind"><span class="kc">1·3</span>会话 3</div>
+    </div>
+    <div class="card">
+      <div class="top"><span class="dot" style="background:var(--err)"></span>出错 · 25 分钟</div>
+      <div class="t">xmomo 首页改版</div>
+      <div class="s">Claude · xmomo</div>
+      <div class="bind">旋钮 2 可选到</div>
+    </div>
+    <div class="card">
+      <div class="top"><span class="dot" style="background:var(--idle)"></span>空闲 · 1 小时</div>
+      <div class="t">修复登录页跳转</div>
+      <div class="s">Codex · webip</div>
+      <div class="bind">旋钮 2 可选到</div>
+    </div>
+    <div class="card empty">没有更多会话</div>
+  </div>
+  <div class="strip"><span class="kc">2·1</span>批准 <span class="kc">2·2</span>拒绝 <span class="kc">2·3</span>语音 <span class="kc">3·1</span>截图 <span class="spacer"></span>旋钮 1 切窗口 · 旋钮 2 选会话</div>
+</div>
+
+<h1>新浮窗：平时不显示，只在需要你时出现在屏幕右下角</h1>
+<div class="ov-wrap">
+  <div class="ov">
+    <div class="h"><span class="dot" style="background:var(--wait)"></span>等你批准 · 网站运营实习</div>
+    <code>npm install --save-dev vite</code>
+    <div class="keys"><span class="k"><span class="kc">2·1</span>批准</span><span class="k"><span class="kc">2·2</span>拒绝</span><span class="k"><span class="kc">旋钮 2</span>换一个</span></div>
+  </div>
+  <div class="ov danger">
+    <div class="h"><span class="dot" style="background:var(--err)"></span>高危 · 再按一次批准才放行</div>
+    <div class="t">现状与前景讨论</div>
+    <code>git push --force origin main</code>
+    <div class="keys"><span class="k"><span class="kc">2·1</span>再按一次</span><span class="k"><span class="kc">2·2</span>拒绝</span></div>
+  </div>
+  <div style="display:grid;gap:10px;align-self:start">
+    <div class="ov toast"><span class="dot" style="background:var(--accent)"></span>已切到：全书审校与排版</div>
+    <div class="ov toast"><span class="dot" style="background:var(--done)"></span>完成：xmomo 首页改版</div>
+    <div class="ov toast"><span class="dot" style="background:var(--sub)"></span>旋钮 2 · 3/5 修复登录页跳转</div>
+  </div>
+</div>
+<p class="cap-note">按键位置写成"排·列"，例如 2·1 是第 2 排第 1 颗。会话标题、状态都来自 Claude 侧栏和钩子，图上的数据是示例。</p>
+
+</body>
+</html>

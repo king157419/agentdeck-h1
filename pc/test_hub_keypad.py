@@ -588,10 +588,10 @@ class NavScrollActionTests(HubCase):
 
     def test_shipped_keymap_and_upgrade_from_v3_and_v4(self):
         shipped = json.loads((HERE / "hub_keys.json").read_text(encoding="utf-8"))
-        self.assertEqual(shipped["version"], 7)
+        self.assertEqual(shipped["version"], 8)
         bindings = shipped["bindings"]
         self.assertEqual({key: bindings[key] for key in app.V4_CHANGED}, {
-            "hid:0x06": "nav enter", "hid:0x16": "app prev", "hid:0x09": "app next",
+            "hid:0x06": "nav enter", "hid:0x16": "window prev", "hid:0x09": "window next",
             "hid:0x2D": "scroll 1", "hid:0x2E": "scroll -1", "hid:0x19": "scroll end",
             "hid:0x30": "nav down", "hid:0x2F": "nav up", "ctrl+hid:0x27": "nav enter"})
         for name in ("hid:0x15", "hid:0x13", "hid:0x1B"):
@@ -708,7 +708,7 @@ class RelayBodyTests(unittest.TestCase):
     def test_preview_fields_survive_and_are_capped(self):
         stop = self.body(hook_event_name="Stop", last_assistant_message="开头" + "尾" * 5000, transcript_path="x")
         self.assertEqual(stop["last_assistant_message"], "尾" * 4000)
-        self.assertNotIn("transcript_path", stop)
+        self.assertEqual(stop["transcript_path"], "x")  # hub reads the sidebar title from it
         prompt = self.body(hook_event_name="UserPromptSubmit", prompt="继续")
         self.assertEqual(prompt["prompt"], "继续")
         note = self.body(hook_event_name="Notification", title="T", message="m" * 400,

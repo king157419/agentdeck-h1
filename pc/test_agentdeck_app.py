@@ -264,7 +264,7 @@ class ConfigTests(unittest.TestCase):
         keys, _ = app.prepare_configs(home=self.home)
         self.assertEqual(keys, target)
         self.assertEqual(app.hub.load_json(keys), shipped)
-        self.assertEqual(shipped["version"], 7)
+        self.assertEqual(shipped["version"], 8)
         self.assertEqual(target.with_name("hub_keys.json.bak-v5").read_bytes(), original)
         app.prepare_configs(home=self.home)
         self.assertEqual(target.with_name("hub_keys.json.bak-v5").read_bytes(), original)
@@ -316,7 +316,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(model["rows"][3][:2], [("Ctrl", "修饰键，未绑定"), ("Shift", "修饰键，未绑定")])
         self.assertEqual(model["rows"][3][2:], [("U", "prompt commit"), ("X", "cycle +1")])
         self.assertEqual(model["rows"][4][1], ("Ctrl+C", "未绑定"))
-        self.assertEqual(model["knobs"][0], ["app next", "app prev", "screenshot"])
+        self.assertEqual(model["knobs"][0], ["window next", "window prev", "screenshot"])
         self.assertEqual(model["knobs"][3], ["nav down", "nav up", "nav enter"])
         self.assertIn("voice_down", model["rows"][1][2][1])
         self.assertIn("voice_up", model["rows"][1][2][1])
@@ -328,6 +328,13 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(app.keymap_model(config, "alternate")["rows"][0][0][1], "prompt my-template")
         with self.assertRaisesRegex(ValueError, "missing"):
             app.keymap_model(config, "missing")
+
+    def test_session_label_prefers_title_and_bounds_its_length(self):
+        session = {"agent": "cc", "state": "think", "title": "实际会话标题", "name": "h1"}
+        self.assertIn("实际会话标题", app.session_label(session))
+        self.assertNotIn("h1", app.session_label(session))
+        session["title"] = "题" * 100
+        self.assertEqual(app.session_label(session).count("题"), 48)
 
 
 class KeymapUpgradeTests(unittest.TestCase):

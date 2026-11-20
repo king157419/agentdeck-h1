@@ -165,7 +165,7 @@ def zone_models(state, now=0.0):
         color = COLORS[label]
         if label == "GATE" and not lit:
             color = DARK
-        name = str(session.get("name") or session.get("project") or "?")[:8]
+        name = str(session.get("title") or session.get("name") or session.get("project") or "?")[:8]
         zones.append({"number": number, "name": name, "label": label, "color": color,
                       "occupied": True, "selected": state.get("selected_slot") == number})
     return zones

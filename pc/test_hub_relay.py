@@ -682,7 +682,8 @@ class RelayHardeningTests(unittest.TestCase):
                  "transcript_path": "C:/private/transcript.jsonl"}
         body = json.loads(hub_relay._body(event, None, False))
         self.assertEqual(body["reason"], "r" * 64)
-        self.assertNotIn("transcript_path", body)
+        # Loopback only: the local hub reads the Claude sidebar title from this path.
+        self.assertEqual(body["transcript_path"], "C:/private/transcript.jsonl")
         self.assertNotIn("reason", json.loads(hub_relay._body(dict(event, hook_event_name="Stop"), None, False)))
         self.assertNotIn("reason", json.loads(hub_relay._body(dict(event, reason=5), None, False)))
 

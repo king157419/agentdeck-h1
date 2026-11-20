@@ -234,7 +234,7 @@ Run one AgentDeck keyboard reader at a time: use Hub's USB mode in place of
 
 ### 实测 4 列 × 5 排 宏键盘出厂键位表（USB 模式）
 
-2026-11-20 用只读 Raw Input 探针逐颗实测（按位置从上到下、从左到右，再逐个旋钮），对应 `pc/hub_keys.json` 默认 profile（v7）。
+2026-11-20 用只读 Raw Input 探针逐颗实测（按位置从上到下、从左到右，再逐个旋钮），对应 `pc/hub_keys.json` 默认 profile（v8）。
 键帽上印的字不可靠，按位置找键。历史 `v2_emulation` 的 Space/Q/V 分别选择槽位 4/5/6，Ctrl+0 为 interrupt；Ctrl+C/V 在两种 profile 中均留空：
 
 | 排 \ 列 | 第 1 列 | 第 2 列 | 第 3 列 | 第 4 列 |
@@ -245,14 +245,14 @@ Run one AgentDeck keyboard reader at a time: use Hub's USB mode in place of
 | **第 4 排** | Ctrl（只发修饰键）<br>未绑定 | Shift（只发修饰键）<br>未绑定 | U (`hid:0x18`)<br>`prompt commit`（提交） | X (`hid:0x1B`)<br>`cycle +1`（下个会话） |
 | **第 5 排** | Tab (`hid:0x2B`)<br>`next_wait`（跳到等我的会话） | Ctrl+C (`ctrl+hid:0x06`)<br>（留空）⚠ 危险键 | Ctrl+V (`ctrl+hid:0x19`)<br>（留空）⚠ 危险键 | P (`hid:0x13`)<br>`cycle -1`（上个会话） |
 
-旋钮 1：顺时针 F (`hid:0x09`) `app next`、逆时针 S (`hid:0x16`) `app prev`，在 Claude 桌面版内部切换下一个 / 上一个会话，浮窗选中会话不变；按下 L 截图。
-旋钮 2：顺时针 R (`hid:0x15`) `cycle +1`、逆时针 P (`hid:0x13`) `cycle -1`，在浮窗里选中下一个 / 上一个会话，并尝试切到它的窗口；按下 Q 显示浮窗（`show`）。
+旋钮 1：顺时针 F (`hid:0x09`) `window next`、逆时针 S (`hid:0x16`) `window prev`，用 Alt+Tab / Alt+Shift+Tab 切窗口；连续转动时每格移动一次，停转 900 毫秒松开 Alt，其他动作前和退出时也先松开；按下 L 截图。
+旋钮 2：顺时针 R (`hid:0x15`) `cycle +1`、逆时针 P (`hid:0x13`) `cycle -1`，按最近活动选会话；按下 Q（`show`）切过去并显示浮窗。Claude 桌面版通过侧栏标题直接跳到会话，其他会话激活对应窗口。
 旋钮 3：- (`hid:0x2D`) `scroll 1`、= (`hid:0x2E`) `scroll -1`（在所选会话窗口上发鼠标滚轮，往下 / 往上；哪个方向发 - 还没测准），按下 V `scroll end`（滚到底）。
 旋钮 4：] (`hid:0x30`) `nav down`、[ (`hid:0x2F`) `nav up`（方向键，只在会话等你时；转向还没测准），按下 C (`hid:0x06`) `nav enter`（回车）。
 `ctrl+hid:0x27`（Ctrl+0）也保留为 `nav enter`，给别的键盘用；这把键盘的旋钮 4 按下实测是 C，不是 Ctrl+0。
-未改动过的 v3、v4、v5 或 v6 键位文件启动时自动升级到 v7（旧文件存为 `hub_keys.json.bak-v3` / `.bak-v4` / `.bak-v5` / `.bak-v6`）；用户改过的绑定不动。详情见 `pc/hub_keys.md`。
+未改动过的 v3-v7 键位文件启动时自动升级到 v8，旧文件按原版本备份（例如 `hub_keys.json.bak-v7`）；用户改过的绑定不动。详情见 `pc/hub_keys.md`。
 
-读键方式不是 USB 直读时（Raw Input），每颗键也会打进前台窗口：Hub 拒绝 `app`、`prompt`、`nav`、`voice_down`、`voice`、`screenshot`，
+读键方式不是 USB 直读时（Raw Input），每颗键也会打进前台窗口：Hub 拒绝 `window`、`app`、`prompt`、`nav`、`voice_down`、`voice`、`screenshot`，
 提示“按键会漏进窗口：先用 Zadig 把接口 0 换成 WinUSB”；浮窗选会话、批准/拒绝、打断、滚动、显示浮窗照常。
 
 ## 没有 AgentDeck 硬件怎么用
@@ -299,7 +299,8 @@ VIA/QMK 键盘或普通宏键盘：在键盘配置工具中把按键改成 F13�
 会话列表下方显示所选会话（未选时为第一个等你的会话）的最新一句话：Stop 的 `last_assistant_message`（回复）、Notification 的 `message`（提醒）、
 AskUserQuestion 的问题和选项（提问）、UserPromptSubmit 的 `prompt`（你）；按显示宽度折行，最多 8 行 × 46 列，只在文字变化时刷新控件。
 Hub 每个会话只保留最后 4000 字（`/state` 里的 `last_text`、`last_kind`、`last_text_at`），relay 也只转发末尾 4000 字。
-有待批请求时在列表下方多出命令详情与审批按钮；显示同一会话的请求时隐藏最新一句话。每次按宏键盘，物理控件名和结果（如“旋钮 1 顺时针 → Claude：下一个会话”）在标题下方换行显示约 2 秒，失败时 LCD 也显示 `KEY: ...`。共用键码同时列出位置，例如“第 5 排第 4 颗 / 旋钮 2 逆时针”；`app.log` 的按键行也带上控件名。
+列表和旋钮 2 的候选都按 `last_updated` 从新到旧排列；等批准只标记，不改变顺序。会话名优先显示 Claude 的标题，长标题截短，没有标题时退回文件夹名。超过 24 小时无事件的会话不进候选，并从保存文件清掉。
+有待批请求时在列表下方多出命令详情与审批按钮；显示同一会话的请求时隐藏最新一句话。每次按宏键盘，物理控件名和结果（如“旋钮 1 顺时针 → 下一个窗口”）在标题下方换行显示约 2 秒，失败时 LCD 也显示 `KEY: ...`。共用键码同时列出位置，例如“第 5 排第 4 颗 / 旋钮 2 逆时针”；`app.log` 的按键行也带上控件名。
 用 Raw Input 读键时浮窗顶部常驻红字“按键会漏进窗口：先用 Zadig 把接口 0 换成 WinUSB”，点它看 `agentdeck/装驱动.md` 的步骤；USB 直读时不显示。点标题处的彩色圆点可选会话。
 点关闭（×）只隐藏浮窗，Hub 进程继续在后台运行；有新的待批请求或按旋钮 2 时浮窗会重新出现。
 Windows 上每 250 ms 唤醒一次界面线程，防止 Tcl 阻塞在 GetMessage 导致浮窗冻结；看门狗发现卡顿时也会发送唤醒。
@@ -416,8 +417,9 @@ Action examples:
 ```json
 {"action": "slot 2"}
 {"action": "cycle -1"}
-{"action": "app next"}
-{"action": "app prev"}
+{"action": "show"}
+{"action": "window next"}
+{"action": "window prev"}
 {"action": "approve", "request_id": "<id from /state>"}
 {"action": "deny"}
 {"action": "interrupt"}
@@ -441,7 +443,12 @@ while its own permission dialog is open (AgentDeck timed out, or a `permission_p
 notification), and `nav up/down` only works while the session waits (questions,
 elicitation). Voice blocks both, like other window actions.
 
-On Windows, `app next|prev` activates the selected session's recorded `claude.exe`
+On Windows, `window next|prev` holds Alt and taps Tab / Shift+Tab, then releases
+Alt 900 ms after the last step. Any other action and Hub shutdown release Alt
+first. Raw Input and active voice block window switching. The default knob 1
+bindings use these actions.
+
+The retained compatibility action `app next|prev` activates the selected session's recorded `claude.exe`
 window, or falls back to a visible top-level `claude.exe` main window titled
 `Claude`. It sends `Ctrl+Shift+]` / `Ctrl+Shift+[` without changing the selected
 slot. Missing windows report `没找到 Claude 桌面版窗口`; voice and Raw Input block
@@ -477,9 +484,15 @@ Sessions are keyed by the full `(agent, session_id)` pair. The lowest free slot
 会话；六个槽位全部忙时才返回 HTTP 409，由 agent 原生处理。`/state` includes each session's
 cwd, project/name, state, last update, last hook event (`last_event`), LCD key, slot and full pending details.
 
+浮窗和 `cycle` 候选按 `last_updated` 从新到旧排列，与固定 LCD/硬件槽位解耦；
+等批准会话在列表中标出但不插队。24 小时无事件的会话不进候选，并从 `sessions.json` 清掉。
+Claude 钩子的 `session_title` 优先保存为会话 `title`；没有它时，从 `transcript_path`
+的末尾约 256 KB 向前找最后一条 `custom-title`，取 `customTitle`。文件缺失、损坏或
+读取失败不影响事件处理。浮窗、日志和反馈优先用标题，没有标题时退回文件夹名。
+
 `/state` 的 `recent_ended` 列出最近 8 个被移除的会话（旧的在前）：`agent`、`session_id`、`slot`、`name`、`cwd`、
 移除前的 `state` 和 `last_event`、`last_text`/`last_kind`/`last_text_at`、`label`、`ended_at`，`ended_by` 为
-`SessionEnd`、`idle`（6 小时没动静）或 `evicted`（被第 7 个会话挤掉），`reason` 是 SessionEnd 自带的 reason（最多 64 字）。
+`SessionEnd`、`idle`（24 小时没动静）或 `evicted`（被第 7 个会话挤掉），`reason` 是 SessionEnd 自带的 reason（最多 64 字）。
 `codex exec` 在 Stop 之后几毫秒就发 SessionEnd，会话立刻从 `sessions` 消失；它的 done 状态和回复只能在这里看到。只存内存，重启清空。
 
 The first waiting request is displayed automatically. Further arrivals preserve
@@ -523,8 +536,14 @@ screens to `%USERPROFILE%/.agentdeck/shots/<timestamp>.png` and pastes its path
 without Enter. Prompt pastes a named template then sends Enter. Clipboard and
 key effects verify the selected foreground window handle.
 
-Claude 桌面版内的会话切换使用旋钮 1（`app next` / `app prev`）；槽位键和旋钮 2
-仍只选择浮窗会话并调到对应窗口。两者不会自动同步选中会话。
+旋钮 2 开始转动时按需读一次 Claude 当前打开的会话，若在候选里便从它开始选择；
+不做后台轮询。按下旋钮 2（`show`）先用现有窗口激活逻辑把所选会话调到前台。
+若目标是 `claude.exe` 中的会话，再通过常驻、懒启动的 PowerShell UI Automation
+桥接调用同标题的侧栏 Button，并重新读取当前标题确认。成功反馈“已切到：标题”；
+找不到或确认失败时保留窗口激活结果，反馈“Claude 侧栏里没找到：标题”。同名取第一个，
+并在日志记录；Codex、终端等会话沿用激活窗口的行为。槽位键仍对应固定硬件槽位。
+桥接 stdin/stdout 使用 UTF-8 JSONL，每条命令约 3 秒超时；进程失败后自动重启，
+没有新增下载依赖。终端多标签仍只能激活窗口。
 
 Windows 按住第 2 排第 3 颗（H）说话，松开结束；默认快捷键是 `Win+H`。
 托盘“键位/语音快捷键”可录制并保存 Typeless 的右 Alt，或在
@@ -557,7 +576,7 @@ the thread stops but Hub keeps dictation ownership and blocks other window/input
 actions and approval. Release the modifier and send `voice_up` again to retry;
 another `voice_down` cannot start or toggle a second interval in this state.
 
-While voice is active, approve, slot/cycle, app, prompt, screenshot, scroll, nav, legacy
+While voice is active, approve, slot/cycle, window, app, prompt, screenshot, scroll, nav, legacy
 voice and keyboard interrupt return HTTP 409. Explicit denial of a pending request remains
 available. The guard never resolves approvals, pastes text, or sends Enter/Esc.
 Its only input is Win+H; when a target disappears, it attempts that global
@@ -627,7 +646,7 @@ Notification 不取消待批；`idle_prompt` 仅将没有 pending/locked 的 too
 Claude 的 `StopFailure` 显示错误类型与最近的 API 错误文本；它已加入安装器写的 cc 全局钩子，打包版启动时若 cc 缺这个钩子会自动补（只在两边钩子都启用时补，cx 条目不变）。
 
 会话原子保存到 `~/.agentdeck/sessions.json`，最多每 2 秒写一次，内容不变不写，
-退出时强制检查保存。重启丢弃超过 6 小时的会话、无效或重复槽位，清除失效窗口句柄；
+退出时强制检查保存，包含会话 `title`。重启丢弃超过 24 小时无事件的会话、无效或重复槽位，清除失效窗口句柄；
 原 wait/locked 恢复成应用内审批，不恢复待批请求。文件缺失/损坏或写盘失败只记警告。
 
 relay 所有事件都尽力携带窗口信息；查窗等待上限为普通事件 50 ms、审批/gate 250 ms。

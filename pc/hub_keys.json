@@ -1,5 +1,5 @@
 {
-  "version": 7,
+  "version": 8,
   "_instructions": [
     "Measured CXT layout: 5 rows x 4 columns, plus 4 knobs. Find keys by physical position, top to bottom and left to right: key caps may show something else. USB interface 0 must already use WinUSB. This map does not reprogram the keyboard.",
     "Row 1: E -> slot 1 | B -> slot 2 | Ctrl+Z -> slot 3 | Space -> interrupt.",
@@ -7,11 +7,11 @@
     "Row 3: L -> screenshot | M -> prompt continue | Ctrl+T -> prompt tests | Ctrl+D -> prompt summary (bound, dangerous under Raw Input: two presses exit Claude Code).",
     "Row 4: Ctrl -> modifier-only, unbound | Shift -> modifier-only, unbound | U -> prompt commit | X -> cycle +1.",
     "Row 5: Tab -> next_wait | Ctrl+C -> unbound (dangerous under Raw Input: interrupt / exit) | Ctrl+V -> unbound (dangerous under Raw Input: paste) | P -> cycle -1.",
-    "Knob 1 clockwise F (hid:0x09) -> app next (next session inside Claude desktop), counterclockwise S (hid:0x16) -> app prev; neither changes the selected overlay slot. Press L (hid:0x0F) -> screenshot.",
-    "Knob 2 clockwise R -> cycle +1, counterclockwise P -> cycle -1, press Q -> show (un-hide the overlay; no mouse needed).",
+    "Knob 1 clockwise F (hid:0x09) -> window next (Alt+Tab), counterclockwise S (hid:0x16) -> window prev (Alt+Shift+Tab). Alt stays down while turning and releases after 900 ms idle, before another action, or on exit. Press L (hid:0x0F) -> screenshot.",
+    "Knob 2 clockwise R -> cycle +1, counterclockwise P -> cycle -1: select sessions in recent-activity order, showing their titles. Press Q -> show (activate the window and directly open the selected Claude desktop conversation when its sidebar title is available).",
     "Knob 3 clockwise - -> scroll 1 (wheel down over the selected agent window, toward newer text), counterclockwise = -> scroll -1 (up); direction not yet verified (one - detent captured). Press V (hid:0x19) -> scroll end (to the bottom).",
     "Knob 4 clockwise ] -> nav down, counterclockwise [ -> nav up (rotation not yet verified; only [ seen once; arrow keys only while the agent asks a question), press C (hid:0x06) -> nav enter (Enter; sends dictated text). nav is refused while a permission request is open: use approve/deny.",
-    "Raw Input (interface 0 still on the system HID driver): every key also types into the focused window, so app, prompt, nav, voice and screenshot are refused until interface 0 uses WinUSB. Dangerous leaks: Ctrl+D (two presses exit Claude Code), Ctrl+C (interrupt / exit), Ctrl+V (paste).",
+    "Raw Input (interface 0 still on the system HID driver): every key also types into the focused window, so window, app, prompt, nav, voice and screenshot are refused until interface 0 uses WinUSB. Dangerous leaks: Ctrl+D (two presses exit Claude Code), Ctrl+C (interrupt / exit), Ctrl+V (paste).",
     "Slots 4..6 are available through HTTP or custom bindings. Only fresh single-key presses with exact device modifiers trigger actions. High-risk approvals need two presses within 1.5 seconds.",
     "A string binding runs on key down. An object can bind down and up separately; up pairs with the accepted physical press even if modifiers change. Voice guards last at most 60 seconds; approvals and other window/input actions require releasing voice first."
   ],
@@ -33,8 +33,8 @@
     "hid:0x18": "prompt commit",
     "hid:0x1B": "cycle +1",
     "hid:0x2B": "next_wait",
-    "hid:0x16": "app prev",
-    "hid:0x09": "app next",
+    "hid:0x16": "window prev",
+    "hid:0x09": "window next",
     "hid:0x15": "cycle +1",
     "hid:0x13": "cycle -1",
     "hid:0x2D": "scroll 1",

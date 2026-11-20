@@ -1,6 +1,6 @@
 # 用 CXT 宏键盘模拟 v2
 
-`hub_keys.json` 的顶层 `bindings`（第 7 版）对应下面的 4×5 实测布局。`v2_emulation` 是保留的历史六槽位布局，有以下差异：Space→slot 4、Q→slot 5、V→slot 6、Ctrl+0→interrupt，旋钮仍轮换浮窗会话；两种布局均禁用 Ctrl+C/V，均含 M、Ctrl+T/D、U、X、Tab 新绑定。
+`hub_keys.json` 的顶层 `bindings`（第 8 版）对应下面的 4×5 实测布局。`v2_emulation` 是保留的历史六槽位布局，有以下差异：Space→slot 4、Q→slot 5、V→slot 6、Ctrl+0→interrupt，旋钮仍轮换浮窗会话；两种布局均禁用 Ctrl+C/V，均含 M、Ctrl+T/D、U、X、Tab 新绑定。
 
 ```text
 D:/conda/miniconda3/python.exe pc/hub.py --backend usb
@@ -28,10 +28,10 @@ D:/conda/miniconda3/python.exe pc/hub.py --backend usb --profile v2_emulation
 
 | 旋钮 | 旋转 / 按下 | 出厂码 | 动作 | 功能说明 |
 | --- | --- | --- | --- | --- |
-| 旋钮 1（最左） | 顺时针 F / 逆时针 S | `hid:0x09` / `hid:0x16` | `app next` / `app prev` | 在 Claude 桌面版里切到下一个 / 上一个会话；浮窗选中会话不变 |
+| 旋钮 1（最左） | 顺时针 F / 逆时针 S | `hid:0x09` / `hid:0x16` | `window next` / `window prev` | 切窗口：Alt+Tab / Alt+Shift+Tab；停转 900 毫秒后松开 Alt |
 | 旋钮 1 按下 | L 键 | `hid:0x0F` | `screenshot` | 截图并粘贴路径 |
-| 旋钮 2 | 顺时针 R / 逆时针 P | `hid:0x15` / `hid:0x13` | `cycle +1` / `cycle -1` | 在浮窗里选中下一个 / 上一个会话，并尝试切到它的窗口 |
-| 旋钮 2 按下 | Q 键 | `hid:0x14` | `show` | 显示浮窗（隐藏后不用鼠标也能叫回来） |
+| 旋钮 2 | 顺时针 R / 逆时针 P | `hid:0x15` / `hid:0x13` | `cycle +1` / `cycle -1` | 选会话：按最近活动从新到旧排列，首尾循环 |
+| 旋钮 2 按下 | Q 键 | `hid:0x14` | `show` | 按下切过去：Claude 桌面版直接跳到所选标题的会话；其他会话激活对应窗口，同时显示浮窗 |
 | 旋钮 3 | - / = | `hid:0x2D` / `hid:0x2E` | `scroll 1` / `scroll -1` | 在所选 agent 窗口上滚轮：往下看新内容 / 往上翻。实测只录到一格 -，哪个方向发 - 还没测准 |
 | 旋钮 3 按下 | V 键 | `hid:0x19` | `scroll end` | 直接滚到底 |
 | 旋钮 4（最右） | ] / [ | `hid:0x30` / `hid:0x2F` | `nav down` / `nav up` | 下 / 上方向键：agent 提问时换选项（只在“等你”时可用）。实测只录到一次 [，转向还没测准 |
@@ -39,9 +39,13 @@ D:/conda/miniconda3/python.exe pc/hub.py --backend usb --profile v2_emulation
 
 旋钮 4 按下实测发 C（旧表写的 Ctrl+0 不对，所以第 5 版里 `nav enter` 在这把键盘上从来没触发过）。
 `ctrl+hid:0x27`（Ctrl+0）仍绑定 `nav enter`，留给别的键盘。
-旋钮 1 实测逆时针发 S、顺时针发 F；第 7 版把 F 绑成 `app next`、S 绑成 `app prev`，激活 Claude 桌面版后发送 `Ctrl+Shift+]` / `Ctrl+Shift+[`。优先使用所选会话记录的 Claude 窗口，否则查找标题为“Claude”的主窗口；找不到时提示“没找到 Claude 桌面版窗口”。这个动作不更改浮窗里的选中会话。
+旋钮 1 实测逆时针发 S、顺时针发 F；第 8 版把 F 绑成 `window next`、S 绑成 `window prev`。第一格按住 Alt 并点一次 Tab（逆时针为 Shift+Tab），继续转动时每格再点一次；停转 900 毫秒后松开 Alt。其他动作开始前和 Hub 退出时也会先松开 Alt。它切换 Windows 窗口，不更改浮窗里的选中会话。
 
-按键反馈会写明物理位置，例如“旋钮 1 顺时针 → Claude：下一个会话”。共用键码会同时列出位置，例如“第 5 排第 4 颗 / 旋钮 2 逆时针”；`app.log` 的按键行也包含这个名字。
+旋钮 2 与浮窗列表都按 `last_updated` 从新到旧排列，等批准的会话会标出但不插队。开始转动时先读取一次 Claude 当前会话，若在候选里就从它开始选；没有后台轮询。Claude 会话名优先使用钩子里的 `session_title`，否则取对话记录中最后一条 `custom-title`，没有标题时才显示文件夹名。24 小时没有事件的会话不再参与选择，并从 `sessions.json` 清掉。槽位键仍选固定的硬件槽位，与列表排序无关。
+
+按下旋钮 2 时，Claude 桌面版先调到前台，再通过系统 UI Automation 点同标题的侧栏按钮并确认结果。成功提示“已切到：标题”；找不到或确认失败时只激活窗口，提示“Claude 侧栏里没找到：标题”。重名时取侧栏第一个并记日志。Codex、终端等沿用激活对应窗口的行为。
+
+按键反馈会写明物理位置，例如“旋钮 1 顺时针 → 下一个窗口”。共用键码会同时列出位置，例如“第 5 排第 4 颗 / 旋钮 2 逆时针”；`app.log` 的按键行也包含这个名字。
 
 按住第 2 排第 3 颗（H）说话，松开结束。默认触发 Windows 听写 `Win+H`；托盘“键位/语音快捷键”可录制 Typeless 的右 Alt。在 Windows 的 `config.json` 中，对应配置为：
 
@@ -55,7 +59,7 @@ D:/conda/miniconda3/python.exe pc/hub.py --backend usb --profile v2_emulation
 上下键只在会话“等你”（AskUserQuestion、MCP 表单）时可用，免得空闲时翻出旧提问再被回车重发。
 
 只要读键方式不是 USB 直读（接口 0 还是系统 HID 驱动，走 Raw Input），每颗键都会同时打进前台窗口。
-这时 `app`、`prompt`、`nav`、语音和截图会被拒绝，浮窗顶部常驻红字提示先用 Zadig 换 WinUSB。
+这时 `window`、`app`、`prompt`、`nav`、语音和截图会被拒绝，浮窗顶部常驻红字提示先用 Zadig 换 WinUSB。
 Ctrl+C、Ctrl+D、Ctrl+V 三颗是危险键：漏进 agent 窗口分别会打断、退出、粘贴。
 3 颗修饰键在 Raw Input 下也会漏进窗口，单按 Alt 可能让当前窗口的菜单栏获得焦点。
 
@@ -63,8 +67,8 @@ Ctrl+C、Ctrl+D、Ctrl+V 三颗是危险键：漏进 agent 窗口分别会打断
 极危请求转回 agent 原生确认，✓ 返回 `locked`。持续按住产生的重复报文
 不会代替第二次确认。会话键选择固定槽位 1–6，旋钮 2 在浮窗会话间首尾循环。
 
-未改动过的 v3、v4、v5、v6 键位文件（`%USERPROFILE%\.agentdeck\hub_keys.json`）启动时自动升级到 v7，
-旧文件存为 `hub_keys.json.bak-v3` / `.bak-v4` / `.bak-v5` / `.bak-v6`；改过绑定的文件不动。
+未改动过的 v3、v4、v5、v6、v7 键位文件（`%USERPROFILE%\.agentdeck\hub_keys.json`）启动时自动升级到 v8，
+旧文件按原版本备份，例如 v7 存为 `hub_keys.json.bak-v7`；改过绑定的文件不动。
 
 ## Ctrl 模板与待确认的物理输出
 

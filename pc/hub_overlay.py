@@ -8,6 +8,7 @@ from queue import Empty, SimpleQueue
 import sys
 import threading
 import time
+from session_titles import session_label
 
 import agentdeck_theme as theme
 
@@ -153,7 +154,7 @@ def _preview(state, sessions, request, now):
     if request is not None and (request.get("agent"), request.get("session_id")) == (
             chosen.get("agent"), chosen.get("session_id")):
         return None  # the approval detail for this session takes the space
-    name = str(chosen.get("name") or chosen.get("project") or "Unnamed")
+    name = session_label(chosen)
     parts = ["#%s %s" % (chosen.get("slot"), name)]
     if isinstance(chosen.get("last_kind"), str) and chosen["last_kind"]:
         parts.append(chosen["last_kind"])
@@ -188,7 +189,7 @@ def display_model(state, now=None):
             if len(activity) > ACTIVITY_CHARS:
                 activity = activity[:ACTIVITY_CHARS - 1] + "…"
         slots.append({"number": number,
-                      "name": str(session.get("name") or session.get("project") or "Unnamed")
+                      "name": session_label(session)
                       if session else "",
                       "label": label, "color": COLORS[label],
                       "occupied": session is not None,
@@ -198,6 +199,9 @@ def display_model(state, now=None):
                       # Several sessions in one window (terminal tabs): focus cannot pick the tab.
                       "same_window": bool(session) and windows.get(session.get("hwnd"), 0) > 1,
                       "selected": state.get("selected_slot") == number})
+    # Keep slots indexed by the hardware number; display rank is independent.
+    display_order = [session["slot"] for session in sorted(sessions.values(),
+                     key=lambda session: (-session.get("last_updated", 0), session["slot"]))]
     pending_list = list(state.get("pending", ()))
     locked_list = list(state.get("locked", ()))
     displayed = state.get("displayed_request_id")
@@ -235,6 +239,7 @@ def display_model(state, now=None):
     reader = state.get("input_reader")
     return {
         "slots": slots,
+        "display_order": display_order,
         "request": detail,
         "preview": _preview(state, sessions, request, now),
         "session_count": session_count,
@@ -757,7 +762,7 @@ class Overlay:
 
     def _dot_slot(self, x):
         """Header dot under x (canvas pixels) -> slot number, or None."""
-        occupied = [slot for slot in self.model["slots"] if slot["occupied"]]
+        occupied = [self.model["slots"][number - 1] for number in self.model["display_order"]]
         if isinstance(x, bool) or not isinstance(x, (int, float)) or x < 0:
             return None
         index = int(x // DOT_STEP)
@@ -1001,7 +1006,7 @@ class Overlay:
         if self.alpha_button is not None:
             self.alpha_button.configure(fg=FOREGROUND if self.translucent else theme.FAINT)
         if self.dots is not None:
-            occupied = [slot for slot in self.model["slots"] if slot["occupied"]]
+            occupied = [self.model["slots"][number - 1] for number in self.model["display_order"]]
             self.dots.delete("all")
             self.dots.configure(width=max(1, 14 * len(occupied) - 4))
             for index, slot in enumerate(occupied):
@@ -1016,7 +1021,7 @@ class Overlay:
             activity = widgets[4] if len(widgets) > 4 else None
             background = theme.RAISED if data["selected"] else BACKGROUND
             if data["occupied"]:
-                row.grid()
+                row.grid(row=self.model["display_order"].index(data["number"]))
             else:
                 row.grid_remove()  # empty slots take no space; the number key still maps
             row.configure(bg=background)

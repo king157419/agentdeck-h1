@@ -27,6 +27,7 @@ import threading
 import time
 from urllib.parse import parse_qs, urlsplit
 import uuid
+from session_titles import event_title, session_label, transcript_title
 
 import agent_lcd
 import daemon
@@ -43,7 +44,8 @@ CONFIRM_SECONDS = 1.5
 SWITCH_GUARD_SECONDS = 0.3
 GATE_CONFIRMED_SECONDS = 30.0
 VOICE_NOTICE_SECONDS = 5.0
-SESSION_IDLE_SECONDS = 6 * 60 * 60
+SESSION_IDLE_SECONDS = 24 * 60 * 60
+CYCLE_BURST_SECONDS = 5.0  # a pause longer than this re-anchors the knob to the session open in Claude
 # /state keeps the last few removed sessions: codex exec fires SessionEnd right after
 # Stop, so its done state and reply would otherwise never be visible.
 RECENT_ENDED_LIMIT = 8
@@ -68,13 +70,13 @@ SCROLL_END = 100             # "scroll end": far enough to reach the bottom
 NAV_KEYS = ("up", "down", "enter")
 # Raw Input cannot stop the key itself from typing into the focused window, so a
 # paste/Enter action would send e.g. "m继续". Only USB direct reads may use these.
-RAW_INPUT_BLOCKED = ("prompt", "nav", "voice_down", "voice", "screenshot", "app")
+RAW_INPUT_BLOCKED = ("prompt", "nav", "voice_down", "voice", "screenshot", "app", "window")
 LEAK_TEXT = "按键会漏进窗口：先用 Zadig 把接口 0 换成 WinUSB"
 log = logging.getLogger("agentdeck.hub")
 keylog = logging.getLogger("agentdeck.hub.keys")
 UNKNOWN_EVENTS = set()
 UNKNOWN_EVENTS_LOCK = threading.Lock()
-SESSION_FIELDS = ("agent", "session_id", "slot", "cwd", "name", "state", "hwnd",
+SESSION_FIELDS = ("agent", "session_id", "slot", "cwd", "name", "title", "state", "hwnd",
                   "window_exe", "last_text", "last_updated", "last_kind", "last_text_at")
 # Measured positions shared by key feedback and the tray's keymap window.
 KEY_ROWS = (
@@ -157,7 +159,8 @@ INPUT_SENT = {"prompt": "已发送预设", "screenshot": "已截图并粘贴路�
               "voice": "语音已切换", "voice_up": "停止说话", "interrupt": "已打断",
               "nav up": "已按 ↑", "nav down": "已按 ↓", "nav enter": "已回车",
               "scroll end": "已翻到底", "scroll": "已滚动",
-              "app next": "Claude：下一个会话", "app prev": "Claude：上一个会话"}
+              "app next": "Claude：下一个会话", "app prev": "Claude：上一个会话",
+              "window next": "切到下一个窗口", "window prev": "切到上一个窗口"}
 EVENT_KINDS = {"Stop": "回复", "StopFailure": "错误", "Notification": "提醒", "UserPromptSubmit": "你"}
 
 
@@ -224,6 +227,8 @@ def describe_input(action, result=None, error=None):
                 return message.format(slot=slot), False, lcd.format(slot=slot)
         return "操作失败：" + text[:40], False, "Key failed"
     result = result if isinstance(result, dict) else {}
+    if isinstance(result.get("message"), str):
+        return result["message"], result.get("switched") is not False, None
     status = result.get("status")
     if status == "selected":
         text = "已选槽位 %s" % result.get("slot")
@@ -387,6 +392,7 @@ class Hub:
         self.last_input = None        # last physical key result, published in state()
         self.input_seq = 0
         self.show_requests = 0        # "show" key presses; the overlay un-hides on change
+        self.last_cycle = float("-inf")
         self.input_reader = None      # callable -> "usb" / "raw" / None (set by main)
         self.sessions_path = Path(sessions_path) if sessions_path is not None else None
         self.window_alive = window_alive or self._window_alive
@@ -446,7 +452,7 @@ class Hub:
                     if not re.fullmatch(r"[A-Za-z0-9_-]+", key) or identity in self.sessions:
                         continue
                     if any(not isinstance(entry.get(field, ""), str)
-                           for field in ("cwd", "name", "state", "window_exe", "last_text", "last_kind")):
+                           for field in ("cwd", "name", "title", "state", "window_exe", "last_text", "last_kind")):
                         continue
                     session = {field: entry[field] for field in SESSION_FIELDS if field in entry}
                     session.update(key=key, cwd=entry.get("cwd", ""), name=entry.get("name", "agent"),
@@ -465,11 +471,19 @@ class Hub:
                     if not alive:
                         session.pop("hwnd", None)
                         session.pop("window_exe", None)
+                    if agent == "cc" and not session.get("title") and session["cwd"]:
+                        # Claude keeps <home>/.claude/projects/<cwd, non-alnum -> '-'>/<sid>.jsonl
+                        found = transcript_title(self.home / ".claude" / "projects" / re.sub(
+                            r"[^A-Za-z0-9]", "-", session["cwd"]) / (sid + ".jsonl"))
+                        if found:
+                            session["title"] = found
                     self.sessions[identity] = session
                     used.add(slot)
                 except (KeyError, TypeError, ValueError):
                     continue
             self.selected = min(self.sessions, key=lambda identity: self.sessions[identity]["slot"], default=None)
+            if len(self.sessions) < len(entries):  # stale or invalid rows were dropped: persist the cleanup
+                self._save_sessions(force=True)
         except Exception as error:
             log.warning("Cannot load sessions from %s: %s", self.sessions_path, error)
 
@@ -486,8 +500,8 @@ class Hub:
             temporary = None
             try:
                 with self.lock:
-                    entries = [{field: session.get(field, "" if field in ("cwd", "name", "window_exe", "last_text") else None)
-                                for field in SESSION_FIELDS if field in session or field not in ("last_kind", "last_text_at")}
+                    entries = [{field: session.get(field, "" if field in ("cwd", "name", "title", "window_exe", "last_text") else None)
+                                for field in SESSION_FIELDS if field in session or field not in ("last_kind", "last_text_at", "title")}
                                for session in sorted(self.sessions.values(), key=lambda item: item["slot"])]
                 content = json.dumps(entries, ensure_ascii=True, sort_keys=True)
                 if content == self.sessions_saved_content:
@@ -575,9 +589,12 @@ class Hub:
                             return False
             else:
                 self.sender(lines, retry_for=0.0)
+            self._lcd_last_error = None
             return True
         except Exception as error:
-            log.warning("LCD unavailable: %s", error)
+            if str(error) != getattr(self, "_lcd_last_error", None):  # log each new failure once, not every retry
+                log.warning("LCD unavailable: %s", error)
+            self._lcd_last_error = str(error)
             # A missing LCD must not cause a tight serial retry loop.
             self.last_focus = self.monotonic()
             self.lcd_retry_at = self.monotonic() + .5
@@ -878,7 +895,7 @@ class Hub:
     def _remember_ended(self, session, ended_by, reason):
         """Keep the final state and reply of a removed session for /state."""
         entry = {key: session.get(key) for key in (
-            "agent", "session_id", "slot", "name", "cwd", "state", "last_event",
+            "agent", "session_id", "slot", "name", "title", "cwd", "state", "last_event",
             "last_text", "last_kind", "last_text_at", "label", "last_updated")}
         entry.update(ended_by=ended_by, reason=reason[:64] if isinstance(reason, str) else "",
                      ended_at=self.wall_time())
@@ -945,6 +962,8 @@ class Hub:
         # Unheld gate requests skip here too: no passthrough audit for every low-risk tool call.
         if gate and (self.gate_mode == "off" or (self.gate_mode == "high" and risk == "low")):
             return {}
+        # Transcript reads can be slow or fail; neither holds the state lock.
+        title = event_title(event) if agent == "cc" else ""
         with self.lock:
             if self.closed:
                 return gate_denial("hub is shutting down") if gate else {}
@@ -983,6 +1002,8 @@ class Hub:
             session.update(cwd=cwd, name=agent_lcd.ascii_name(cwd),
                            project=agent_lcd.ascii_name(cwd), last_updated=self.wall_time(),
                            last_event=name)
+            if title:
+                session["title"] = title
             window = event.get("agentdeck_window")
             if isinstance(window, dict):
                 # The relay's top-level window of the agent process: focus by handle,
@@ -1201,9 +1222,9 @@ class Hub:
         command = parts[0]
         argument = parts[1] if len(parts) == 2 else None
         if command not in ("slot", "cycle", "next_wait", "approve", "deny", "interrupt", "voice",
-                           "voice_down", "voice_up", "screenshot", "prompt", "show", "scroll", "nav", "hold", "app"):
+                           "voice_down", "voice_up", "screenshot", "prompt", "show", "scroll", "nav", "hold", "app", "window"):
             raise HubError("unknown action")
-        if command not in ("slot", "cycle", "prompt", "scroll", "nav", "hold", "app") and argument is not None:
+        if command not in ("slot", "cycle", "prompt", "scroll", "nav", "hold", "app", "window") and argument is not None:
             raise HubError("unexpected action argument")
         if command == "scroll":
             if argument == "end":
@@ -1219,13 +1240,48 @@ class Hub:
             raise HubError("nav needs up, down or enter")
         if command == "app" and argument not in ("next", "prev"):
             raise HubError("app needs next or prev")
+        if command == "window" and argument not in ("next", "prev"):
+            raise HubError("window needs next or prev")
         if command == "hold" and argument not in ("auto", "always", "never"):
             raise HubError("hold needs auto, always or never")
+        if command != "window" and self.desktop is not None:
+            release = getattr(self.desktop, "release_window_switch", None)
+            if callable(release) and release() is False:
+                raise HubError("could not release window-switch keys", 409)
+        origin = self._cycle_origin(received_at) if command == "cycle" else None
         with self.lock:
+            if command == "cycle":
+                self.last_cycle = received_at
+                if origin in self.sessions:
+                    self.selected = origin
+            else:
+                self.last_cycle = float("-inf")
             outcome = self._action_locked(payload, command, argument, source, received_at)
         if callable(outcome):
             return outcome()
         return outcome
+
+    def _cycle_origin(self, received_at):
+        """One on-demand UIA read at the start of a rotation burst, outside the lock."""
+        with self.lock:
+            if self.closed or received_at - self.last_cycle < CYCLE_BURST_SECONDS:
+                return None
+            sessions = [dict(session) for session in self.sessions.values()]
+            candidates = [session for session in sessions if session.get("title")
+                          and str(session.get("window_exe", "")).replace("\\", "/").rsplit("/", 1)[-1].lower() == "claude.exe"]
+        if not candidates or not self.desktop_enabled:
+            return None
+        try:
+            method = getattr(self._desktop(), "current_session_title", None)
+            title = method(candidates) if callable(method) else None
+            if isinstance(title, str) and title:
+                matches = [session for session in candidates if session["title"] == title]
+                if matches:
+                    chosen = min(matches, key=lambda session: (-session["last_updated"], session["slot"]))
+                    return chosen["agent"], chosen["session_id"]
+        except Exception as error:
+            log.warning("Cannot read current Claude session: %s", error)
+        return None
 
     def _focus_effect(self, command, selected, result):
         """Snapshot under the lock; the returned callable focuses without it."""
@@ -1244,7 +1300,15 @@ class Hub:
             try:
                 if unavailable is not None:
                     raise unavailable
-                focused = desktop.focus(session, sessions)
+                show = getattr(desktop, "show_session", None) if command == "show" else None
+                focused = show(session, sessions) if callable(show) else desktop.focus(session, sessions)
+                if isinstance(focused, dict) and focused.get("claude_sidebar"):
+                    label = session_label(session)
+                    switched = focused.get("switched") is True
+                    message = ("已切到：" if switched else "Claude 侧栏里没找到：") + label
+                    log.info("%s", escape_log_text(message, 160))
+                    return dict(result, slot=session["slot"], window="focused", switched=switched,
+                                title=session.get("title", ""), message=message)
                 if isinstance(focused, tuple) and len(focused) == 3:
                     shared_window = shared and focused[0] == hwnd
                 window = "window focus unavailable" if focused is False else "focused"
@@ -1268,6 +1332,8 @@ class Hub:
             return {"status": "ok", "hold_mode": self.hold_mode}
         if command == "show":
             self.show_requests += 1
+            if self.selected in self.sessions:
+                return self._focus_effect(command, self.selected, {"action": command, "status": "shown"})
             return {"action": command, "status": "shown"}
         if command == "voice_up":
             desktop = self.desktop
@@ -1333,7 +1399,8 @@ class Hub:
             if voice_active:
                 raise HubError("release voice before sending input", 409)
         if command in ("slot", "cycle", "next_wait"):
-            sessions = sorted(self.sessions.items(), key=lambda pair: pair[1]["slot"])
+            sessions = sorted(self.sessions.items(), key=lambda pair: (
+                -pair[1]["last_updated"], pair[1]["slot"]) if command == "cycle" else (pair[1]["slot"],))
             if command == "next_wait":
                 identities = [identity for identity, _ in sessions]
                 index = identities.index(self.selected) if self.selected in identities else -1
@@ -1380,7 +1447,7 @@ class Hub:
             return self._focus_effect(command, selected, {
                 "action": command, "status": "selected", "request_id": self.displayed_request_id})
         session = self.sessions.get(self.selected)
-        if session is None and command != "app":
+        if session is None and command not in ("app", "window"):
             raise HubError("select a session first", 409)
         if command == "nav":
             identity = self.selected
@@ -1416,7 +1483,7 @@ class Hub:
                 completed = None
                 if command == "prompt":
                     completed = desktop.prompt(session, sessions, text)
-                elif command in ("scroll", "nav", "app"):
+                elif command in ("scroll", "nav", "app", "window"):
                     method = getattr(desktop, command, None)
                     completed = False if method is None else method(session, sessions, argument)
                     if completed is False:

@@ -314,8 +314,10 @@ class DesktopEffects:
 
     def __init__(self, windows=None, *, clipboard=None, image_clipboard=None, capture=None,
                  shots_dir=None, now=None, sleeper=None, monotonic=None,
-                 voice_wait=None, dictation_shortcut=None):
+                 voice_wait=None, dictation_shortcut=None, claude_uia=None, window_switcher=None):
         self._windows = windows
+        self._claude_uia = claude_uia
+        self._window_switcher = window_switcher
         self.clipboard = set_clipboard if clipboard is None else clipboard
         self.image_clipboard = set_image_clipboard if image_clipboard is None else image_clipboard
         self.capture = capture_screen if capture is None else capture
@@ -372,6 +374,67 @@ class DesktopEffects:
 
     def focus(self, session, sessions):
         return self._focus(session, sessions)
+
+    @property
+    def claude_uia(self):
+        if self._claude_uia is None:
+            from claude_uia import ClaudeUIA
+            self._claude_uia = ClaudeUIA()
+        return self._claude_uia
+
+    def current_session_title(self, sessions):
+        """Read only when the session knob starts moving, never on a timer."""
+        foreground = self.windows()
+        hwnd = foreground[0] if ntpath.basename(foreground[1] or "").casefold() == "claude.exe" else None
+        if hwnd is None:
+            hwnd = next((session.get("hwnd") for session in sessions
+                         if type(session.get("hwnd")) is int), None)
+        snapshot = self.claude_uia.list(hwnd=hwnd)
+        return snapshot.get("current_title") if isinstance(snapshot, dict) else None
+
+    def show_session(self, session, sessions):
+        window = self._focus(session, sessions)
+        if (session.get("agent") != "cc"
+                or ntpath.basename(window[1] or "").casefold() != "claude.exe"):
+            return window
+        result = {"claude_sidebar": True, "switched": False}
+        title = session.get("title")
+        if not isinstance(title, str) or not title:
+            return result
+        try:
+            invoked = self.claude_uia.invoke(title, index=0, hwnd=window[0])
+            if not isinstance(invoked, dict) or invoked.get("ok") is not True:
+                return result
+            if invoked.get("matches", 0) > 1:
+                logging.getLogger("agentdeck.hub").warning(
+                    "Duplicate Claude sidebar title; using first: %s (%s matches)",
+                    title[:60].replace("\n", " ").replace("\r", " "), invoked["matches"])
+            deadline = self.monotonic() + 1.8
+            # Invoke returns before Claude finishes navigation. All reads are
+            # part of this explicit action, bounded even with a fake clock.
+            for attempt in range(4):
+                snapshot = self.claude_uia.list(hwnd=window[0])
+                if isinstance(snapshot, dict) and snapshot.get("current_title") == title:
+                    result["switched"] = True
+                    break
+                if snapshot is None or self.monotonic() >= deadline:
+                    break
+                self.sleep(0.15)
+        except Exception as error:
+            logging.getLogger("agentdeck.hub").warning("Claude sidebar switch failed: %s", error)
+        return result
+
+    def window(self, session, sessions, direction):
+        with self._voice_commands:
+            if self.voice_active:
+                raise RuntimeError("release voice before switching windows")
+            if self._window_switcher is None:
+                from hub_window_switch import WindowSwitcher
+                self._window_switcher = WindowSwitcher(self.windows, monotonic=self.monotonic)
+            return self._window_switcher.step(direction)
+
+    def release_window_switch(self):
+        return self._window_switcher is None or self._window_switcher.release()
 
     def app(self, session, sessions, direction):
         """Switch Claude's conversation without changing the Hub selection."""
@@ -674,7 +737,15 @@ class DesktopEffects:
         return True
 
     def close(self):
-        return self._stop_voice("shutdown")
+        try:
+            if self._window_switcher is not None and not self._window_switcher.close():
+                raise RuntimeError("could not release window-switch keys")
+        finally:
+            try:
+                return self._stop_voice("shutdown")
+            finally:
+                if self._claude_uia is not None:
+                    self._claude_uia.close()
 
     def screenshot(self, session, sessions):
         image = self.capture()
