@@ -253,6 +253,35 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(app.resource_dir(), bundle)
             self.assertEqual(app.hub.load_json(app.prepare_configs(self.home)[0]), {"bundled": True})
 
+    def test_prepare_configs_upgrades_untouched_v5_and_keeps_original_backup(self):
+        shipped = app.hub.load_json(app.resource_dir() / "hub_keys.json")
+        old_bindings = dict(shipped["bindings"], **{"hid:0x16": "cycle +1", "hid:0x09": "cycle -1"})
+        del old_bindings["hid:0x06"]
+        original = json.dumps(dict(shipped, version=5, bindings=old_bindings), indent=3).encode("utf-8")
+        target = app.data_dir(self.home) / "hub_keys.json"
+        target.parent.mkdir()
+        target.write_bytes(original)
+        keys, _ = app.prepare_configs(home=self.home)
+        self.assertEqual(keys, target)
+        self.assertEqual(app.hub.load_json(keys), shipped)
+        self.assertEqual(shipped["version"], 6)
+        self.assertEqual(target.with_name("hub_keys.json.bak-v5").read_bytes(), original)
+        app.prepare_configs(home=self.home)
+        self.assertEqual(target.with_name("hub_keys.json.bak-v5").read_bytes(), original)
+
+    def test_prepare_configs_keeps_edited_v5_byte_identical(self):
+        shipped = app.hub.load_json(app.resource_dir() / "hub_keys.json")
+        old_bindings = dict(shipped["bindings"], **{"hid:0x16": "cycle +1", "hid:0x09": "cycle -1"})
+        del old_bindings["hid:0x06"]
+        old_bindings["hid:0x08"] = "slot 6"
+        original = json.dumps(dict(shipped, version=5, bindings=old_bindings), indent=3).encode("utf-8")
+        target = app.data_dir(self.home) / "hub_keys.json"
+        target.parent.mkdir()
+        target.write_bytes(original)
+        app.prepare_configs(home=self.home)
+        self.assertEqual(target.read_bytes(), original)
+        self.assertFalse(target.with_name("hub_keys.json.bak-v5").exists())
+
     def test_source_resource_path_is_independent_of_current_directory(self):
         with patch.object(sys, "frozen", False, create=True):
             self.assertEqual(app.resource_dir(), Path(app.__file__).resolve().parent)
@@ -283,9 +312,12 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual([len(row) for row in model["rows"]], [4] * 5)
         self.assertEqual(len(model["knobs"]), 4)
         self.assertEqual(model["rows"][0][0], ("E", "slot 1"))
-        self.assertEqual(model["rows"][1][3], ("无信号", "无信号"))
+        self.assertEqual(model["rows"][1][3], ("Alt", "修饰键，未绑定"))
+        self.assertEqual(model["rows"][3][:2], [("Ctrl", "修饰键，未绑定"), ("Shift", "修饰键，未绑定")])
+        self.assertEqual(model["rows"][3][2:], [("U", "prompt commit"), ("X", "cycle +1")])
         self.assertEqual(model["rows"][4][1], ("Ctrl+C", "未绑定"))
         self.assertEqual(model["knobs"][0], ["cycle +1", "cycle -1", "screenshot"])
+        self.assertEqual(model["knobs"][3], ["nav down", "nav up", "nav enter"])
         self.assertIn("voice_down", model["rows"][1][2][1])
         self.assertIn("voice_up", model["rows"][1][2][1])
 
@@ -303,7 +335,9 @@ class KeymapUpgradeTests(unittest.TestCase):
         source = app.resource_dir() / "hub_keys.json"
         shipped = json.loads(source.read_text(encoding="utf-8"))
         self.assertEqual(shipped["bindings"]["hid:0x14"], "show")
-        old = dict(shipped, version=3, bindings=dict(shipped["bindings"], **app.V3_CHANGED))
+        old_bindings = {key: value for key, value in dict(shipped["bindings"], **app.V3_CHANGED).items()
+                        if value is not None}
+        old = dict(shipped, version=3, bindings=old_bindings)
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "hub_keys.json"
             target.write_text(json.dumps(old), encoding="utf-8")

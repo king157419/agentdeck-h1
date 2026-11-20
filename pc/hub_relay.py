@@ -57,23 +57,36 @@ def _home(home):
     return Path.home() if home is None else Path(home)
 
 
+def escape_log_text(value, limit):
+    """Keep printable Unicode, escape controls, and cap the escaped text's length."""
+    parts, length = [], 0
+    for char in str(value):
+        part = char if char.isprintable() else char.encode("unicode_escape").decode("ascii")
+        if length + len(part) > limit:
+            break
+        parts.append(part)
+        length += len(part)
+    return "".join(parts)
+
+
 def _log(home, agent, event, error):
     try:  # Best-effort diagnostics only; never change the hook's output.
         event = event if isinstance(event, dict) else {}
-        def field(value):
-            return " ".join(str(value).split()) if value not in (None, "") else "-"
+        def field(value, limit):
+            return escape_log_text(value if value not in (None, "") else "-", limit)
 
-        name = field(event.get("hook_event_name"))
+        name = field(event.get("hook_event_name"), 64)
         session = event.get("session_id") or event.get("thread_id") or event.get("conversation_id")
         message = (type(error).__name__ + ": " + str(error)) if isinstance(error, BaseException) else str(error)
-        message = message.replace("\r", " ").replace("\n", " ")[:MESSAGE_LIMIT]
+        message = escape_log_text(message, MESSAGE_LIMIT)
         path = _home(home) / ".agentdeck" / "relay.log"
         if path.exists() and path.stat().st_size >= LOG_LIMIT:
             os.replace(path, path.with_name("relay.log.1"))
         with open(path, "a", encoding="utf-8",
                   errors="backslashreplace") as log:
-            log.write("%s %s %s %s %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"),
-                                              field(agent), name, field(session)[:8], message))
+            line = "%s %s %s %s %s" % (time.strftime("%Y-%m-%d %H:%M:%S"),
+                                        field(agent, 64), name, field(session, 8), message)
+            log.write(line[:400] + "\n")
     except Exception:
         pass
 

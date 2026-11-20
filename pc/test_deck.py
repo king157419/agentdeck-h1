@@ -474,6 +474,82 @@ def test_foreground_fallback_cleanup():
     assert sorted(attached) == sorted(detached) and len(attached) == 2
 
 
+def _foreground_retry_window(attempts, sent=1, minimized=False):
+    window = deck_windows.WindowControl.__new__(deck_windows.WindowControl)
+    calls = []
+    foreground = [10]
+    attempts = iter(attempts)
+
+    def activate(hwnd):
+        calls.append(("foreground", hwnd))
+        ok = next(attempts)
+        if ok:
+            foreground[0] = hwnd
+        return ok
+
+    def send_input(count, events, size):
+        event = ctypes.cast(events, ctypes.POINTER(deck_windows.INPUT))[0]
+        calls.append(("send", count, event.type, event.mi.dx, event.mi.dy,
+                      event.mi.mouseData, event.mi.dwFlags, event.mi.time,
+                      event.mi.dwExtraInfo, size))
+        return sent
+
+    window.user = SimpleNamespace(
+        IsIconic=lambda hwnd: minimized,
+        ShowWindow=lambda hwnd, flag: calls.append(("show", hwnd, flag)),
+        SetForegroundWindow=activate, GetForegroundWindow=lambda: foreground[0],
+        GetWindowThreadProcessId=lambda hwnd, unused: hwnd + 100,
+        AttachThreadInput=lambda a, b, on: calls.append(("attach", a, b, on)) or True,
+        SendInput=send_input)
+    window.kernel = SimpleNamespace(GetCurrentThreadId=lambda: 1000)
+    return window, calls
+
+
+def test_foreground_mouse_retry():
+    window, calls = _foreground_retry_window([False, False, True])
+    assert window.activate(20)
+    assert [call for call in calls if call[0] == "send"] == [
+        ("send", 1, 0, 0, 0, 0, 1, 0, 0, ctypes.sizeof(deck_windows.INPUT))]
+    assert len([call for call in calls if call[0] == "foreground"]) == 3
+    attached = [call[1:3] for call in calls if call[0] == "attach" and call[3]]
+    detached = [call[1:3] for call in calls if call[0] == "attach" and not call[3]]
+    assert sorted(attached) == sorted(detached) and len(attached) == 2
+    assert calls.index(next(call for call in calls if call[0] == "send")) > max(
+        index for index, call in enumerate(calls) if call[0] == "attach")
+
+
+def test_foreground_mouse_retry_send_failure():
+    window, calls = _foreground_retry_window([False, False], sent=0)
+    assert not window.activate(20)
+    assert len([call for call in calls if call[0] == "foreground"]) == 2
+    assert calls[-1][0] == "send"
+    attached = [call[1:3] for call in calls if call[0] == "attach" and call[3]]
+    detached = [call[1:3] for call in calls if call[0] == "attach" and not call[3]]
+    assert sorted(attached) == sorted(detached) and len(attached) == 2
+
+
+def test_foreground_mouse_retry_failure_cleanup():
+    window, calls = _foreground_retry_window([False, False, False, False])
+    assert not window.activate(20)
+    assert len([call for call in calls if call[0] == "foreground"]) == 4
+    assert len([call for call in calls if call[0] == "send"]) == 1
+    attached = [call[1:3] for call in calls if call[0] == "attach" and call[3]]
+    detached = [call[1:3] for call in calls if call[0] == "attach" and not call[3]]
+    assert sorted(attached) == sorted(detached) and len(attached) == 4
+
+
+def test_foreground_first_attempt_skips_mouse_retry():
+    window, calls = _foreground_retry_window([True])
+    assert window.activate(20)
+    assert calls == [("foreground", 20)]
+
+
+def test_foreground_restores_before_activation():
+    window, calls = _foreground_retry_window([True], minimized=True)
+    assert window.activate(20)
+    assert calls == [("show", 20, 9), ("foreground", 20)]
+
+
 def test_single_instance_and_daemon_launch():
     calls = []
     occupied = [False]

@@ -144,6 +144,22 @@ class RawInputGuardTests(HubCase):
             for key in ("Ctrl+C", "Ctrl+D", "Ctrl+V"):
                 self.assertRegex(text, re.escape(key) + r"[^\n]*危险")
 
+    def test_docs_follow_the_measured_layout(self):
+        keys_md = (HERE / "hub_keys.md").read_text(encoding="utf-8")
+        manual = (HERE.parent / "agentdeck" / "使用说明书.md").read_text(encoding="utf-8")
+        self.assertNotIn("Ctrl+0", manual)
+        self.assertNotIn("印的字母就是", manual)
+        self.assertIn("按位置", manual)
+        for text in (keys_md, manual):
+            self.assertRegex(text, r"旋钮 4 按下 \| C")
+            self.assertNotRegex(text, r"旋钮 4 按下 \| Ctrl\+0")
+            self.assertNotIn("无信号", text)
+            for row, key in (("第 2 排第 4 颗", "Alt"), ("第 4 排第 1 颗", "Ctrl"), ("第 4 排第 2 颗", "Shift")):
+                if text is manual:
+                    self.assertRegex(text, re.escape(row) + r" \| " + key + r"（只发修饰键[^\n]*不绑定")
+        self.assertIn("第 4 排第 3 颗 | U", manual)
+        self.assertIn("第 4 排第 4 颗 | X", manual)
+
 
 class WindowBindingTests(HubCase):
     """F1: the relay's hwnd is stored and focus prefers it over title guessing."""
@@ -563,16 +579,19 @@ class NavScrollActionTests(HubCase):
         for usage in (0x2D, 0x2E, 0x19, 0x30, 0x2F):
             press([0, 0, usage, 0, 0, 0, 0, 0])
         press([1, 0, 0, 0, 0, 0, 0, 0])
-        press([1, 0, 0x27, 0, 0, 0, 0, 0])  # factory Ctrl+0: Ctrl frame, then the main key
+        press([1, 0, 0x27, 0, 0, 0, 0, 0])  # alternate keypad Ctrl+0
+        press([0, 0, 0x06, 0, 0, 0, 0, 0])  # measured knob 4 press: C
         self.assertEqual(self.desktop.calls, [
             ("scroll", SID, 1), ("scroll", SID, -1), ("scroll", SID, 100),
-            ("nav", SID, "down"), ("nav", SID, "up"), ("nav", SID, "enter")])
+            ("nav", SID, "down"), ("nav", SID, "up"), ("nav", SID, "enter"),
+            ("nav", SID, "enter")])
 
     def test_shipped_keymap_and_upgrade_from_v3_and_v4(self):
         shipped = json.loads((HERE / "hub_keys.json").read_text(encoding="utf-8"))
-        self.assertEqual(shipped["version"], 5)
+        self.assertEqual(shipped["version"], 6)
         bindings = shipped["bindings"]
         self.assertEqual({key: bindings[key] for key in app.V4_CHANGED}, {
+            "hid:0x06": "nav enter", "hid:0x16": "cycle -1", "hid:0x09": "cycle +1",
             "hid:0x2D": "scroll 1", "hid:0x2E": "scroll -1", "hid:0x19": "scroll end",
             "hid:0x30": "nav down", "hid:0x2F": "nav up", "ctrl+hid:0x27": "nav enter"})
         for name in ("hid:0x16", "hid:0x09", "hid:0x15", "hid:0x13", "hid:0x1B"):
@@ -580,15 +599,32 @@ class NavScrollActionTests(HubCase):
         instructions = " ".join(shipped["_instructions"])
         for text in ("scroll 1", "scroll end", "nav down", "nav enter", "Ctrl+D"):
             self.assertIn(text, instructions)
+        self.assertNotIn("Ctrl+0", instructions)
         self.assertNotIn("cycle +1, counterclockwise = -> cycle -1", instructions)
-        for version, changed in ((3, app.V3_CHANGED), (4, app.V4_CHANGED)):
+        for usage in range(0xE0, 0xE8):
+            self.assertNotIn("hid:0x%02X" % usage, bindings)
+        for version, changed in ((3, app.V3_CHANGED), (4, app.V4_CHANGED), (5, app.V5_CHANGED)):
             with self.subTest(version=version), tempfile.TemporaryDirectory() as directory:
                 target = Path(directory) / "hub_keys.json"
+                old_bindings = {key: value for key, value in dict(bindings, **changed).items()
+                                if value is not None}
                 target.write_text(json.dumps(dict(shipped, version=version,
-                                                  bindings=dict(bindings, **changed))), encoding="utf-8")
+                                                  bindings=old_bindings)), encoding="utf-8")
+                old_bytes = target.read_bytes()
                 self.assertTrue(app.upgrade_keymap(target, HERE / "hub_keys.json"))
                 self.assertEqual(json.loads(target.read_text(encoding="utf-8"))["bindings"], bindings)
-                self.assertTrue((Path(directory) / ("hub_keys.json.bak-v%d" % version)).exists())
+                backup = Path(directory) / ("hub_keys.json.bak-v%d" % version)
+                self.assertEqual(backup.read_bytes(), old_bytes)
+                target.write_bytes(old_bytes)
+                backup.write_bytes(b"keep existing backup")
+                self.assertTrue(app.upgrade_keymap(target, HERE / "hub_keys.json"))
+                self.assertEqual(backup.read_bytes(), b"keep existing backup")
+                if version == 5:
+                    old_bindings["hid:0x08"] = "slot 6"
+                    edited = json.dumps(dict(shipped, version=5, bindings=old_bindings), indent=3).encode("utf-8")
+                    target.write_bytes(edited)
+                    self.assertFalse(app.upgrade_keymap(target, HERE / "hub_keys.json"))
+                    self.assertEqual(target.read_bytes(), edited)
 
 
 class PreviewTests(HubCase):

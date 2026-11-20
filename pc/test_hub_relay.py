@@ -579,12 +579,51 @@ class RelayHardeningTests(unittest.TestCase):
         self.assertRegex(line, prefix)
         message = re.sub(prefix, "", line)
         self.assertEqual(len(message), 300)
-        self.assertTrue(message.startswith("ValueError: first  "))
+        self.assertTrue(message.startswith("ValueError: first\\r\\n"))
         self.assertNotIn("private", line)
         self.assertNotIn("\r", line)
         hub_relay._log(self.home, None, None, "missing")
         last = (self.data / "relay.log").read_text(encoding="utf-8").splitlines()[-1]
         self.assertRegex(last, r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} - - - missing$")
+
+    def test_log_escapes_controls_and_preserves_printable_unicode(self):
+        hub_relay._log(self.home, "中\tcc", {"hook_event_name": "事件\x07\r\n", "session_id": "s\x00"},
+                       "消息\x07\t\r\n\x1b\u2028\ud800")
+        lines = (self.data / "relay.log").read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].endswith(
+            "中\\tcc 事件\\x07\\r\\n s\\x00 消息\\x07\\t\\r\\n\\x1b\\u2028\\ud800"))
+        self.assertTrue(lines[0].isprintable())
+
+    def test_hostile_log_fields_are_capped_and_write_one_line(self):
+        event = {"hook_event_name": "事件\x07\n" * 5000, "session_id": "session-id"}
+        hub_relay._log(self.home, "agent\x00\r\n" * 5000, event, "message\x1b\n" * 5000)
+        contents = (self.data / "relay.log").read_text(encoding="utf-8")
+        self.assertEqual(contents.count("\n"), 1)
+        line = contents[:-1]
+        self.assertEqual(len(line), 400)
+        self.assertTrue(line.isprintable())
+        _, _, agent, name, session, message = line.split(" ", 5)
+        self.assertLessEqual(len(agent), 64)
+        self.assertLessEqual(len(name), 64)
+        self.assertEqual(session, "session-")
+        self.assertIn("事件\\x07\\n", name)
+        self.assertIn("\\x00\\r\\n", agent)
+        self.assertIn("\\x1b\\n", message)
+
+    def test_unsupported_hook_warning_uses_the_same_escaping_and_cap(self):
+        import hub
+
+        name = "未知\x07\n\x1b" * 5000
+        with patch.object(hub, "UNKNOWN_EVENTS", set()), self.assertLogs("agentdeck.hub", "WARNING") as logs:
+            with self.assertRaises(hub.HubError):
+                hub.Hub.event(Mock(monotonic=lambda: 0.), "cc", {"hook_event_name": name, "session_id": "s"})
+        self.assertEqual(len(logs.output), 1)
+        short_name = logs.output[0].split("Unsupported hook_event_name: ", 1)[1]
+        self.assertEqual(short_name, hub_relay.escape_log_text(name, 64))
+        self.assertLessEqual(len(short_name), 64)
+        self.assertTrue(short_name.isprintable())
+        self.assertIn("未知\\x07\\n\\x1b", short_name)
 
     def test_log_rotates_at_512_kib_and_replaces_previous_backup(self):
         path = self.data / "relay.log"

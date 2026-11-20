@@ -234,20 +234,23 @@ Run one AgentDeck keyboard reader at a time: use Hub's USB mode in place of
 
 ### 实测 4 列 × 5 排 宏键盘出厂键位表（USB 模式）
 
-实测出厂键位（4 列 × 5 排，hub 通过 USB 独占读取，对应 `pc/hub_keys.json` 默认 profile）。历史 `v2_emulation` 的 Space/Q/V 分别选择槽位 4/5/6，Ctrl+0 为 interrupt；Ctrl+C/V 在两种 profile 中均留空：
+2026-11-20 用只读 Raw Input 探针逐颗实测（按位置从上到下、从左到右，再逐个旋钮），对应 `pc/hub_keys.json` 默认 profile（v6）。
+键帽上印的字不可靠，按位置找键。历史 `v2_emulation` 的 Space/Q/V 分别选择槽位 4/5/6，Ctrl+0 为 interrupt；Ctrl+C/V 在两种 profile 中均留空：
 
 | 排 \ 列 | 第 1 列 | 第 2 列 | 第 3 列 | 第 4 列 |
 | --- | --- | --- | --- | --- |
 | **第 1 排** | E (`hid:0x08`)<br>`slot 1`（会话 1） | B (`hid:0x05`)<br>`slot 2`（会话 2） | Ctrl+Z (`ctrl+hid:0x1D`)<br>`slot 3`（会话 3） | Space (`hid:0x2C`)<br>`interrupt`（打断） |
-| **第 2 排** | G (`hid:0x0A`)<br>`approve`（✓ 批准） | Ctrl+F (`ctrl+hid:0x09`)<br>`deny`（✗ 拒绝） | H (`hid:0x0B`)<br>`voice_down`/`up`（按住说话） | （第 4 颗无信号） |
+| **第 2 排** | G (`hid:0x0A`)<br>`approve`（✓ 批准） | Ctrl+F (`ctrl+hid:0x09`)<br>`deny`（✗ 拒绝） | H (`hid:0x0B`)<br>`voice_down`/`up`（按住说话） | Alt（只发修饰键，没有字母）<br>未绑定 |
 | **第 3 排** | L (`hid:0x0F`)<br>`screenshot`（截图） | M (`hid:0x10`)<br>`prompt continue`（继续） | Ctrl+T (`ctrl+hid:0x17`)<br>`prompt tests`（跑测试） | Ctrl+D (`ctrl+hid:0x07`)<br>`prompt summary`（总结进度）<br>⚠ 危险键（Raw Input 下连按两次退出 Claude Code） |
-| **第 4 排** | U (`hid:0x18`)<br>`prompt commit`（提交） | X (`hid:0x1B`)<br>`cycle +1`（下个会话） | （第 3 颗无信号） | （第 4 颗无信号） |
+| **第 4 排** | Ctrl（只发修饰键）<br>未绑定 | Shift（只发修饰键）<br>未绑定 | U (`hid:0x18`)<br>`prompt commit`（提交） | X (`hid:0x1B`)<br>`cycle +1`（下个会话） |
 | **第 5 排** | Tab (`hid:0x2B`)<br>`next_wait`（跳到等我的会话） | Ctrl+C (`ctrl+hid:0x06`)<br>（留空）⚠ 危险键 | Ctrl+V (`ctrl+hid:0x19`)<br>（留空）⚠ 危险键 | P (`hid:0x13`)<br>`cycle -1`（上个会话） |
 
-旋钮 1、2：顺时针/逆时针切换会话（`cycle +1` / `cycle -1`），按下旋钮 1 为截图（L 键），按下旋钮 2 为显示浮窗（`show`）。
-旋钮 3：`scroll 1` / `scroll -1`（在所选会话窗口上发鼠标滚轮，往下 / 往上），按下 `scroll end`（滚到底）。
-旋钮 4：`nav down` / `nav up`（方向键，只在会话等你时），按下 `nav enter`（回车）。
-未改动过的 v3 或 v4 键位文件启动时自动升级到 v5（旧文件存为 `hub_keys.json.bak-v3` / `.bak-v4`）。详情见 `pc/hub_keys.md`。
+旋钮 1：顺时针 F (`hid:0x09`) `cycle +1`、逆时针 S (`hid:0x16`) `cycle -1`，按下 L 截图。
+旋钮 2：顺时针 R (`hid:0x15`) `cycle +1`、逆时针 P (`hid:0x13`) `cycle -1`，按下 Q 显示浮窗（`show`）。
+旋钮 3：- (`hid:0x2D`) `scroll 1`、= (`hid:0x2E`) `scroll -1`（在所选会话窗口上发鼠标滚轮，往下 / 往上；哪个方向发 - 还没测准），按下 V `scroll end`（滚到底）。
+旋钮 4：] (`hid:0x30`) `nav down`、[ (`hid:0x2F`) `nav up`（方向键，只在会话等你时；转向还没测准），按下 C (`hid:0x06`) `nav enter`（回车）。
+`ctrl+hid:0x27`（Ctrl+0）也保留为 `nav enter`，给别的键盘用；这把键盘的旋钮 4 按下实测是 C，不是 Ctrl+0。
+未改动过的 v3、v4 或 v5 键位文件启动时自动升级到 v6（旧文件存为 `hub_keys.json.bak-v3` / `.bak-v4` / `.bak-v5`）。详情见 `pc/hub_keys.md`。
 
 读键方式不是 USB 直读时（Raw Input），每颗键也会打进前台窗口：Hub 拒绝 `prompt`、`nav`、`voice_down`、`voice`、`screenshot`，
 提示“按键会漏进窗口：先用 Zadig 把接口 0 换成 WinUSB”；切会话、批准/拒绝、打断、滚动、显示浮窗照常。
@@ -547,12 +550,14 @@ for another flat JSON mapping. `--keys FILE` selects another USB binding map.
 `hub_keys.json` documents every physical key and knob; E/B/Ctrl+Z select slots
 1/2/3, G approves, Ctrl+F denies, Space interrupts, H holds voice, L captures
 a screenshot, knobs 1 and 2 cycle sessions, knob 3 scrolls and knob 4 sends
-arrow keys and Enter.
+arrow keys and Enter (knob 4 press sends C on the measured keypad). Find keys by
+position: the printed key caps do not match what the keys send.
 
 Use `--profile v2_emulation` with `--backend usb` to select the six-slot emulation
 map in `hub_keys.json`. The default bindings above remain the default profile.
-See [hub_keys.md](hub_keys.md) for the physical label table, the measured Ctrl+0
-alternate interrupt, and the Ctrl chords that still need hardware confirmation.
+See [hub_keys.md](hub_keys.md) for the physical label table, the historical
+Ctrl+0 alternate interrupt of that profile, and the Ctrl chords that still need
+hardware confirmation.
 
 USB bindings accept either a legacy action string (key down only) or an object
 with `down` and/or `up` action strings. The default voice binding is:

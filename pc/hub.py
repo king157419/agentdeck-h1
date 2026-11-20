@@ -82,7 +82,7 @@ from hub_risk import (  # noqa: F401  (re-exported: hub.classify stays public)
     WRITE_TOOL, _production_ssh, classify)
 
 
-from hub_relay import scrub_surrogates, tool_input_hash  # noqa: E402,F401  (shared with relay)
+from hub_relay import escape_log_text, scrub_surrogates, tool_input_hash  # noqa: E402,F401
 
 
 def hub_marker(home=None):
@@ -893,7 +893,7 @@ class Hub:
         name = event.get("hook_event_name")
         sid = event.get("session_id") or event.get("thread_id") or event.get("conversation_id")
         if isinstance(name, str) and name not in EVENTS:
-            short_name = name[:64]
+            short_name = escape_log_text(name, 64)
             with UNKNOWN_EVENTS_LOCK:
                 if short_name not in UNKNOWN_EVENTS and len(UNKNOWN_EVENTS) < 256:
                     UNKNOWN_EVENTS.add(short_name)
@@ -1592,6 +1592,32 @@ class HubHandler(BaseHTTPRequestHandler):
     do_GET = do_POST = do_PUT = do_DELETE = do_PATCH = do_OPTIONS = do_HEAD = do_TRACE = do_CONNECT = _handle
 
 
+def binding_label(binding):
+    """Describe HID bindings for diagnostics; malformed input must never raise."""
+    try:
+        parts = binding.split("+")
+        code = parts[-1]
+        if code.lower().startswith("hid:0x"):
+            usage = int(code[4:], 16)
+            if 0x04 <= usage <= 0x1D:
+                code = chr(ord("A") + usage - 0x04)
+            elif 0x1E <= usage <= 0x27:
+                code = "1234567890"[usage - 0x1E]
+            elif 0x3A <= usage <= 0x45:
+                code = "F%d" % (usage - 0x3A + 1)
+            elif 0x68 <= usage <= 0x73:
+                code = "F%d" % (usage - 0x68 + 13)
+            else:
+                code = {0x28: "Enter", 0x29: "Esc", 0x2A: "Backspace", 0x2B: "Tab",
+                        0x2C: "Space", 0x2D: "-", 0x2E: "=", 0x2F: "[", 0x30: "]",
+                        0x31: "\\", 0x33: ";", 0x34: "'", 0x35: "`", 0x36: ",",
+                        0x37: ".", 0x38: "/"}.get(usage, "0x%02X" % usage)
+        modifiers = {"ctrl": "Ctrl", "shift": "Shift", "alt": "Alt", "win": "Win"}
+        return "+".join([modifiers.get(part.lower(), part) for part in parts[:-1]] + [code])
+    except Exception:
+        return binding if isinstance(binding, str) else "?"
+
+
 class USBKeys:
     """Dispatch bindings and pair releases with the accepted physical press."""
 
@@ -1683,7 +1709,7 @@ class USBKeys:
             return True
         except (HubError, ValueError) as error:
             keylog.debug("Keyboard action reader=%s binding=%s action=%s result=blocked: %s", reader, binding, action, error)
-            log.warning("%s action failed: %s", reader, error)
+            log.warning("%s %s (%s) %s blocked: %s", reader, binding, binding_label(binding), action, error)
             self._note(action, error=error)
             return False
 

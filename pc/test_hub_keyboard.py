@@ -476,6 +476,35 @@ class SwitchingTests(unittest.TestCase):
 
 
 class KeyboardLogTests(unittest.TestCase):
+    def test_binding_labels(self):
+        labels = {"hid:0x18": "U", "ctrl+hid:0x09": "Ctrl+F",
+                  "ctrl+shift+alt+win+hid:0x27": "Ctrl+Shift+Alt+Win+0",
+                  "hid:0x04": "A", "hid:0x1D": "Z", "hid:0x1E": "1",
+                  "hid:0x28": "Enter", "hid:0x29": "Esc", "hid:0x2A": "Backspace",
+                  "hid:0x2B": "Tab", "hid:0x2C": "Space", "hid:0x2D": "-",
+                  "hid:0x2E": "=", "hid:0x2F": "[", "hid:0x30": "]", "hid:0x31": "\\",
+                  "hid:0x33": ";", "hid:0x34": "'", "hid:0x35": "`", "hid:0x36": ",",
+                  "hid:0x37": ".", "hid:0x38": "/", "hid:0x3A": "F1", "hid:0x45": "F12",
+                  "hid:0x68": "F13", "hid:0x73": "F24", "hid:0xFF": "0xFF"}
+        for binding, label in labels.items():
+            with self.subTest(binding=binding):
+                self.assertEqual(hub.binding_label(binding), label)
+        for binding in (None, 123, {}, "hid:0xnope", "", "ctrl+unknown"):
+            with self.subTest(binding=binding):
+                self.assertIsInstance(hub.binding_label(binding), str)
+
+    def test_warning_names_reader_binding_label_action_and_reason(self):
+        engine = SimpleNamespace(monotonic=lambda: 10., input_snapshot=lambda: {},
+                                 action=Mock(side_effect=hub.HubError("no session")))
+        keys = hub.USBKeys(engine, {"bindings": {"hid:0x18": "prompt commit"}})
+        for reader, reason in (("Raw Input", "keys leak into the window under Raw Input; install WinUSB"),
+                               ("USB", "no session")):
+            with self.subTest(reader=reader), self.assertLogs("agentdeck.hub", "WARNING") as logs:
+                keys(dict(ReportState().feed(report(0x18))[0], t=10., reader=reader))
+            self.assertEqual(logs.output, ["WARNING:agentdeck.hub:%s hid:0x18 (U) prompt commit blocked: %s" %
+                                          (reader, reason)])
+        self.assertEqual(engine.action.call_count, 1)  # Raw Input was refused before dispatch.
+
     def test_hub_logs_receipt_and_action_result_with_reader(self):
         for reader in ("USB", "Raw Input"):
             engine = SimpleNamespace(monotonic=lambda: 10., input_snapshot=lambda: {},

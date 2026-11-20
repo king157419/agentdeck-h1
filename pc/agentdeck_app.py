@@ -34,16 +34,16 @@ COLORS = {"idle": theme.STATUS["IDLE"], "running": theme.STATUS["RUN"],
 STATES = {"idle": "空闲", "think": "思考", "tool": "运行", "wait": "待批",
           "locked": "终端确认", "error": "出错", "done": "完成"}
 TOOLS = {"cc": "Claude", "cx": "Codex"}
-# Measured physical positions, including unbound keys and keys without a report.
+# Measured physical positions, including unbound modifier-only keys.
 KEY_ROWS = (
     (("E", "hid:0x08"), ("B", "hid:0x05"), ("Ctrl+Z", "ctrl+hid:0x1D"), ("Space", "hid:0x2C")),
-    (("G", "hid:0x0A"), ("Ctrl+F", "ctrl+hid:0x09"), ("H", "hid:0x0B"), ("无信号", None)),
+    (("G", "hid:0x0A"), ("Ctrl+F", "ctrl+hid:0x09"), ("H", "hid:0x0B"), ("Alt", None)),
     (("L", "hid:0x0F"), ("M", "hid:0x10"), ("Ctrl+T", "ctrl+hid:0x17"), ("Ctrl+D", "ctrl+hid:0x07")),
-    (("U", "hid:0x18"), ("X", "hid:0x1B"), ("无信号", None), ("无信号", None)),
+    (("Ctrl", None), ("Shift", None), ("U", "hid:0x18"), ("X", "hid:0x1B")),
     (("Tab", "hid:0x2B"), ("Ctrl+C", "ctrl+hid:0x06"), ("Ctrl+V", "ctrl+hid:0x19"), ("P", "hid:0x13")),
 )
-KNOBS = (("hid:0x16", "hid:0x09", "hid:0x0F"), ("hid:0x15", "hid:0x13", "hid:0x14"),
-         ("hid:0x2D", "hid:0x2E", "hid:0x19"), ("hid:0x30", "hid:0x2F", "ctrl+hid:0x27"))
+KNOBS = (("hid:0x09", "hid:0x16", "hid:0x0F"), ("hid:0x15", "hid:0x13", "hid:0x14"),
+         ("hid:0x2D", "hid:0x2E", "hid:0x19"), ("hid:0x30", "hid:0x2F", "hid:0x06"))
 NOTIFY_KEY = r"Control Panel\NotifyIconSettings"
 ZADIG_URL = "https://zadig.akeo.ie"
 TRAY_HINT = "AgentDeck 在右下角 ^ 里，可拖到任务栏常驻"
@@ -59,11 +59,12 @@ GUIDE_FALLBACK = """让宏键盘不再打字：装 WinUSB 驱动
 5. AgentDeck 会自己改成 USB 直读，浮窗上的黄色提示随之消失。
 """
 # Default bindings of earlier keymap versions, as changes from the shipped
-# default; an untouched copy of either is upgraded (the user's edits never are).
-V4_CHANGED = {"hid:0x2D": "cycle +1", "hid:0x2E": "cycle -1", "hid:0x30": "cycle +1",
-              "hid:0x2F": "cycle -1", "hid:0x19": "prompt summary", "ctrl+hid:0x27": "prompt continue"}
+# default; None means absent in that version. User edits are never upgraded.
+V5_CHANGED = {"hid:0x06": None, "hid:0x16": "cycle +1", "hid:0x09": "cycle -1"}
+V4_CHANGED = dict(V5_CHANGED, **{"hid:0x2D": "cycle +1", "hid:0x2E": "cycle -1", "hid:0x30": "cycle +1",
+              "hid:0x2F": "cycle -1", "hid:0x19": "prompt summary", "ctrl+hid:0x27": "prompt continue"})
 V3_CHANGED = dict(V4_CHANGED, **{"hid:0x14": "prompt tests"})
-OLD_DEFAULTS = {3: V3_CHANGED, 4: V4_CHANGED}
+OLD_DEFAULTS = {3: V3_CHANGED, 4: V4_CHANGED, 5: V5_CHANGED}
 # Keys whose own letters are harmful when they leak into an agent window (Raw Input).
 DANGER_KEYS = {"Ctrl+C": "危险：漏键会打断", "Ctrl+D": "危险：连按两次会退出",
                "Ctrl+V": "危险：漏键会粘贴"}
@@ -136,7 +137,8 @@ def upgrade_keymap(target, source):
         if (type(version) is not int or version not in OLD_DEFAULTS
                 or not isinstance(shipped, dict) or shipped.get("version", 0) <= version):
             return False
-        old_default = dict(shipped["bindings"], **OLD_DEFAULTS[version])
+        old_default = {key: value for key, value in dict(shipped["bindings"], **OLD_DEFAULTS[version]).items()
+                       if value is not None}
         if current.get("bindings") != old_default:
             return False  # the user edited it: never overwrite
         backup = target.with_name(target.name + ".bak-v%d" % version)
@@ -229,7 +231,7 @@ def keymap_model(config, profile="default"):
     mapping = selected["bindings"]
 
     def action(code):
-        value = mapping.get(code, "未绑定") if code else "无信号"
+        value = mapping.get(code, "未绑定") if code else "修饰键，未绑定"
         if isinstance(value, dict):
             return " / ".join(("按下 " if edge == "down" else "松开 ") + text
                               for edge, text in value.items())
@@ -1010,15 +1012,14 @@ class TrayApplication:
         grid.pack()
         for y, row in enumerate(model["rows"]):
             for x, (key, action) in enumerate(row):
-                dead = action == "无信号"
+                unbound = "未绑定" in action
                 card = tk.Frame(grid, bg=theme.SURFACE, padx=theme.S3, pady=theme.S3, width=170, height=72)
                 card.grid(row=y, column=x, padx=theme.S1, pady=theme.S1, sticky="nsew")
                 card.grid_propagate(False)
-                theme.label(card, key, color=theme.FAINT if dead else theme.TEXT, size=10, bold=True,
+                theme.label(card, key, color=theme.FAINT if unbound else theme.TEXT, size=10, bold=True,
                             latin=True, bg=theme.SURFACE).pack(anchor="w")
-                if not dead:
-                    theme.label(card, action, color=theme.FAINT if action == "未绑定" else theme.MUTED,
-                                size=9, bg=theme.SURFACE, wraplength=150, justify="left").pack(anchor="w")
+                theme.label(card, action, color=theme.FAINT if unbound else theme.MUTED,
+                            size=9, bg=theme.SURFACE, wraplength=150, justify="left").pack(anchor="w")
                 if key in DANGER_KEYS:
                     theme.label(card, "⚠ " + DANGER_KEYS[key], color=theme.STATUS["ERR"], size=8,
                                 bg=theme.SURFACE, wraplength=150, justify="left").pack(anchor="w")

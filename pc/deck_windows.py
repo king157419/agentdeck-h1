@@ -1,6 +1,7 @@
 """AgentDeck 的窗口切换与 SendInput；只有实例化时才访问 Win32。"""
 import ctypes
 from ctypes import wintypes
+import logging
 
 from daemon import ForegroundWindow
 
@@ -69,6 +70,22 @@ class WindowControl(ForegroundWindow):
     def activate(self, hwnd):
         if self.user.IsIconic(hwnd):
             self.user.ShowWindow(hwnd, 9)  # SW_RESTORE
+        log = logging.getLogger("agentdeck.hub")
+        if self._foreground_attempt(hwnd):
+            log.debug("Foreground activation hwnd=%s: retry not needed", hwnd)
+            return True
+        # Raw Input does not bypass the foreground lock. Injected input makes us
+        # the last input provider; a zero mouse move cannot type or activate menus,
+        # and Raw Input ignores injected events (hDevice == 0).
+        event = INPUT(type=0, mi=MOUSEINPUT(0, 0, 0, 0x0001, 0, 0))
+        if self.user.SendInput(1, ctypes.byref(event), ctypes.sizeof(INPUT)) != 1:
+            log.info("Foreground activation hwnd=%s: retry needed, SendInput failed", hwnd)
+            return False
+        activated = self._foreground_attempt(hwnd)
+        log.info("Foreground activation hwnd=%s: retry needed, worked=%s", hwnd, activated)
+        return activated
+
+    def _foreground_attempt(self, hwnd):
         if self.user.SetForegroundWindow(hwnd) and self.user.GetForegroundWindow() == hwnd:
             return True
         current = self.kernel.GetCurrentThreadId()
