@@ -117,7 +117,7 @@ class RawInputGuardTests(HubCase):
             with self.subTest(action=action):
                 accepted, notes = self.dispatch(action, "Raw Input")
                 self.assertFalse(accepted)
-                self.assertEqual(notes, [(hub.LEAK_TEXT, False)])
+                self.assertEqual(notes, [("第 3 排第 2 颗 → " + hub.LEAK_TEXT, False)])
         self.assertEqual(self.desktop.calls, [])
         self.assertEqual(hub.LEAK_TEXT, hub_overlay.DRIVER_NOTICE)
 
@@ -588,13 +588,13 @@ class NavScrollActionTests(HubCase):
 
     def test_shipped_keymap_and_upgrade_from_v3_and_v4(self):
         shipped = json.loads((HERE / "hub_keys.json").read_text(encoding="utf-8"))
-        self.assertEqual(shipped["version"], 6)
+        self.assertEqual(shipped["version"], 7)
         bindings = shipped["bindings"]
         self.assertEqual({key: bindings[key] for key in app.V4_CHANGED}, {
-            "hid:0x06": "nav enter", "hid:0x16": "cycle -1", "hid:0x09": "cycle +1",
+            "hid:0x06": "nav enter", "hid:0x16": "app prev", "hid:0x09": "app next",
             "hid:0x2D": "scroll 1", "hid:0x2E": "scroll -1", "hid:0x19": "scroll end",
             "hid:0x30": "nav down", "hid:0x2F": "nav up", "ctrl+hid:0x27": "nav enter"})
-        for name in ("hid:0x16", "hid:0x09", "hid:0x15", "hid:0x13", "hid:0x1B"):
+        for name in ("hid:0x15", "hid:0x13", "hid:0x1B"):
             self.assertTrue(bindings[name].startswith("cycle "))
         instructions = " ".join(shipped["_instructions"])
         for text in ("scroll 1", "scroll end", "nav down", "nav enter", "Ctrl+D"):
@@ -603,7 +603,7 @@ class NavScrollActionTests(HubCase):
         self.assertNotIn("cycle +1, counterclockwise = -> cycle -1", instructions)
         for usage in range(0xE0, 0xE8):
             self.assertNotIn("hid:0x%02X" % usage, bindings)
-        for version, changed in ((3, app.V3_CHANGED), (4, app.V4_CHANGED), (5, app.V5_CHANGED)):
+        for version, changed in app.OLD_DEFAULTS.items():
             with self.subTest(version=version), tempfile.TemporaryDirectory() as directory:
                 target = Path(directory) / "hub_keys.json"
                 old_bindings = {key: value for key, value in dict(bindings, **changed).items()
@@ -619,9 +619,9 @@ class NavScrollActionTests(HubCase):
                 backup.write_bytes(b"keep existing backup")
                 self.assertTrue(app.upgrade_keymap(target, HERE / "hub_keys.json"))
                 self.assertEqual(backup.read_bytes(), b"keep existing backup")
-                if version == 5:
+                if version in (5, 6):
                     old_bindings["hid:0x08"] = "slot 6"
-                    edited = json.dumps(dict(shipped, version=5, bindings=old_bindings), indent=3).encode("utf-8")
+                    edited = json.dumps(dict(shipped, version=version, bindings=old_bindings), indent=3).encode("utf-8")
                     target.write_bytes(edited)
                     self.assertFalse(app.upgrade_keymap(target, HERE / "hub_keys.json"))
                     self.assertEqual(target.read_bytes(), edited)

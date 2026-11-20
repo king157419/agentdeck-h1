@@ -501,7 +501,7 @@ class KeyboardLogTests(unittest.TestCase):
                                ("USB", "no session")):
             with self.subTest(reader=reader), self.assertLogs("agentdeck.hub", "WARNING") as logs:
                 keys(dict(ReportState().feed(report(0x18))[0], t=10., reader=reader))
-            self.assertEqual(logs.output, ["WARNING:agentdeck.hub:%s hid:0x18 (U) prompt commit blocked: %s" %
+            self.assertEqual(logs.output, ["WARNING:agentdeck.hub:%s hid:0x18 (U; 第 4 排第 3 颗) prompt commit blocked: %s" %
                                           (reader, reason)])
         self.assertEqual(engine.action.call_count, 1)  # Raw Input was refused before dispatch.
 

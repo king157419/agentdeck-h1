@@ -264,7 +264,7 @@ class ConfigTests(unittest.TestCase):
         keys, _ = app.prepare_configs(home=self.home)
         self.assertEqual(keys, target)
         self.assertEqual(app.hub.load_json(keys), shipped)
-        self.assertEqual(shipped["version"], 6)
+        self.assertEqual(shipped["version"], 7)
         self.assertEqual(target.with_name("hub_keys.json.bak-v5").read_bytes(), original)
         app.prepare_configs(home=self.home)
         self.assertEqual(target.with_name("hub_keys.json.bak-v5").read_bytes(), original)
@@ -316,7 +316,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(model["rows"][3][:2], [("Ctrl", "修饰键，未绑定"), ("Shift", "修饰键，未绑定")])
         self.assertEqual(model["rows"][3][2:], [("U", "prompt commit"), ("X", "cycle +1")])
         self.assertEqual(model["rows"][4][1], ("Ctrl+C", "未绑定"))
-        self.assertEqual(model["knobs"][0], ["cycle +1", "cycle -1", "screenshot"])
+        self.assertEqual(model["knobs"][0], ["app next", "app prev", "screenshot"])
         self.assertEqual(model["knobs"][3], ["nav down", "nav up", "nav enter"])
         self.assertIn("voice_down", model["rows"][1][2][1])
         self.assertIn("voice_up", model["rows"][1][2][1])
@@ -1440,6 +1440,24 @@ class ApplicationTests(unittest.TestCase):
         self.assertEqual(app.hub.load_json(app.data_dir(self.home) / "config.json")["dictation_shortcut"],
                          {"key_codes": [0xA5], "modifiers": [], "mode": "toggle"})
         tk.capture_instances[0].close.assert_called_once()
+        tk.Toplevel.return_value.destroy.assert_called_once()
+
+    def test_voice_settings_offers_and_persists_single_tap(self):
+        desktop = self.voice_desktop()
+        tk, commands, bindings, mode = self.build_voice_settings()
+        choices = {call.kwargs["value"]: call.kwargs["text"]
+                   for call in tk.Radiobutton.call_args_list}
+        self.assertEqual(set(choices), {"hold", "toggle", "tap"})
+        self.assertIn("单点", choices["tap"])
+        event = SimpleNamespace(keycode=165, keysym="Alt_R")
+        bindings["<KeyPress>"](event)
+        bindings["<KeyRelease>"](event)
+        mode.value = "tap"
+        commands["保存"]()
+        shortcut = {"key_codes": [165], "modifiers": [], "mode": "tap"}
+        self.assertEqual(app.hub.load_json(app.data_dir(self.home) / "config.json")["dictation_shortcut"],
+                         shortcut)
+        self.assertEqual(desktop.dictation_shortcut, shortcut)
         tk.Toplevel.return_value.destroy.assert_called_once()
 
     def test_voice_settings_cancel_and_rerecord_never_apply_partial_chords(self):

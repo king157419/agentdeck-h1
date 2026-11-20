@@ -301,10 +301,10 @@ class FeedbackTests(unittest.TestCase):
             keys = hub.USBKeys(engine, {"bindings": {"hid:0x08": "slot 1", "hid:0x05": "slot 2"}})
             keys._dispatch("hid:0x08", "slot 1", {}, engine.monotonic())
             last = engine.state()["last_input"]
-            self.assertEqual((last["text"], last["ok"]), ("槽位 1 没有会话", False))
+            self.assertEqual((last["text"], last["ok"]), ("第 1 排第 1 颗 → 槽位 1 没有会话", False))
             engine.event("cc", {"hook_event_name": "SessionStart", "session_id": "a", "cwd": "D:/a"})
             keys._dispatch("hid:0x08", "slot 1", {}, engine.monotonic())
-            self.assertEqual(engine.state()["last_input"]["text"], "已选槽位 1")
+            self.assertEqual(engine.state()["last_input"]["text"], "第 1 排第 1 颗 → 已选槽位 1")
             keys._dispatch("hid:0x05", "slot 2", {}, engine.monotonic())
             self.assertTrue(any("KEY: Slot 2 empty" in line for line in lines))
             self.assertGreater(engine.state()["last_input"]["seq"], 2)

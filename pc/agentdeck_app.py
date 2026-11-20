@@ -35,15 +35,8 @@ STATES = {"idle": "空闲", "think": "思考", "tool": "运行", "wait": "待批
           "locked": "终端确认", "error": "出错", "done": "完成"}
 TOOLS = {"cc": "Claude", "cx": "Codex"}
 # Measured physical positions, including unbound modifier-only keys.
-KEY_ROWS = (
-    (("E", "hid:0x08"), ("B", "hid:0x05"), ("Ctrl+Z", "ctrl+hid:0x1D"), ("Space", "hid:0x2C")),
-    (("G", "hid:0x0A"), ("Ctrl+F", "ctrl+hid:0x09"), ("H", "hid:0x0B"), ("Alt", None)),
-    (("L", "hid:0x0F"), ("M", "hid:0x10"), ("Ctrl+T", "ctrl+hid:0x17"), ("Ctrl+D", "ctrl+hid:0x07")),
-    (("Ctrl", None), ("Shift", None), ("U", "hid:0x18"), ("X", "hid:0x1B")),
-    (("Tab", "hid:0x2B"), ("Ctrl+C", "ctrl+hid:0x06"), ("Ctrl+V", "ctrl+hid:0x19"), ("P", "hid:0x13")),
-)
-KNOBS = (("hid:0x09", "hid:0x16", "hid:0x0F"), ("hid:0x15", "hid:0x13", "hid:0x14"),
-         ("hid:0x2D", "hid:0x2E", "hid:0x19"), ("hid:0x30", "hid:0x2F", "hid:0x06"))
+KEY_ROWS = hub.KEY_ROWS
+KNOBS = hub.KNOBS
 NOTIFY_KEY = r"Control Panel\NotifyIconSettings"
 ZADIG_URL = "https://zadig.akeo.ie"
 TRAY_HINT = "AgentDeck 在右下角 ^ 里，可拖到任务栏常驻"
@@ -60,11 +53,12 @@ GUIDE_FALLBACK = """让宏键盘不再打字：装 WinUSB 驱动
 """
 # Default bindings of earlier keymap versions, as changes from the shipped
 # default; None means absent in that version. User edits are never upgraded.
-V5_CHANGED = {"hid:0x06": None, "hid:0x16": "cycle +1", "hid:0x09": "cycle -1"}
+V6_CHANGED = {"hid:0x16": "cycle -1", "hid:0x09": "cycle +1"}
+V5_CHANGED = dict(V6_CHANGED, **{"hid:0x06": None, "hid:0x16": "cycle +1", "hid:0x09": "cycle -1"})
 V4_CHANGED = dict(V5_CHANGED, **{"hid:0x2D": "cycle +1", "hid:0x2E": "cycle -1", "hid:0x30": "cycle +1",
               "hid:0x2F": "cycle -1", "hid:0x19": "prompt summary", "ctrl+hid:0x27": "prompt continue"})
 V3_CHANGED = dict(V4_CHANGED, **{"hid:0x14": "prompt tests"})
-OLD_DEFAULTS = {3: V3_CHANGED, 4: V4_CHANGED, 5: V5_CHANGED}
+OLD_DEFAULTS = {3: V3_CHANGED, 4: V4_CHANGED, 5: V5_CHANGED, 6: V6_CHANGED}
 # Keys whose own letters are harmful when they leak into an agent window (Raw Input).
 DANGER_KEYS = {"Ctrl+C": "危险：漏键会打断", "Ctrl+D": "危险：连按两次会退出",
                "Ctrl+V": "危险：漏键会粘贴"}
@@ -141,6 +135,9 @@ def upgrade_keymap(target, source):
                        if value is not None}
         if current.get("bindings") != old_default:
             return False  # the user edited it: never overwrite
+        if version == 6 and any(current.get(key) != shipped.get(key) for key in
+                                (set(current) | set(shipped)) - {"version", "bindings", "_instructions"}):
+            return False  # custom hotkeys/profiles are user edits too
         backup = target.with_name(target.name + ".bak-v%d" % version)
         if not backup.exists():
             shutil.copy2(target, backup)
@@ -1079,7 +1076,9 @@ class TrayApplication:
         chord.pack(anchor="w", pady=(theme.S3, theme.S4))
         mode = tk.StringVar(window, value="hold")
         choices = []
-        for value, text in (("hold", "按住说话"), ("toggle", "按一下开始、再按结束")):
+        for value, text in (("hold", "按住说话（按住快捷键）"),
+                            ("toggle", "按住说话（按下、松开各点一次，Win+H）"),
+                            ("tap", "单点（点一下开始，再点一下结束）")):
             choice = tk.Radiobutton(body, text=text, value=value, variable=mode, bg=theme.BG,
                                     fg=theme.TEXT, selectcolor=theme.RAISED, activebackground=theme.BG,
                                     activeforeground=theme.TEXT, font=theme.font(10), anchor="w",

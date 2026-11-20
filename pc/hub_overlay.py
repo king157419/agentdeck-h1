@@ -463,6 +463,7 @@ class Overlay:
         self.frame = None
         self.header = None
         self.status_label = None
+        self.feedback_label = None
         self.dots = None
         self.alpha_button = None
         self.body = None
@@ -902,6 +903,11 @@ class Overlay:
             fg=FOREGROUND if self.translucent else theme.FAINT,
             padx=4, font=theme.font(11, latin=True))
         self.alpha_button.pack(side="right")
+        self.feedback_label = tk.Label(self.frame, text="", bg=BACKGROUND, fg=FOREGROUND,
+                                       anchor="w", justify="left", wraplength=WIDTH - 2 * pad - 6,
+                                       takefocus=False, font=theme.font(9, True))
+        self.feedback_label.grid(row=2, column=0, sticky="ew", pady=(gap, 0))
+        self._bind_drag(self.feedback_label)
         # Always at the top: while keys also type into windows, nothing else matters more.
         self.notice_label = tk.Label(self.frame, text="", bg=BACKGROUND, fg=COLORS["ERR"], anchor="w",
                                      justify="left", wraplength=WIDTH - 2 * pad - 2,
@@ -909,7 +915,7 @@ class Overlay:
         self.notice_label.grid(row=1, column=0, sticky="ew", pady=(gap, 0))
         self.notice_label.bind("<ButtonRelease-1>", self._driver_help)
         self.body = tk.Frame(self.frame, bg=BACKGROUND)
-        self.body.grid(row=2, column=0, sticky="ew", pady=(gap, 0))
+        self.body.grid(row=3, column=0, sticky="ew", pady=(gap, 0))
         self.body.columnconfigure(0, weight=1)
         self._bind_drag(self.body)
         self.empty_label = tk.Label(self.body, text=EMPTY_TEXT, bg=BACKGROUND, fg=theme.MUTED,
@@ -981,14 +987,17 @@ class Overlay:
     def _render(self):
         feedback = self.model.get("feedback")
         if self.status_label is not None:
+            self.status_label.configure(
+                text=self.model["summary_text"],
+                fg=COLORS["ASK"] if self.model["pending_count"] else FOREGROUND)
+        if self.feedback_label is not None:
             if feedback:
-                # Every key press shows its result here for about two seconds.
-                self.status_label.configure(text=feedback["text"],
-                                            fg=FOREGROUND if feedback["ok"] else COLORS["ASK"])
+                # Physical names can be long; keep header controls visible.
+                self.feedback_label.configure(text=feedback["text"],
+                                              fg=FOREGROUND if feedback["ok"] else COLORS["ASK"])
+                self.feedback_label.grid()
             else:
-                self.status_label.configure(
-                    text=self.model["summary_text"],
-                    fg=COLORS["ASK"] if self.model["pending_count"] else FOREGROUND)
+                self.feedback_label.grid_remove()
         if self.alpha_button is not None:
             self.alpha_button.configure(fg=FOREGROUND if self.translucent else theme.FAINT)
         if self.dots is not None:

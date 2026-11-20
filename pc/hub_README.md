@@ -234,7 +234,7 @@ Run one AgentDeck keyboard reader at a time: use Hub's USB mode in place of
 
 ### 实测 4 列 × 5 排 宏键盘出厂键位表（USB 模式）
 
-2026-11-20 用只读 Raw Input 探针逐颗实测（按位置从上到下、从左到右，再逐个旋钮），对应 `pc/hub_keys.json` 默认 profile（v6）。
+2026-11-20 用只读 Raw Input 探针逐颗实测（按位置从上到下、从左到右，再逐个旋钮），对应 `pc/hub_keys.json` 默认 profile（v7）。
 键帽上印的字不可靠，按位置找键。历史 `v2_emulation` 的 Space/Q/V 分别选择槽位 4/5/6，Ctrl+0 为 interrupt；Ctrl+C/V 在两种 profile 中均留空：
 
 | 排 \ 列 | 第 1 列 | 第 2 列 | 第 3 列 | 第 4 列 |
@@ -245,15 +245,15 @@ Run one AgentDeck keyboard reader at a time: use Hub's USB mode in place of
 | **第 4 排** | Ctrl（只发修饰键）<br>未绑定 | Shift（只发修饰键）<br>未绑定 | U (`hid:0x18`)<br>`prompt commit`（提交） | X (`hid:0x1B`)<br>`cycle +1`（下个会话） |
 | **第 5 排** | Tab (`hid:0x2B`)<br>`next_wait`（跳到等我的会话） | Ctrl+C (`ctrl+hid:0x06`)<br>（留空）⚠ 危险键 | Ctrl+V (`ctrl+hid:0x19`)<br>（留空）⚠ 危险键 | P (`hid:0x13`)<br>`cycle -1`（上个会话） |
 
-旋钮 1：顺时针 F (`hid:0x09`) `cycle +1`、逆时针 S (`hid:0x16`) `cycle -1`，按下 L 截图。
-旋钮 2：顺时针 R (`hid:0x15`) `cycle +1`、逆时针 P (`hid:0x13`) `cycle -1`，按下 Q 显示浮窗（`show`）。
+旋钮 1：顺时针 F (`hid:0x09`) `app next`、逆时针 S (`hid:0x16`) `app prev`，在 Claude 桌面版内部切换下一个 / 上一个会话，浮窗选中会话不变；按下 L 截图。
+旋钮 2：顺时针 R (`hid:0x15`) `cycle +1`、逆时针 P (`hid:0x13`) `cycle -1`，在浮窗里选中下一个 / 上一个会话，并尝试切到它的窗口；按下 Q 显示浮窗（`show`）。
 旋钮 3：- (`hid:0x2D`) `scroll 1`、= (`hid:0x2E`) `scroll -1`（在所选会话窗口上发鼠标滚轮，往下 / 往上；哪个方向发 - 还没测准），按下 V `scroll end`（滚到底）。
 旋钮 4：] (`hid:0x30`) `nav down`、[ (`hid:0x2F`) `nav up`（方向键，只在会话等你时；转向还没测准），按下 C (`hid:0x06`) `nav enter`（回车）。
 `ctrl+hid:0x27`（Ctrl+0）也保留为 `nav enter`，给别的键盘用；这把键盘的旋钮 4 按下实测是 C，不是 Ctrl+0。
-未改动过的 v3、v4 或 v5 键位文件启动时自动升级到 v6（旧文件存为 `hub_keys.json.bak-v3` / `.bak-v4` / `.bak-v5`）。详情见 `pc/hub_keys.md`。
+未改动过的 v3、v4、v5 或 v6 键位文件启动时自动升级到 v7（旧文件存为 `hub_keys.json.bak-v3` / `.bak-v4` / `.bak-v5` / `.bak-v6`）；用户改过的绑定不动。详情见 `pc/hub_keys.md`。
 
-读键方式不是 USB 直读时（Raw Input），每颗键也会打进前台窗口：Hub 拒绝 `prompt`、`nav`、`voice_down`、`voice`、`screenshot`，
-提示“按键会漏进窗口：先用 Zadig 把接口 0 换成 WinUSB”；切会话、批准/拒绝、打断、滚动、显示浮窗照常。
+读键方式不是 USB 直读时（Raw Input），每颗键也会打进前台窗口：Hub 拒绝 `app`、`prompt`、`nav`、`voice_down`、`voice`、`screenshot`，
+提示“按键会漏进窗口：先用 Zadig 把接口 0 换成 WinUSB”；浮窗选会话、批准/拒绝、打断、滚动、显示浮窗照常。
 
 ## 没有 AgentDeck 硬件怎么用
 
@@ -299,7 +299,7 @@ VIA/QMK 键盘或普通宏键盘：在键盘配置工具中把按键改成 F13�
 会话列表下方显示所选会话（未选时为第一个等你的会话）的最新一句话：Stop 的 `last_assistant_message`（回复）、Notification 的 `message`（提醒）、
 AskUserQuestion 的问题和选项（提问）、UserPromptSubmit 的 `prompt`（你）；按显示宽度折行，最多 8 行 × 46 列，只在文字变化时刷新控件。
 Hub 每个会话只保留最后 4000 字（`/state` 里的 `last_text`、`last_kind`、`last_text_at`），relay 也只转发末尾 4000 字。
-有待批请求时在列表下方多出命令详情与审批按钮；显示同一会话的请求时隐藏最新一句话。每次按宏键盘，结果（如“槽位 1 没有会话”）在标题处显示约 2 秒，失败时 LCD 也显示 `KEY: ...`。
+有待批请求时在列表下方多出命令详情与审批按钮；显示同一会话的请求时隐藏最新一句话。每次按宏键盘，物理控件名和结果（如“旋钮 1 顺时针 → Claude：下一个会话”）在标题下方换行显示约 2 秒，失败时 LCD 也显示 `KEY: ...`。共用键码同时列出位置，例如“第 5 排第 4 颗 / 旋钮 2 逆时针”；`app.log` 的按键行也带上控件名。
 用 Raw Input 读键时浮窗顶部常驻红字“按键会漏进窗口：先用 Zadig 把接口 0 换成 WinUSB”，点它看 `agentdeck/装驱动.md` 的步骤；USB 直读时不显示。点标题处的彩色圆点可选会话。
 点关闭（×）只隐藏浮窗，Hub 进程继续在后台运行；有新的待批请求或按旋钮 2 时浮窗会重新出现。
 Windows 上每 250 ms 唤醒一次界面线程，防止 Tcl 阻塞在 GetMessage 导致浮窗冻结；看门狗发现卡顿时也会发送唤醒。
@@ -416,6 +416,8 @@ Action examples:
 ```json
 {"action": "slot 2"}
 {"action": "cycle -1"}
+{"action": "app next"}
+{"action": "app prev"}
 {"action": "approve", "request_id": "<id from /state>"}
 {"action": "deny"}
 {"action": "interrupt"}
@@ -438,6 +440,12 @@ or Enter. `nav` returns HTTP 409 while that session has a pending or locked requ
 while its own permission dialog is open (AgentDeck timed out, or a `permission_prompt`
 notification), and `nav up/down` only works while the session waits (questions,
 elicitation). Voice blocks both, like other window actions.
+
+On Windows, `app next|prev` activates the selected session's recorded `claude.exe`
+window, or falls back to a visible top-level `claude.exe` main window titled
+`Claude`. It sends `Ctrl+Shift+]` / `Ctrl+Shift+[` without changing the selected
+slot. Missing windows report `没找到 Claude 桌面版窗口`; voice and Raw Input block
+this action.
 
 `slot` also accepts `{"action":"slot","slot":2}`; `cycle` accepts a `delta`
 integer; `prompt` accepts a template `name`. Unknown templates or actions are
@@ -515,6 +523,19 @@ screens to `%USERPROFILE%/.agentdeck/shots/<timestamp>.png` and pastes its path
 without Enter. Prompt pastes a named template then sends Enter. Clipboard and
 key effects verify the selected foreground window handle.
 
+Claude 桌面版内的会话切换使用旋钮 1（`app next` / `app prev`）；槽位键和旋钮 2
+仍只选择浮窗会话并调到对应窗口。两者不会自动同步选中会话。
+
+Windows 按住第 2 排第 3 颗（H）说话，松开结束；默认快捷键是 `Win+H`。
+托盘“键位/语音快捷键”可录制并保存 Typeless 的右 Alt，或在
+`%USERPROFILE%\.agentdeck\config.json` 中配置：
+
+```json
+{"dictation_shortcut": {"key_codes": [165], "modifiers": [], "mode": "hold"}}
+```
+
+165 是 Windows 的右 Alt（`VK_RMENU`）；`hold` 模式按住开始、松开结束。
+
 Hold H to speak: `voice_down` snapshots the selected session and window handle,
 focuses that window, then sends Win+H. A daemon checks the foreground handle
 every 100 ms and restores the original target using the deck's activation logic
@@ -536,7 +557,7 @@ the thread stops but Hub keeps dictation ownership and blocks other window/input
 actions and approval. Release the modifier and send `voice_up` again to retry;
 another `voice_down` cannot start or toggle a second interval in this state.
 
-While voice is active, approve, slot/cycle, prompt, screenshot, scroll, nav, legacy
+While voice is active, approve, slot/cycle, app, prompt, screenshot, scroll, nav, legacy
 voice and keyboard interrupt return HTTP 409. Explicit denial of a pending request remains
 available. The guard never resolves approvals, pastes text, or sends Enter/Esc.
 Its only input is Win+H; when a target disappears, it attempts that global
@@ -549,7 +570,8 @@ and the next check; actual Windows speech-input behavior needs live validation.
 for another flat JSON mapping. `--keys FILE` selects another USB binding map.
 `hub_keys.json` documents every physical key and knob; E/B/Ctrl+Z select slots
 1/2/3, G approves, Ctrl+F denies, Space interrupts, H holds voice, L captures
-a screenshot, knobs 1 and 2 cycle sessions, knob 3 scrolls and knob 4 sends
+a screenshot, knob 1 switches sessions inside Claude Desktop, knob 2 cycles
+the overlay's selected session, knob 3 scrolls and knob 4 sends
 arrow keys and Enter (knob 4 press sends C on the measured keypad). Find keys by
 position: the printed key caps do not match what the keys send.
 

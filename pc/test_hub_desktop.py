@@ -281,6 +281,143 @@ class ComboTests(unittest.TestCase):
         self.assertEqual(calls[1:], [[(0xA5, 3)], [(0xA5, 3)]])
 
 
+class AppSwitchTests(unittest.TestCase):
+    CLAUDE = (24, "C:/Program Files/Claude/claude.exe", "Claude")
+
+    def setUp(self):
+        self.windows = Windows()
+        self.windows.items.append(self.CLAUDE)
+        self.effects = DesktopEffects(self.windows)
+
+    def test_directions_activate_claude_without_changing_selected_session(self):
+        session = dict(SESSION)
+        for direction, key in (("next", 0xDD), ("prev", 0xDB)):
+            self.assertTrue(self.effects.app(session, [session], direction))
+            self.assertEqual(self.windows.combos[-1], (0x11, 0x10, key))
+        self.assertEqual(self.windows.activated, [24, 24])
+        self.assertEqual(session, SESSION)
+
+    def test_selected_claude_handle_precedes_main_window(self):
+        selected = (31, "CLAUDE.EXE", "Working session")
+        self.windows.items.append(selected)
+        session = dict(SESSION, hwnd=31, window_exe="C:/app/Claude.exe")
+        self.effects.app(session, [session], "next")
+        self.assertEqual(self.windows.activated, [31])
+
+    def test_wrong_exe_reused_and_missing_handles_fall_back_to_main_window(self):
+        for session in (None, dict(SESSION, hwnd=12, window_exe="WindowsTerminal.exe"),
+                        dict(SESSION, hwnd=12, window_exe="claude.exe"),
+                        dict(SESSION, hwnd=99, window_exe="claude.exe")):
+            with self.subTest(session=session):
+                self.effects.app(session, [session] if session else [], "prev")
+                self.assertEqual(self.windows.activated[-1], 24)
+
+    def test_fallback_rejects_terminal_titles_and_non_main_claude_windows(self):
+        self.windows.items = [WINDOW, (31, "claude.exe", "Settings"),
+                              (32, "other.exe", "Claude")]
+        with self.assertRaisesRegex(RuntimeError, "没找到 Claude 桌面版窗口"):
+            self.effects.app(SESSION, [SESSION], "next")
+        self.assertEqual(self.windows.activated, [])
+        self.assertEqual(self.windows.combos, [])
+
+    def test_activation_failure_and_focus_change_never_send_shortcut(self):
+        self.windows.activate_ok = False
+        with self.assertRaisesRegex(RuntimeError, "could not activate"):
+            self.effects.app(None, [], "next")
+        self.windows.activate = lambda hwnd: True  # reports success without changing foreground
+        with self.assertRaisesRegex(RuntimeError, "could not activate"):
+            self.effects.app(None, [], "prev")
+        self.assertEqual(self.windows.combos, [])
+
+    def test_voice_and_invalid_direction_reject_before_window_access(self):
+        self.effects._voice = SimpleNamespace(closed=False)
+        with self.assertRaisesRegex(RuntimeError, "release voice"):
+            self.effects.app(None, [], "next")
+        self.assertEqual(self.windows.activated, [])
+        with self.assertRaises(ValueError):
+            self.effects.app(None, [], "sideways")
+
+    def native_effects(self, **kwargs):
+        native, calls = ComboTests().make_native(foreground=self.CLAUDE, **kwargs)
+        native.windows = lambda: [self.CLAUDE]
+        native.activate = lambda hwnd: hwnd == self.CLAUDE[0]
+        return DesktopEffects(native), calls
+
+    def test_native_shortcuts_press_ctrl_shift_bracket_and_release_in_reverse(self):
+        for direction, bracket in (("next", 0xDD), ("prev", 0xDB)):
+            with self.subTest(direction=direction):
+                effects, calls = self.native_effects()
+                effects.app(None, [], direction)
+                self.assertEqual(calls, [[(0x11, 0), (0x10, 0), (bracket, 0),
+                                          (bracket, 2), (0x10, 2), (0x11, 2)]])
+
+    def test_partial_shortcuts_release_every_inserted_key(self):
+        releases = ([], [(0x11, 2)], [(0x10, 2), (0x11, 2)],
+                    [(0xDD, 2), (0x10, 2), (0x11, 2)],
+                    [(0x10, 2), (0x11, 2)], [(0x11, 2)])
+        for sent, cleanup in enumerate(releases):
+            with self.subTest(sent=sent):
+                effects, calls = self.native_effects(sent=sent)
+                with self.assertRaisesRegex(RuntimeError, "combination failed"):
+                    effects.app(None, [], "next")
+                self.assertEqual(calls[1:], [cleanup] if cleanup else [])
+                self.assertEqual(effects.windows._held_keys, [])
+
+    def test_native_exception_releases_ctrl_shift_and_bracket(self):
+        effects, calls = self.native_effects()
+        send = effects.windows.user.SendInput
+
+        def interrupted(count, events, size):
+            send(count, events, size)
+            if len(calls) == 1:
+                raise OSError("interrupted input")
+            return count
+
+        effects.windows.user.SendInput = interrupted
+        with self.assertRaisesRegex(OSError, "interrupted input"):
+            effects.app(None, [], "prev")
+        self.assertEqual(calls[1], [(0xDB, 2), (0x10, 2), (0x11, 2)])
+        self.assertEqual(effects.windows._held_keys, [])
+
+
+class RightModifierTests(unittest.TestCase):
+    def test_modifier_scans_and_extended_flags_apply_to_press_and_release(self):
+        for key, scan, extended in ((0xA5, 0x38, 1), (0xA3, 0x1D, 1),
+                                    (0x5C, 0x5C, 1), (0xA1, 0x36, 0),
+                                    (0xA4, 0x38, 0), (0xA2, 0x1D, 0)):
+            with self.subTest(key=key):
+                events = HubWindowControl._events([(key, 0), (key, 2)])
+                self.assertEqual([(event.ki.wVk, event.ki.wScan, event.ki.dwFlags) for event in events],
+                                 [(key, scan, extended), (key, scan, extended | 2)])
+
+    def test_typeless_right_alt_hold_config_and_native_input(self):
+        config = {"key_codes": [165], "modifiers": [], "mode": "hold"}
+        native, calls = ComboTests().make_native()
+        native.windows = lambda: [WINDOW]
+        native.activate = lambda hwnd: hwnd == WINDOW[0]
+        native.exists = lambda hwnd: hwnd == WINDOW[0]
+        effects = DesktopEffects(native, dictation_shortcut=config)
+        self.addCleanup(effects.close)
+        self.assertEqual(effects.dictation_shortcut, config)
+        effects.voice_down(SESSION, [SESSION])
+        effects.voice_up()
+        self.assertEqual(calls, [[(165, 1)], [(165, 3)]])
+        self.assertEqual(native._held_keys, [])
+
+    def test_native_recording_pipeline_keeps_right_alt_as_165(self):
+        from agentdeck_app import ShortcutRecorder
+        from voice_shortcut_capture import ShortcutCapture
+        for code in (0x12, 0xA5):
+            with self.subTest(code=code):
+                recorder = ShortcutRecorder()
+                pressed = ShortcutCapture.event(SimpleNamespace(vkCode=code, scanCode=0x38, flags=1))
+                released = ShortcutCapture.event(SimpleNamespace(vkCode=code, scanCode=0x38, flags=0x81))
+                recorder.press(pressed)
+                shortcut = dict(recorder.release(released), mode="hold")
+                self.assertEqual(shortcut, {"key_codes": [165], "modifiers": [], "mode": "hold"})
+                self.assertEqual(DesktopEffects._shortcut(shortcut), shortcut)
+
+
 class GuardTicks:
     """Advance one requested guard period without wall-clock timing assertions."""
 

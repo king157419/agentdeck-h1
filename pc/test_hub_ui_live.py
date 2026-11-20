@@ -82,7 +82,7 @@ class RenderTests(unittest.TestCase):
     def setUp(self):
         self.hub = FakeHub()
         self.overlay = Overlay(self.hub, window=Mock())
-        for name in ("status_label", "alpha_button", "body", "note", "empty_label", "notice_label"):
+        for name in ("status_label", "feedback_label", "alpha_button", "body", "note", "empty_label", "notice_label"):
             setattr(self.overlay, name, Mock())
         self.overlay.rows = []
 
@@ -90,7 +90,9 @@ class RenderTests(unittest.TestCase):
         self.overlay.model = display_model({"input_reader": "raw", "last_input": {
             "text": "槽位 2 没有会话", "ok": False, "at": time.time()}}, now=time.time())
         self.overlay._render()
-        self.assertEqual(self.overlay.status_label.configure.call_args.kwargs["text"], "槽位 2 没有会话")
+        self.assertEqual(self.overlay.status_label.configure.call_args.kwargs["text"], "0 个会话")
+        self.assertEqual(self.overlay.feedback_label.configure.call_args.kwargs["text"], "槽位 2 没有会话")
+        self.overlay.feedback_label.grid.assert_called_once_with()
         self.overlay.notice_label.grid.assert_called_once_with()
         self.assertIn(DRIVER_NOTICE, self.overlay.notice_label.configure.call_args.kwargs["text"])
         self.overlay.empty_label.grid.assert_called_once_with()
@@ -98,6 +100,7 @@ class RenderTests(unittest.TestCase):
         self.overlay._render()
         self.overlay.notice_label.grid_remove.assert_called_once_with()
         self.overlay.empty_label.grid_remove.assert_called_once_with()
+        self.overlay.feedback_label.grid_remove.assert_called_once_with()
 
     def test_clicking_a_header_dot_selects_that_session(self):
         self.overlay.model = display_model({"sessions": [{"slot": 2, "name": "a"}, {"slot": 5, "name": "b"}]})

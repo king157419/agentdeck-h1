@@ -68,7 +68,7 @@ SCROLL_END = 100             # "scroll end": far enough to reach the bottom
 NAV_KEYS = ("up", "down", "enter")
 # Raw Input cannot stop the key itself from typing into the focused window, so a
 # paste/Enter action would send e.g. "m继续". Only USB direct reads may use these.
-RAW_INPUT_BLOCKED = ("prompt", "nav", "voice_down", "voice", "screenshot")
+RAW_INPUT_BLOCKED = ("prompt", "nav", "voice_down", "voice", "screenshot", "app")
 LEAK_TEXT = "按键会漏进窗口：先用 Zadig 把接口 0 换成 WinUSB"
 log = logging.getLogger("agentdeck.hub")
 keylog = logging.getLogger("agentdeck.hub.keys")
@@ -76,6 +76,25 @@ UNKNOWN_EVENTS = set()
 UNKNOWN_EVENTS_LOCK = threading.Lock()
 SESSION_FIELDS = ("agent", "session_id", "slot", "cwd", "name", "state", "hwnd",
                   "window_exe", "last_text", "last_updated", "last_kind", "last_text_at")
+# Measured positions shared by key feedback and the tray's keymap window.
+KEY_ROWS = (
+    (("E", "hid:0x08"), ("B", "hid:0x05"), ("Ctrl+Z", "ctrl+hid:0x1D"), ("Space", "hid:0x2C")),
+    (("G", "hid:0x0A"), ("Ctrl+F", "ctrl+hid:0x09"), ("H", "hid:0x0B"), ("Alt", None)),
+    (("L", "hid:0x0F"), ("M", "hid:0x10"), ("Ctrl+T", "ctrl+hid:0x17"), ("Ctrl+D", "ctrl+hid:0x07")),
+    (("Ctrl", None), ("Shift", None), ("U", "hid:0x18"), ("X", "hid:0x1B")),
+    (("Tab", "hid:0x2B"), ("Ctrl+C", "ctrl+hid:0x06"), ("Ctrl+V", "ctrl+hid:0x19"), ("P", "hid:0x13")),
+)
+KNOBS = (("hid:0x09", "hid:0x16", "hid:0x0F"), ("hid:0x15", "hid:0x13", "hid:0x14"),
+         ("hid:0x2D", "hid:0x2E", "hid:0x19"), ("hid:0x30", "hid:0x2F", "hid:0x06"))
+CONTROL_NAMES = {}
+for _row, _keys in enumerate(KEY_ROWS, 1):
+    for _column, (_, _binding) in enumerate(_keys, 1):
+        if _binding is not None:
+            CONTROL_NAMES[_binding] = "第 %d 排第 %d 颗" % (_row, _column)
+for _knob, _keys in enumerate(KNOBS, 1):
+    for _direction, _binding in zip(("顺时针", "逆时针", "按下"), _keys):
+        _name = "旋钮 %d %s" % (_knob, _direction)
+        CONTROL_NAMES[_binding] = " / ".join(filter(None, (CONTROL_NAMES.get(_binding), _name)))
 
 from hub_risk import (  # noqa: F401  (re-exported: hub.classify stays public)
     AUTHORIZED_KEYS, CRITICAL_RULES, KEY_PATH, RISK_RULES, SENSITIVE_PATH, SHELL_WRITE,
@@ -128,6 +147,7 @@ INPUT_ERRORS = (  # (substring of HubError text, overlay text, LCD ASCII text)
     ("keys leak into the window", LEAK_TEXT, "Need WinUSB"),
     ("use approve/deny", "有待批请求：用 ✓/✗ 处理", "Use approve/deny"),
     ("only while the agent asks", "agent 提问时才能上下选", "No question"),
+    ("没找到 Claude 桌面版窗口", "没找到 Claude 桌面版窗口", "Claude not found"),
 )
 INPUT_RESULTS = {"allowed": "已批准", "denied": "已拒绝", "confirm": "再按一次确认",
                  "locked": "需在终端确认", "no_request": "没有待批请求",
@@ -136,7 +156,8 @@ INPUT_RESULTS = {"allowed": "已批准", "denied": "已拒绝", "confirm": "再�
 INPUT_SENT = {"prompt": "已发送预设", "screenshot": "已截图并粘贴路径", "voice_down": "开始说话",
               "voice": "语音已切换", "voice_up": "停止说话", "interrupt": "已打断",
               "nav up": "已按 ↑", "nav down": "已按 ↓", "nav enter": "已回车",
-              "scroll end": "已翻到底", "scroll": "已滚动"}
+              "scroll end": "已翻到底", "scroll": "已滚动",
+              "app next": "Claude：下一个会话", "app prev": "Claude：上一个会话"}
 EVENT_KINDS = {"Stop": "回复", "StopFailure": "错误", "Notification": "提醒", "UserPromptSubmit": "你"}
 
 
@@ -212,6 +233,10 @@ def describe_input(action, result=None, error=None):
             text += "（同窗：只能调到前台）"
         return text, True, None
     if status == "sent":
+        if parts in (["voice"], ["voice_down"]) and result.get("mode") == "tap":
+            return "语音键：已点一下" + result["shortcut"], True, None
+        if parts == ["screenshot"] and result.get("paste") == "image":
+            return "截图已贴进输入框", True, None
         return (INPUT_SENT.get(" ".join(parts[:2])) or INPUT_SENT.get(parts[0] if parts else "", "已发送"),
                 True, None)
     return INPUT_RESULTS.get(status, str(status or "完成")), True, None
@@ -1176,9 +1201,9 @@ class Hub:
         command = parts[0]
         argument = parts[1] if len(parts) == 2 else None
         if command not in ("slot", "cycle", "next_wait", "approve", "deny", "interrupt", "voice",
-                           "voice_down", "voice_up", "screenshot", "prompt", "show", "scroll", "nav", "hold"):
+                           "voice_down", "voice_up", "screenshot", "prompt", "show", "scroll", "nav", "hold", "app"):
             raise HubError("unknown action")
-        if command not in ("slot", "cycle", "prompt", "scroll", "nav", "hold") and argument is not None:
+        if command not in ("slot", "cycle", "prompt", "scroll", "nav", "hold", "app") and argument is not None:
             raise HubError("unexpected action argument")
         if command == "scroll":
             if argument == "end":
@@ -1192,6 +1217,8 @@ class Hub:
                     raise HubError("scroll needs a nonzero step up to %d, or end" % SCROLL_LIMIT)
         if command == "nav" and argument not in NAV_KEYS:
             raise HubError("nav needs up, down or enter")
+        if command == "app" and argument not in ("next", "prev"):
+            raise HubError("app needs next or prev")
         if command == "hold" and argument not in ("auto", "always", "never"):
             raise HubError("hold needs auto, always or never")
         with self.lock:
@@ -1246,6 +1273,8 @@ class Hub:
             desktop = self.desktop
             if desktop is None:
                 return {"action": command, "status": "sent"}
+            if getattr(desktop, "dictation_shortcut", {}).get("mode") == "tap":
+                return {"action": command, "status": "ignored"}
 
             def stop_voice():
                 try:
@@ -1351,7 +1380,7 @@ class Hub:
             return self._focus_effect(command, selected, {
                 "action": command, "status": "selected", "request_id": self.displayed_request_id})
         session = self.sessions.get(self.selected)
-        if session is None:
+        if session is None and command != "app":
             raise HubError("select a session first", 409)
         if command == "nav":
             identity = self.selected
@@ -1366,7 +1395,7 @@ class Hub:
                 raise HubError("nav up/down works only while the agent asks a question", 409)
         desktop = self._desktop()
         sessions = [dict(item) for item in self.sessions.values()]
-        session = dict(session)
+        session = dict(session) if session is not None else None
         text = generation = None
         if command == "prompt":
             template = argument if argument is not None else payload.get("name")
@@ -1387,7 +1416,7 @@ class Hub:
                 completed = None
                 if command == "prompt":
                     completed = desktop.prompt(session, sessions, text)
-                elif command in ("scroll", "nav"):
+                elif command in ("scroll", "nav", "app"):
                     method = getattr(desktop, command, None)
                     completed = False if method is None else method(session, sessions, argument)
                     if completed is False:
@@ -1396,6 +1425,8 @@ class Hub:
                     path = desktop.screenshot(session, sessions)
                     if path is False:
                         return {"action": command, "status": "unavailable"}
+                    if isinstance(path, dict):
+                        return {"action": command, "status": "sent", **path}
                     return {"action": command, "status": "sent", "path": path}
                 elif command in ("voice", "voice_down"):
                     completed = desktop.voice_down(session, sessions,
@@ -1410,6 +1441,8 @@ class Hub:
                         self._show()
                     if unavailable:
                         return {"action": command, "status": "unavailable"}
+                    if isinstance(completed, dict) and completed.get("mode") == "tap":
+                        return {"action": command, "status": "sent", **completed}
                     if command == "voice":
                         completed = desktop.voice_up()
                 else:
@@ -1618,6 +1651,11 @@ def binding_label(binding):
         return binding if isinstance(binding, str) else "?"
 
 
+def control_name(binding):
+    """All known physical positions that send this exact binding."""
+    return CONTROL_NAMES.get(normalize_key(binding), binding_label(binding))
+
+
 class USBKeys:
     """Dispatch bindings and pair releases with the accepted physical press."""
 
@@ -1648,8 +1686,9 @@ class USBKeys:
 
     def __call__(self, event):
         reader = event.get("reader", "USB")
-        keylog.debug("Keyboard event entered hub reader=%s keys=%s down=%s",
-                     reader, event.get("keys", ()), event.get("down"))
+        keylog.debug("Keyboard event entered hub reader=%s keys=%s controls=%s down=%s",
+                     reader, event.get("keys", ()),
+                     " / ".join(control_name(key) for key in event.get("keys", ())), event.get("down"))
         received_at = event.get('t', self.monotonic())
         if (isinstance(received_at, bool) or not isinstance(received_at, (int, float))
                 or not math.isfinite(received_at)):
@@ -1703,24 +1742,28 @@ class USBKeys:
             elif action == "interrupt":
                 payload["request_id"] = shown["request_id"]
             result = self.hub.action(payload, source="key", received_at=received_at)
-            keylog.debug("Keyboard action reader=%s binding=%s action=%s result=%s", reader, binding, action, result)
-            log.info("%s %s -> %s", reader, binding, result)
-            self._note(action, result=result)
+            keylog.debug("Keyboard action reader=%s binding=%s control=%s action=%s result=%s",
+                         reader, binding, control_name(binding), action, result)
+            log.info("%s %s (%s) -> %s", reader, binding, control_name(binding), result)
+            if not isinstance(result, dict) or result.get("status") != "ignored":
+                self._note(binding, action, result=result)
             return True
         except (HubError, ValueError) as error:
-            keylog.debug("Keyboard action reader=%s binding=%s action=%s result=blocked: %s", reader, binding, action, error)
-            log.warning("%s %s (%s) %s blocked: %s", reader, binding, binding_label(binding), action, error)
-            self._note(action, error=error)
+            keylog.debug("Keyboard action reader=%s binding=%s control=%s action=%s result=blocked: %s",
+                         reader, binding, control_name(binding), action, error)
+            log.warning("%s %s (%s; %s) %s blocked: %s",
+                        reader, binding, binding_label(binding), control_name(binding), action, error)
+            self._note(binding, action, error=error)
             return False
 
-    def _note(self, action, result=None, error=None):
+    def _note(self, binding, action, result=None, error=None):
         """A key press must never look dead: publish its result to the displays."""
         note = getattr(self.hub, "note_input", None)
         if not callable(note):
             return
         try:
             text, ok, lcd = describe_input(action, result, error)
-            note(text, ok, lcd)
+            note(control_name(binding) + " → " + text, ok, lcd)
         except Exception as failure:
             log.debug("Key feedback unavailable: %s", failure)
 

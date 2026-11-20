@@ -2,6 +2,7 @@
 import ctypes
 from dataclasses import dataclass, field
 from datetime import datetime
+from io import BytesIO
 import logging
 import ntpath
 from pathlib import Path
@@ -53,6 +54,15 @@ if sys.platform == "win32":
 
         def exists(self, hwnd):
             return bool(self.user.IsWindow(hwnd))
+
+        def is_terminal(self, hwnd):
+            self.user.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+            self.user.GetClassNameW.restype = ctypes.c_int
+            name = ctypes.create_unicode_buffer(256)
+            if not self.user.GetClassNameW(hwnd, name, len(name)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            return name.value.casefold() in {
+                "consolewindowclass", "cascadia_hosting_window_class", "pseudoconsolewindow"}
 
         def send_combo(self, keys, expected):
             self._combo_triggered = False
@@ -174,12 +184,17 @@ if sys.platform == "win32":
         @staticmethod
         def _events(transitions):
             events = (INPUT * len(transitions))()
+            # Side-specific modifiers need their hardware scan code as well
+            # as the extended flag so low-level hooks distinguish Right Alt.
+            scans = {0x10: 0x2A, 0x11: 0x1D, 0x12: 0x38,
+                     0xA0: 0x2A, 0xA1: 0x36, 0xA2: 0x1D, 0xA3: 0x1D,
+                     0xA4: 0x38, 0xA5: 0x38, 0x5B: 0x5B, 0x5C: 0x5C}
             for event, (key, flags) in zip(events, transitions):
                 event.type = 1  # INPUT_KEYBOARD
                 extended = key in (0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
                                    0x28, 0x2C, 0x2D, 0x2E, 0x5B, 0x5C, 0x5D,
                                    0x6F, 0x90, 0xA3, 0xA5)
-                event.ki = KEYBDINPUT(key, 0, flags | int(extended), 0, 0)
+                event.ki = KEYBDINPUT(key, scans.get(key, 0), flags | int(extended), 0, 0)
             return events
 
 
@@ -212,6 +227,19 @@ def set_clipboard(text):
     """Copy Unicode text with Win32 ownership rules; only called for an action."""
     if not isinstance(text, str) or "\0" in text:
         raise ValueError("clipboard text must be a string without NUL characters")
+    _set_clipboard_data(((13, (text + "\0").encode("utf-16-le")),))  # CF_UNICODETEXT
+
+
+def set_image_clipboard(image):
+    """Publish a packed DIB and PNG so desktop apps can paste an attachment."""
+    dib, png = BytesIO(), BytesIO()
+    image.convert("RGB").save(dib, format="BMP")
+    image.save(png, format="PNG")
+    # CF_DIB starts at BITMAPINFOHEADER, after the 14-byte BMP file header.
+    _set_clipboard_data(((8, dib.getvalue()[14:]), ("PNG", png.getvalue())))
+
+
+def _set_clipboard_data(formats):
     user = ctypes.WinDLL("user32", use_last_error=True)
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     user.OpenClipboard.argtypes = [wintypes.HWND]
@@ -222,6 +250,8 @@ def set_clipboard(text):
     user.EmptyClipboard.restype = wintypes.BOOL
     user.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
     user.SetClipboardData.restype = wintypes.HANDLE
+    user.RegisterClipboardFormatW.argtypes = [wintypes.LPCWSTR]
+    user.RegisterClipboardFormatW.restype = wintypes.UINT
     user.CloseClipboard.argtypes = []
     user.CloseClipboard.restype = wintypes.BOOL
     kernel.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
@@ -232,32 +262,40 @@ def set_clipboard(text):
     kernel.GlobalUnlock.restype = wintypes.BOOL
     kernel.GlobalFree.argtypes = [wintypes.HGLOBAL]
     kernel.GlobalFree.restype = wintypes.HGLOBAL
-    payload = (text + "\0").encode("utf-16-le")
-    handle = kernel.GlobalAlloc(0x0002, len(payload))  # GMEM_MOVEABLE
-    if not handle:
-        raise ctypes.WinError(ctypes.get_last_error())
     opened = False
-    transferred = False
     try:
-        pointer = kernel.GlobalLock(handle)
-        if not pointer:
-            raise ctypes.WinError(ctypes.get_last_error())
-        try:
-            ctypes.memmove(pointer, payload, len(payload))
-        finally:
-            kernel.GlobalUnlock(handle)
         owner = user.GetForegroundWindow()
         if not owner or not user.OpenClipboard(owner):
             raise ctypes.WinError(ctypes.get_last_error())
         opened = True
-        if not user.EmptyClipboard() or not user.SetClipboardData(13, handle):
+        if not user.EmptyClipboard():
             raise ctypes.WinError(ctypes.get_last_error())
-        transferred = True  # Windows owns memory after SetClipboardData succeeds.
+        for format_id, payload in formats:
+            if isinstance(format_id, str):
+                format_id = user.RegisterClipboardFormatW(format_id)
+                if not format_id:
+                    raise ctypes.WinError(ctypes.get_last_error())
+            handle = kernel.GlobalAlloc(0x0002, len(payload))  # GMEM_MOVEABLE
+            if not handle:
+                raise ctypes.WinError(ctypes.get_last_error())
+            transferred = False
+            try:
+                pointer = kernel.GlobalLock(handle)
+                if not pointer:
+                    raise ctypes.WinError(ctypes.get_last_error())
+                try:
+                    ctypes.memmove(pointer, payload, len(payload))
+                finally:
+                    kernel.GlobalUnlock(handle)
+                if not user.SetClipboardData(format_id, handle):
+                    raise ctypes.WinError(ctypes.get_last_error())
+                transferred = True  # Windows owns this handle after success.
+            finally:
+                if not transferred:
+                    kernel.GlobalFree(handle)
     finally:
         if opened:
             user.CloseClipboard()
-        if not transferred:
-            kernel.GlobalFree(handle)
 
 
 def capture_screen():
@@ -274,11 +312,12 @@ class DesktopEffects:
             return object.__new__(MacDesktopEffects)
         return object.__new__(cls)
 
-    def __init__(self, windows=None, *, clipboard=None, capture=None,
+    def __init__(self, windows=None, *, clipboard=None, image_clipboard=None, capture=None,
                  shots_dir=None, now=None, sleeper=None, monotonic=None,
                  voice_wait=None, dictation_shortcut=None):
         self._windows = windows
         self.clipboard = set_clipboard if clipboard is None else clipboard
+        self.image_clipboard = set_image_clipboard if image_clipboard is None else image_clipboard
         self.capture = capture_screen if capture is None else capture
         self.shots_dir = (Path.home() / ".agentdeck" / "shots"
                           if shots_dir is None else Path(shots_dir))
@@ -307,7 +346,7 @@ class DesktopEffects:
                 or any(not isinstance(modifier, str) or modifier not in DICTATION_MODIFIERS
                        for modifier in modifiers)
                 or len(modifiers) != len(set(modifiers))
-                or mode not in ("toggle", "hold")):
+                or mode not in ("toggle", "hold", "tap")):
             raise ValueError("invalid dictation key_codes, modifiers or mode")
         keys = [DICTATION_MODIFIERS[name] for name in modifiers] + codes
         families = ({0x10, 0xA0, 0xA1}, {0x11, 0xA2, 0xA3},
@@ -333,6 +372,30 @@ class DesktopEffects:
 
     def focus(self, session, sessions):
         return self._focus(session, sessions)
+
+    def app(self, session, sessions, direction):
+        """Switch Claude's conversation without changing the Hub selection."""
+        keys = {"next": 0xDD, "prev": 0xDB}
+        if direction not in keys:
+            raise ValueError("app needs next or prev")
+        with self._voice_commands:
+            if self.voice_active:
+                raise RuntimeError("release voice before switching app sessions")
+            windows = self.windows.windows()
+            window = None
+            if (session is not None
+                    and ntpath.basename(session.get("window_exe") or "").casefold() == "claude.exe"):
+                window = self._bound_window(session, windows)
+            if window is None:
+                window = next((info for info in windows
+                               if ntpath.basename(info[1] or "").casefold() == "claude.exe"
+                               and info[2] == "Claude"), None)
+            if window is None:
+                raise RuntimeError("没找到 Claude 桌面版窗口")
+            if not self.windows.activate(window[0]) or self.windows()[0] != window[0]:
+                raise RuntimeError("could not activate Claude desktop window")
+            self._combo((0x11, 0x10, keys[direction]), window)
+            return True
 
     @staticmethod
     def _bound_window(session, windows):
@@ -392,6 +455,16 @@ class DesktopEffects:
     def _voice_shortcut(self, expected):
         self._combo(self._dictation_keys, expected)
 
+    @property
+    def dictation_shortcut_label(self):
+        names = {0x08: "Backspace", 0x09: "Tab", 0x0D: "Enter", 0x1B: "Esc",
+                 0x20: "Space", 0x10: "Shift", 0x11: "Ctrl", 0x12: "Alt",
+                 0x5B: "Win", 0x5C: "右 Win", 0xA0: "左 Shift", 0xA1: "右 Shift",
+                 0xA2: "左 Ctrl", 0xA3: "右 Ctrl", 0xA4: "左 Alt", 0xA5: "右 Alt"}
+        names.update((key, chr(key)) for key in (*range(0x30, 0x3A), *range(0x41, 0x5B)))
+        names.update((key, "F%d" % (key - 0x6F)) for key in range(0x70, 0x88))
+        return "+".join(names.get(key, "VK 0x%02X" % key) for key in self._dictation_keys)
+
     def interrupt(self, session, sessions):
         self._key(0x1B, self._focus(session, sessions))
         return True
@@ -423,7 +496,7 @@ class DesktopEffects:
             return self._voice is not None and not self._voice.closed
 
     def voice_down(self, session, sessions, *, on_stop=None):
-        """Start one owned dictation interval, pinned to the original hwnd."""
+        """Tap the shortcut or start dictation pinned to the original hwnd."""
         with self._voice_commands:
             with self._voice_lock:
                 previous = self._voice
@@ -432,6 +505,9 @@ class DesktopEffects:
             if previous is not None and previous.thread.ident is not None:
                 previous.thread.join()
             window = self._focus(session, sessions)
+            if self._dictation_mode == "tap":
+                self._voice_shortcut(window)
+                return {"mode": "tap", "shortcut": self.dictation_shortcut_label}
             voice = _Voice(dict(session), window[0], self.monotonic(), on_stop,
                            mode=self._dictation_mode, keys=self._dictation_keys)
             voice.thread = threading.Thread(target=self._guard_voice, args=(voice,),
@@ -606,7 +682,16 @@ class DesktopEffects:
         stamp = self.now().strftime("%Y%m%d-%H%M%S-%f")
         path = (self.shots_dir / (stamp + "-" + uuid.uuid4().hex[:8] + ".png")).resolve()
         image.save(path, format="PNG")
-        self._paste(str(path), self._focus(session, sessions))
+        window = self._focus(session, sessions)
+        process = ntpath.basename(window[1] or "").casefold()
+        if ((process == "claude.exe" or "codex" in process)
+                and not self.windows.is_terminal(window[0])):
+            if self.windows()[0] != window[0]:
+                raise RuntimeError("foreground changed before paste")
+            self.image_clipboard(image)
+            self._combo((0x11, 0x56), window)
+            return {"path": str(path), "paste": "image"}
+        self._paste(str(path), window)
         return str(path)
 
     def prompt(self, session, sessions, text):
