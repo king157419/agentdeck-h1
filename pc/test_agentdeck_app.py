@@ -1372,7 +1372,7 @@ class ApplicationTests(unittest.TestCase):
         menu = self.application.menu(SimpleNamespace(Menu=Menu, MenuItem=MenuItem))
         rows = [r for r in menu.children() if isinstance(r, MenuItem)]
         by_name = {r.text: r for r in rows if isinstance(r.text, str)}
-        for label, action in (("键位", "keys"), ("诊断", "diagnostics"), ("所有项目启用", "global"),
+        for label, action in (("管理面板", "panel"), ("诊断", "diagnostics"), ("所有项目启用", "global"),
                               ("日志", "logs"),
                               ("下一个待批", "next_wait"), ("退出", "quit")):
             by_name[label].action()
@@ -1950,8 +1950,11 @@ class ApplicationTests(unittest.TestCase):
         guide.assert_called_once_with()
         menu = self.application.menu(SimpleNamespace(Menu=Menu, MenuItem=MenuItem))
         rows = {r.text: r for r in menu.children() if isinstance(r, MenuItem) and isinstance(r.text, str)}
-        rows["状态"].action()
-        self.assertEqual(self.queue.get_nowait(), ("status", None))
+        rows["管理面板"].action()
+        self.assertEqual(self.queue.get_nowait(), ("panel", None))
+        self.assertTrue(rows["管理面板"].options["default"])
+        self.assertNotIn("状态", rows)
+        self.assertNotIn("键位", rows)
         rows["装驱动说明（按键会打字时）"].action()
         self.assertEqual(self.queue.get_nowait(), ("driver", None))
 

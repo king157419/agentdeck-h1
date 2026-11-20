@@ -496,7 +496,7 @@ class DesktopEffects:
 
     def app(self, session, sessions, direction):
         """Switch Claude's conversation without changing the Hub selection."""
-        if direction in ("claude", "wechat", "feishu", "browser"):
+        if direction in ("claude", "wechat", "feishu", "browser") or str(direction).startswith("exe:"):
             return self._app_target(direction)
         keys = {"next": 0xDD, "prev": 0xDB}
         if direction not in keys:
@@ -534,6 +534,10 @@ class DesktopEffects:
             return process
         names = {"claude": {"claude", "codex"}, "wechat": {"weixin.exe", "wechat.exe"},
                  "feishu": {"feishu.exe", "lark.exe"}, "browser": {"chrome.exe", "msedge.exe", "firefox.exe"}}
+        custom = name.startswith("exe:")  # a program picked in the panel, matched by file name
+        if custom:
+            exe = ntpath.basename(name[4:]).casefold()
+            names[name] = {exe}
         candidates = [window for window in items if kind(window) in names[name]]
         if name == "claude" and kind(current) in names[name]:
             other = [window for window in candidates if kind(window) != kind(current)]
@@ -544,7 +548,7 @@ class DesktopEffects:
         elif any(window[0] == current[0] for window in candidates):
             return self.window(None, [], "back")
         if not candidates:
-            raise RuntimeError("没找到%s窗口" % {"claude": "Claude / Codex", "wechat": "微信", "feishu": "飞书", "browser": "浏览器"}[name])
+            raise RuntimeError("没找到%s窗口" % {"claude": "Claude / Codex", "wechat": "微信", "feishu": "飞书", "browser": "浏览器"}.get(name, ntpath.basename(name[4:])))
         target = max(candidates, key=lambda window: self._app_recency.get(window[0], 0))
         if not self.windows.activate(target[0]) or self.windows()[0] != target[0]:
             raise RuntimeError("窗口激活失败")

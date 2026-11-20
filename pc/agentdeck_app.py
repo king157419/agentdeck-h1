@@ -140,6 +140,8 @@ def upgrade_keymap(target, source):
     try:
         current = hub.load_json(target)
         shipped = hub.load_json(source)
+        if isinstance(current, dict) and current.get("user_modified") is True:
+            return False  # edited in the management panel
         version = current.get("version") if isinstance(current, dict) else None
         if (type(version) is not int or version not in OLD_DEFAULTS
                 or not isinstance(shipped, dict) or shipped.get("version", 0) <= version):
@@ -798,10 +800,10 @@ class TrayApplication:
             return rows or [item("暂无会话", None, enabled=False)]
 
         return menu(
-            item(lambda _: "显示" if self.overlay.hidden else "隐藏", self.enqueue("toggle"), default=True),
-            item("状态", self.enqueue("status")),
+            item("管理面板", self.enqueue("panel"), default=True),
+            item(lambda _: "显示浮窗" if self.overlay.hidden else "隐藏浮窗", self.enqueue("toggle")),
             item("会话", menu(sessions)), item("下一个待批", self.enqueue("next_wait")),
-            item("键位", self.enqueue("keys")), item("诊断", self.enqueue("diagnostics")),
+            item("诊断", self.enqueue("diagnostics")),
             item("装驱动说明（按键会打字时）", self.enqueue("driver")),
             menu.SEPARATOR, item("所有项目启用", self.enqueue("global"),
                                  checked=lambda _: hub_install.global_status(home=self.hub.home)["enabled"]),
@@ -958,6 +960,8 @@ class TrayApplication:
             self.show_status()
         elif action == "status":
             self.show_status()
+        elif action == "panel":
+            self._run_slow(self.open_panel, action)
         elif action == "driver":
             self.show_driver_guide()
         elif action == "toggle":
@@ -995,6 +999,18 @@ class TrayApplication:
             self.show_report(payload)
         elif action == "notice":
             self.message(*payload, error=True)
+
+    def open_panel(self):
+        """Raise the panel window, or open it with a fresh one-time login code."""
+        import panel_launch
+        panel = self.hub.panel
+        if panel is None or not panel.port:
+            raise RuntimeError("管理面板还没准备好，稍等几秒再试")
+        try:
+            windows = self.hub._desktop().windows
+        except Exception:
+            windows = None  # no window control: always open a fresh window
+        return panel_launch.open_panel(panel, panel.port, windows=windows, registry=self.registry)
 
     def global_action(self, enabled=None):
         if enabled is None:

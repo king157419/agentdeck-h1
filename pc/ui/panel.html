@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>AgentDeck</title>
+<link rel="stylesheet" href="/panel/panel.css">
+</head>
+<body>
+<div class="win">
+  <header class="bar">
+    <span class="brand">AgentDeck</span>
+    <span class="pill" id="device"><span class="dot" id="device-dot"></span><span id="device-text">连接中…</span></span>
+    <span class="spacer"></span>
+    <span class="seg-label">拦截批准</span>
+    <span class="seg" id="hold" role="group" aria-label="拦截批准">
+      <button type="button" data-mode="auto" title="宏键盘连着时，由键盘批准；没连时直接放行">自动</button>
+      <button type="button" data-mode="always" title="每个需要批准的请求都等你按键">总是</button>
+      <button type="button" data-mode="never" title="不拦截，直接放行">从不</button>
+    </span>
+  </header>
+  <main class="a">
+    <section class="sessions" aria-label="最近活动">
+      <div class="sec">最近活动</div>
+      <div id="sessions"></div>
+    </section>
+    <section class="device-side">
+      <div class="layers" id="layers" role="tablist" aria-label="层"></div>
+      <div class="device">
+        <div class="pad">
+          <div class="knobs" id="knobs"></div>
+          <div class="grid" id="grid"></div>
+        </div>
+        <div class="detail" id="detail"></div>
+      </div>
+      <div class="live" id="live"><span class="dot accent"></span><span id="live-text">按下实体键时，图上对应的键会亮</span></div>
+    </section>
+  </main>
+  <div class="gate" id="gate" hidden>
+    <div class="gate-box">
+      <h2>需要重新登录</h2>
+      <p id="gate-text">请从托盘菜单点“管理面板”重新打开。</p>
+    </div>
+  </div>
+</div>
+<script src="/panel/panel.js"></script>
+</body>
+</html>

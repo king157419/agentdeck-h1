@@ -50,6 +50,7 @@ CYCLE_BURST_SECONDS = 5.0  # a pause longer than this re-anchors the knob to the
 # /state keeps the last few removed sessions: codex exec fires SessionEnd right after
 # Stop, so its done state and reply would otherwise never be visible.
 RECENT_ENDED_LIMIT = 8
+KEY_EVENT_LIMIT = 64          # ring buffer of physical key presses shown by the panel
 MAX_BODY = 8 * 1024 * 1024
 WAIT_SLICE = 0.25            # how often a waiting decision checks its hook client
 INPUT_NOTICE_SECONDS = 2.0
@@ -412,6 +413,10 @@ class Hub:
         self.unheld_since = None
         self.controls = Controls(self)
         self.noop_notices = {}
+        self.panel = None             # set by Panel; served by HubServer under /panel
+        self.usb_keys = None          # set by main(); the panel reloads it after key edits
+        self.key_events = deque(maxlen=KEY_EVENT_LIMIT)
+        self.key_seq = 0
         self._load_sessions()
 
     @staticmethod
@@ -572,6 +577,21 @@ class Hub:
             self.note_input(text if compact or not control else control + " → " + text, ok, lcd)
             if self.last_input is not None:
                 self.last_input.update(compact=compact, action=action, kind=kind)
+
+    def note_key(self, binding, action, result=None, error=None):
+        """Record one physical key press (position, result class, text) for the panel."""
+        text, _, _ = describe_input(action, result, error)
+        status = result.get("status") if isinstance(result, dict) else None
+        if status == "ignored":
+            text = "已按下"
+        kind = ("error" if error is not None or status == "error" else
+                "noop" if status in ("noop", "no_request", "no_waiting_session", "unavailable", "locked")
+                else "success")
+        code = normalize_binding(binding)
+        with self.lock:
+            self.key_seq += 1
+            self.key_events.append({"seq": self.key_seq, "code": code, "position": CONTROL_NAMES.get(code, binding_label(binding)),
+                                    "kind": kind, "text": text, "at": self.wall_time()})
 
     def _send(self, lines, focus=False, rendered=None):
         if not self.lcd_enabled:
@@ -1278,7 +1298,8 @@ class Hub:
         command = parts[0]
         argument = parts[1] if len(parts) == 2 else None
         contextual = (command in ("ctx", "session", "pane", "send", "clear", "copy", "paste", "overlay_down", "overlay_up")
-                      or command == "app" and argument in ("claude", "wechat", "feishu", "browser")
+                      or command == "app" and (argument in ("claude", "wechat", "feishu", "browser")
+                                               or isinstance(argument, str) and argument.startswith("exe:"))
                       or command == "window" and argument == "back"
                       or command == "overlay" and argument == "move"
                       or command == "interrupt" and (self.controls._switching()
@@ -1716,11 +1737,18 @@ class HubServer(ThreadingHTTPServer):
     daemon_threads = True
     request_queue_size = 64  # bursts of parallel hooks must not be refused by the backlog
 
-    def __init__(self, hub, token, port=PORT):
+    def __init__(self, hub, token, port=PORT, panel=None):
         if not isinstance(token, str) or not token.strip():
             raise ValueError("a nonempty token is required")
         self.hub, self.token = hub, token
+        from panel import Panel
+        self.panel = Panel(hub) if panel is None else panel
         super().__init__((HOST, port), HubHandler)
+        self.panel._port = self.server_port
+
+    def server_close(self):
+        self.panel.close()
+        super().server_close()
 
 
 class HubHandler(BaseHTTPRequestHandler):
@@ -1773,6 +1801,9 @@ class HubHandler(BaseHTTPRequestHandler):
             route = urlsplit(self.path)
             if self.command == "GET" and route.path == "/health":
                 self._reply(200, {"ok": True})
+                return
+            if route.path == "/panel" or route.path.startswith("/panel/"):
+                self.server.panel.handle(self, route)  # own cookie auth; the token header is not used
                 return
             supplied = self.headers.get("X-AgentDeck-Token", "")
             if not hmac.compare_digest(supplied.encode("utf-8"), self.server.token.encode("utf-8")):
@@ -1883,31 +1914,44 @@ class USBKeys:
         self.detents = KnobDetents(knob_divider)
         self.modifier_taps = ModifierTaps()
         config = load_json(Path(__file__).with_name("hub_keys.json")) if mapping is None else mapping
+        self.profile = profile
+        self.config = config
+        self.mapping, self.layers, self.version = self.parse(config, profile)
+        self.held = {}
+        self.monotonic = getattr(hub, 'monotonic', time.monotonic) if monotonic is None else monotonic
+
+    @staticmethod
+    def parse(config, profile="default"):
+        """Validate a key file and return (mapping, layers, version)."""
         if profile != "default":
             config = config.get(profile)
         if not isinstance(config, dict) or not isinstance(config.get("bindings"), dict):
             raise ValueError("key profile %r needs a bindings object" % profile)
-        self.version = config.get("version", 0)
-        self.mapping = {normalize_binding(key): action for key, action in config["bindings"].items()}
+        mapping = {normalize_binding(key): action for key, action in config["bindings"].items()}
         layers = config.get("layers", {})
         if not isinstance(layers, dict) or any(not isinstance(value, dict) for value in layers.values()):
             raise ValueError("layers need binding objects")
-        self.layers = {name: {normalize_binding(key): action for key, action in value.items()}
-                       for name, value in layers.items()}
-        for actions in [*self.mapping.values(), *(a for layer in self.layers.values() for a in layer.values())]:
+        layers = {name: {normalize_binding(key): action for key, action in value.items()}
+                  for name, value in layers.items()}
+        for actions in [*mapping.values(), *(a for layer in layers.values() for a in layer.values())]:
             if isinstance(actions, str):
                 continue
             if (not isinstance(actions, dict) or not actions or set(actions) - {"down", "up"}
                     or any(not isinstance(action, str) or not action.strip()
                            for action in actions.values())):
                 raise ValueError("bindings need an action string or down/up action strings")
-        self.held = {}
-        self.monotonic = getattr(hub, 'monotonic', time.monotonic) if monotonic is None else monotonic
+        return mapping, layers, config.get("version", 0)
+
+    def reload(self, config):
+        """Apply an edited key file at once (the panel); a bad file raises and changes nothing."""
+        mapping, layers, version = self.parse(config, self.profile)
+        self.config, self.mapping, self.layers, self.version = config, mapping, layers, version
 
     def lookup(self, binding):
         controls = getattr(self.hub, "controls", None)
         layer = controls.layers.current if isinstance(self.hub, Hub) else "default"
-        return self.layers.get(layer, {}).get(binding, self.mapping.get(binding))
+        action = self.layers.get(layer, {}).get(binding, self.mapping.get(binding))
+        return None if action == "none" else action  # "none": the panel unbound this key
 
     def snapshot(self):
         return self.hub.input_snapshot() if hasattr(self.hub, 'input_snapshot') else dict(self.hub.rendered_request)
@@ -2011,6 +2055,7 @@ class USBKeys:
             log.info("%s %s (%s) -> %s", reader, binding, control_name(binding), result)
             if not isinstance(result, dict) or result.get("status") != "ignored":
                 self._note(binding, action, result=result)
+            self._record(binding, action, result=result)
             return True
         except (HubError, ValueError) as error:
             keylog.debug("Keyboard action reader=%s binding=%s control=%s action=%s result=blocked: %s",
@@ -2018,7 +2063,18 @@ class USBKeys:
             log.warning("%s %s (%s; %s) %s blocked: %s",
                         reader, binding, binding_label(binding), control_name(binding), action, error)
             self._note(binding, action, error=error)
+            self._record(binding, action, error=error)
             return False
+
+    def _record(self, binding, action, result=None, error=None):
+        """Every accepted physical press goes to the panel's key buffer (releases excluded)."""
+        record = getattr(self.hub, "note_key", None)
+        if not callable(record) or action in ("voice_up", "overlay_up"):
+            return
+        try:
+            record(binding, action, result, error)
+        except Exception as failure:
+            log.debug("Key buffer unavailable: %s", failure)
 
     def _note(self, binding, action, result=None, error=None):
         """A key press must never look dead: publish its result to the displays."""
@@ -2130,8 +2186,8 @@ def main(argv=None, *, ui_factory=None):
     try:
         if "usb" in args.backend:
             from hub_keyboard import KeyboardInput
-            keyboard = KeyboardInput(USBKeys(hub, mapping, profile=args.profile,
-                                            knob_divider=config.get("knob_divider")), monotonic=hub.monotonic)
+            hub.usb_keys = USBKeys(hub, mapping, profile=args.profile, knob_divider=config.get("knob_divider"))
+            keyboard = KeyboardInput(hub.usb_keys, monotonic=hub.monotonic)
             keyboard.heartbeat = lambda: watchdog.beat("keyboard")
             hub.input_reader = getattr(keyboard, "reader_mode", None)
             readers.append((keyboard, "AgentDeck USB"))
@@ -2139,6 +2195,8 @@ def main(argv=None, *, ui_factory=None):
             from hub_hotkey import HotkeyInput
             readers.append((HotkeyInput(hub, mapping), "AgentDeck hotkeys"))
         server = HubServer(hub, load_token(args.home), args.port)
+        if args.profile != "default":
+            server.panel.read_only = True  # the panel edits the default profile only
         marker = write_hub_marker(args.home, getattr(server, "server_port", None))
         if args.overlay:
             from hub_overlay import Overlay
