@@ -8,7 +8,7 @@ import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-LOG = ROOT / "research" / "deck-usb-smoke.log"
+LOG = ROOT / "research" / "history" / "deck-usb-smoke.log"
 RESULT = LOG.with_suffix(".json")
 
 

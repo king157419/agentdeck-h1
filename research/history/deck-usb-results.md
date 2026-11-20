@@ -1,6 +1,6 @@
 # deck USB 任务验收 — 2026-11-17
 
-已完成 `research/brief-deck-usb.md` 的软件实现及当前未更换驱动环境的验收。所有命令从 `D:\desk\hardware\h1` 运行，Python 使用 `D:\conda\miniconda3\python.exe`。
+已完成 `research/briefs/brief-deck-usb.md` 的软件实现及当前未更换驱动环境的验收。所有命令从 `D:\desk\hardware\h1` 运行，Python 使用 `D:\conda\miniconda3\python.exe`。
 
 ## 做完的标准：全部测试输出
 
@@ -58,7 +58,7 @@ agent_deck AgentDeck stopped; action thread joined
 - `pc/test_deck_usb.py`：19 组离线测试。
 - `research/smoke_deck_usb.py`：可重跑的 3 秒 USB CLI 启动/正常退出检查。
 
-新增验收证据：本文件、`research/deck-usb-tests.log`、`research/deck-usb-checks.log`、`research/deck-usb-smoke.log`、`research/deck-usb-smoke.json`。
+新增验收证据：本文件、`research/deck-usb-tests.log`、`research/deck-usb-checks.log`、`research/history/deck-usb-smoke.log`、`research/history/deck-usb-smoke.json`。
 
 改动前已备份 4 个待修改文件至 `_rollback/deck-v0-usb/`，沿用 `pc/` 和 `lcd1602/` 相对路径；不覆盖已存在备份。没有修改固件、驱动、键盘配置或其它 USB 接口，没有打开 COM4，没有上传固件。
 

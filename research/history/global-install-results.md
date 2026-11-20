@@ -1,6 +1,6 @@
 # 全局钩子启用：完成记录
 
-2026-11-18，按 `research/brief-global-install.md` 完成。
+2026-11-18，按 `research/briefs/brief-global-install.md` 完成。
 
 ## 实现与修改文件
 

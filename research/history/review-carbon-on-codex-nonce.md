@@ -1,6 +1,6 @@
 # 审批 Nonce 校验独立代码审查报告
 
-审查范围：[brief-hub-nonce.md](file:///D:/desk/hardware/h1/research/brief-hub-nonce.md)、[review-input-nonce.diff](file:///D:/desk/hardware/h1/research/review-input-nonce.diff)、[hub-nonce-results.md](file:///D:/desk/hardware/h1/research/hub-nonce-results.md)，以及 `pc/`、`lcd1602/`、`research/` 下相关完整源码与测试文件（只读静态审查）。
+审查范围：[brief-hub-nonce.md](file:///D:/desk/hardware/h1/research/briefs/brief-hub-nonce.md)、[review-input-nonce.diff](file:///D:/desk/hardware/h1/research/review-input-nonce.diff)、[hub-nonce-results.md](file:///D:/desk/hardware/h1/research/hub-nonce-results.md)，以及 `pc/`、`lcd1602/`、`research/` 下相关完整源码与测试文件（只读静态审查）。
 
 ---
 

@@ -20,7 +20,7 @@
 - Gemini CLI 需要重新做浏览器登录（用户不在），本轮改用 Claude 研究子代理 + Codex（含 image_gen）。
 - 11:15 **问题：用户登录 Gemini 后仍报 `IneligibleTierError`。** 原因：Gemini CLI 0.32 已不再支持个人账号，Google 2026-06 把它并入 Antigravity CLI（命令 `agy`）。解决：下载并审读官方安装脚本 `install.ps1`（从 Google Cloud Run 下载 agy.exe 并做 SHA512 校验，安装到 `%LOCALAPPDATA%\agy\bin`）；执行安装被本机的自动权限检查拦下，改由用户自己运行。状态：等用户安装。
 - 11:15 概念图 6 张由 Codex image_gen 生成（hero / desk-setup / topdown / exploded / ring / variant-lite）。已知瑕疵：爆炸图里开关只画了 5 个，屏幕是 6 个，仅作示意用，不能当工程图。
-- 11:20 **方向纠正落地：** 批准/拒绝不再往窗口里模拟按键，改为直接回答 Claude Code / Codex 的 `PermissionRequest` 钩子。好处：不会批错窗口；钩子超时会自动退回终端提示，失败也安全。v0 那套窗口上下文校验大多可以不要了。开发说明见 `research/brief-hub-v1.md`，交给 Codex 实现。
+- 11:20 **方向纠正落地：** 批准/拒绝不再往窗口里模拟按键，改为直接回答 Claude Code / Codex 的 `PermissionRequest` 钩子。好处：不会批错窗口；钩子超时会自动退回终端提示，失败也安全。v0 那套窗口上下文校验大多可以不要了。开发说明见 `research/briefs/brief-hub-v1.md`，交给 Codex 实现。
 - 11:25 用户装好 agy 并登录，模型为 **Gemini 4 Carbon**，带 Google 搜索。
 - 11:27 **问题：agy 无头模式（-p）什么都没输出。** 原因：它想跑终端命令，无头模式没法弹权限确认，就自动拒绝了。解决：不给它开 `--dangerously-skip-permissions`，而是在提示里规定"只用网页搜索，不读写文件，结果直接打印到 stdout"，由我们把输出存成文件。之后用户明确要求"开全部权限"，改用 `--dangerously-skip-permissions`。
 - 11:30 Codex 交付 Hub v1（`pc/hub.py`、`hub_relay.py`、`hub_install.py`、`hub_desktop.py`）。离线测试共 51 个，全部通过；原有 10 组回归测试也全部通过。
@@ -61,7 +61,7 @@
   - 路演前用 6–8 周补验证；团队保持精简。
 
   然后分头改稿：财务模型由 Opus 改；PRD、技术方案、技术壁垒由 Opus 改；竞品、差异化、市场由 Gemini 改；v2 概念图由 Codex 重新生成。
-- 11:55 Hub v1.1（Codex 写，开发说明在 `research/brief-hub-v1_1.md`）：
+- 11:55 Hub v1.1（Codex 写，开发说明在 `research/briefs/brief-hub-v1_1.md`）：
   - 风险分级改成三档，新增 critical 档：远程脚本直接管道执行、`-EncodedCommand`、删除根目录这类命令，设备上不能批准，立即退回终端原生确认。
   - 加了带哈希链的审计日志 `~/.agentdeck/audit.jsonl`，可以通过 `GET /audit` 查。
   - 加了 `hub.py doctor` 自检命令。
@@ -74,16 +74,16 @@
   - 旧 hub 进程已停掉，新版在后台运行。
 - 12:05 **问题：Codex 生成 v2 概念图的任务卡了 20 分钟没动。** 原因：用 `"$(cat brief.md)"` 传提示词，又在后台运行，stdin 没有关闭，codex 一直停在 "Reading additional input from stdin" 等输入。解决：停掉任务，加 `< /dev/null` 重跑。以后后台调用 codex 一律关闭 stdin。
 - 12:10 PRD、技术方案、技术壁垒（Opus）、财务模型（Opus）、竞品 / 差异化 / 市场（Gemini）都已改到 v2；BP 按 v2 数字重建，16 页，校验通过，并用 LibreOffice 渲染逐页检查。
-- 12:15 Hub v1.2（Codex 写，开发说明在 `research/brief-hub-v1_2.md`）：按住说话拆成按下和松开两个动作；按住期间每 100 ms 检查一次前台窗口，被别的窗口抢走就切回目标窗口；最长 60 秒；目标窗口消失立即停止。离线测试：hub 107 项、desktop 30 项，全部回归测试通过。重启 hub 后用真实进程回归：高危命令按两次放行、极危命令返回 `{}`，都正常。
+- 12:15 Hub v1.2（Codex 写，开发说明在 `research/briefs/brief-hub-v1_2.md`）：按住说话拆成按下和松开两个动作；按住期间每 100 ms 检查一次前台窗口，被别的窗口抢走就切回目标窗口；最长 60 秒；目标窗口消失立即停止。离线测试：hub 107 项、desktop 30 项，全部回归测试通过。重启 hub 后用真实进程回归：高危命令按两次放行、极危命令返回 `{}`，都正常。
   - **还没验证：** 真实的 Windows 语音输入（Win+H）配合守护窗口。会打开麦克风、抢用户的桌面，用户不在时不跑，放进确认清单。另外轮询方式会留下最多 100 ms 的焦点空档，Codex 已在报告里说明。
-- 12:30 **用宏键盘模拟 v2 按键布局（Codex，开发说明在 `research/brief-hub-replay.md`）。** 映射表在 `pc/hub_keys.md`。回放自测 `research/selftest_hub_replay.py` 的做法：起一个临时 hub 进程，随机端口、临时 token，不碰 LCD 和 USB；把手写的出厂 boot report 解码成按键动作，打到这个 hub 上。我自己重跑一遍，**12 项全部通过**：
+- 12:30 **用宏键盘模拟 v2 按键布局（Codex，开发说明在 `research/briefs/brief-hub-replay.md`）。** 映射表在 `pc/hub_keys.md`。回放自测 `research/selftest_hub_replay.py` 的做法：起一个临时 hub 进程，随机端口、临时 token，不碰 LCD 和 USB；把手写的出厂 boot report 解码成按键动作，打到这个 hub 上。我自己重跑一遍，**12 项全部通过**：
   - 低风险单击批准；高风险要两次不同的按下；极危立即退回终端；
   - 出厂宏"先 Ctrl 再 F"解码成拒绝；6 个会话键选中对应槽位；4 个旋钮双向循环；
   - Ctrl+0 打断；审计链能对上。
   - 还没确认：Ctrl + 会话键的组合在实体键盘上发的是什么码，要用户按一遍才知道。
 - 12:30 GTM 物料（Opus）：双语落地页（订金只是占位，不接支付，表单只存在本地浏览器）、4 个平台的招募帖、投资人一页纸、邮件模板、90 秒 Demo 分镜。写作员在浏览器里检查过页面：480 / 1280 宽度都正常、没有控制台报错、没有外部请求，还发现并修了一个重复的 id。
 - 12:32 文档状态对齐：06 的 Demo 规格表里，#6 L3 改为"hub 已完成"，#15 按住说话改为"已实现待验证"；09 的状态说明同步更新。
-- 12:34 **Hub v1.3（Codex，开发说明在 `research/brief-hub-v1_3.md`）：让没有我们硬件的人也能用。**
+- 12:34 **Hub v1.3（Codex，开发说明在 `research/briefs/brief-hub-v1_3.md`）：让没有我们硬件的人也能用。**
   - F13–F24 全局热键：VIA/QMK 键盘、普通宏键盘、Stream Deck 都能发这些键。
   - 置顶小浮窗：显示 6 个槽位、待批的命令、风险档，以及 ✓ / ✗ 按钮，点按钮不会抢走焦点。
   - 离线测试新增 35 项，全部回归通过。
@@ -104,7 +104,7 @@
   4. 落地页表单其实只存在访客本地，提示语却说"会联系你"，这是假承诺。
 
   第 3、4 条和 26 处冲突交给 Opus 写作员按"v2 决策 > 08 财务 > 其他文档"的优先级修。
-- 12:50 **审查发现的真漏洞：auto mode 开着时，`PermissionRequest` 根本不会触发，hub 拦不住高危命令。** 07 §6.4 早就设计了 PreToolUse 高危闸门，但还没实现。已交给 Codex 做 v1.4（开发说明在 `research/brief-hub-v1_4.md`）。BP 第 6、11、15 页相应写成"开发中"，不写成已经有了。
+- 12:50 **审查发现的真漏洞：auto mode 开着时，`PermissionRequest` 根本不会触发，hub 拦不住高危命令。** 07 §6.4 早就设计了 PreToolUse 高危闸门，但还没实现。已交给 Codex 做 v1.4（开发说明在 `research/briefs/brief-hub-v1_4.md`）。BP 第 6、11、15 页相应写成"开发中"，不写成已经有了。
 - 12:52 BP 按审查第 2.1 节改为如实表述：
   - 只写已接入 Claude Code 和 Codex，其余 agent 写"在路线图上"；
   - 删掉"没有人做中立的那一层"（已被 VibeKeys 等证伪）；
@@ -160,7 +160,7 @@
   - AgentDeck 极高风险（4 个以上同名开源项目，还碰到 Stream Deck 商标）；Baton 高风险（已有 App Store 应用 "Baton - Claude Code & Codex"）；点将台中高风险；HelmPad 中风险；MuxKey 低到中风险。
   - Gemini 新提了 5 组名字，首推"驭阵 / ReinPad"，其次"帅台 / CueDial"、"挥键 / TaktPad"。
   - 这些只是网络初筛，正式检索要走代理机构。名字由创始人定。
-- 14:15 macOS 适配的开发说明写好了（`research/brief-hub-macos.md`），后台排了一个等待任务：16:03 Codex 额度恢复后自动开工。
+- 14:15 macOS 适配的开发说明写好了（`research/briefs/brief-hub-macos.md`），后台排了一个等待任务：16:03 Codex 额度恢复后自动开工。
 - 14:20 目标用户模拟（Gemini，`review/目标用户模拟-gemini.md`）。**这是模拟出来的，不是真实用户数据，不能当证据用。** 5 种用户画像共同的意见：
   - 劝退点：
     1. 假的支付按钮和只存在本地的表单，加上满屏"待测 / 开发中"的标签，很伤信任；
@@ -200,14 +200,14 @@
 - 09:50 **落地页实际看了一遍**（本地 http 打开，避开 file:// 的限制）。5 张图都能加载；1009 和 375 两种宽度下都没有横向滚动，对比表在手机上放在单独的横向滚动框里。
 - 10:00 **发现：`hub_install.py --gate install` 写的是全局配置。** 它会改 `~/.claude/settings.json`，所以本机所有 Claude 会话都会走闸门，包括桌面版；Codex 那边也一样。Carbon 查了官方文档（`research/raw-gemini-hook-scope.md`）：Claude Code 和 Codex 都支持项目级钩子，并且会和全局钩子叠加生效；Codex 靠 `.git` 找项目根，还要在 `/hooks` 里按内容指纹批准。
 - 10:20 **Codex 加了 `--project DIR`。** 带这个参数时，只写 `DIR/.claude/settings.local.json` 和 `DIR/.codex/hooks.json`。实测在临时目录里装了一次，主目录下的两份配置文件逐字节没变；安装器测试 31 项通过。备份：`_rollback/hub-install-project/`。
-- 10:30 **macOS 适配第一版（Codex）**，按 `research/brief-hub-macos.md` 做，离线测试全过。备份：`_rollback/hub-pre-mac/`。
+- 10:30 **macOS 适配第一版（Codex）**，按 `research/briefs/brief-hub-macos.md` 做，离线测试全过。备份：`_rollback/hub-pre-mac/`。
 - 10:45 **问题：Carbon 独立审查发现 5 个 P0**（`research/review-gemini-hub-macos.md`）：
   1. 在真 Mac 上一导入 `ctypes.wintypes` 就崩溃；
   2. pynput 预检读的是类属性，导致热键永远被禁用；
   3. Warp 和 VS Code 的进程名写错了；
   4. 合成的双击 Fn 触发不了听写；
   5. 改变了 Windows 行为：全局安装时 python 路径变成反斜杠，`voice_up` 新增的"不可用"分支没有区分平台。第 5 条我亲自核实过。
-  根源是离线测试只是改了 `sys.platform`、断言自己写的字符串。已交给 Codex 按 `research/brief-hub-macos-fix.md` 修。
+  根源是离线测试只是改了 `sys.platform`、断言自己写的字符串。已交给 Codex 按 `research/briefs/brief-hub-macos-fix.md` 修。
 - 记一个踩坑：在 auto mode 下，`agy --dangerously-skip-permissions` 会被权限检查拦下。改为不加这个参数，让 Carbon 只用网页搜索、结果打印到 stdout，提示从 stdin 喂进去（PowerShell 5.1 会把带引号的参数拆坏）。
 
 ## 2026-11-18 下午（北京时间）：接上真硬件、Carbon / Codex 交叉审

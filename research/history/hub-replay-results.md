@@ -1,6 +1,6 @@
 # Hub replay implementation results
 
-Implemented `research/brief-hub-replay.md`. Before editing, copied `pc/` and
+Implemented `research/briefs/brief-hub-replay.md`. Before editing, copied `pc/` and
 `lcd1602/` into `_rollback/hub-v1_2/pc/` and `_rollback/hub-v1_2/lcd1602/`;
 existing backups were preserved. Firmware was not modified.
 

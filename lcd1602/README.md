@@ -132,7 +132,7 @@ python pc/test_deck_usb.py
 python research/smoke_deck_usb.py
 ```
 
-`run`、`learn` 均接受 `--backend auto|usb|rawinput`，默认 `auto`。`learn` 只打印首次按下的键名和报文信息，不分发动作；USB 输出 `hid:0x08`、`ctrl+hid:0x1D`，Raw Input 输出 `vk:0x45`、`ctrl+vk:0x5A`、`scan:0x0012:0`。按 Ctrl+C 正常退出。USB 冒烟脚本运行 `run --backend usb -v` 约 3 秒后请求正常退出，保存 `research/deck-usb-smoke.log/json`；当前未换驱动时应出现 Zadig 提示。该检查不证明换驱动后的真实按键效果。
+`run`、`learn` 均接受 `--backend auto|usb|rawinput`，默认 `auto`。`learn` 只打印首次按下的键名和报文信息，不分发动作；USB 输出 `hid:0x08`、`ctrl+hid:0x1D`，Raw Input 输出 `vk:0x45`、`ctrl+vk:0x5A`、`scan:0x0012:0`。按 Ctrl+C 正常退出。USB 冒烟脚本运行 `run --backend usb -v` 约 3 秒后请求正常退出，保存 `research/history/deck-usb-smoke.log/json`；当前未换驱动时应出现 Zadig 提示。该检查不证明换驱动后的真实按键效果。
 
 低级钩子独占模式**默认关闭**，旧 `--no-exclusive` 仍接受。只有显式运行 `run --backend rawinput --exclusive` 才启用保留的实验代码；`daemon.py --deck` 使用默认 auto 后端及关闭的钩子。**实测该方案无效**：`WH_KEYBOARD_LL` 先于 Raw Input；吞键会使 Windows 不再生成 `WM_INPUT`，钩子拿不到判定来源的设备信息，等待 Raw Input 不能解决投递顺序。因此不能用它保证宏键盘原键不进入窗口。原 `research/smoke_deck_exclusive.py` 是历史钩子测试，不属于 USB 验收。
 

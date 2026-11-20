@@ -1,6 +1,6 @@
 # Codex 对真实会话验证脚本的独立审查
 
-审查日期：2026-11-18。审查对象：`pc/verify_real_session.py`、`pc/test_verify_real_session.py`；依据：`research/brief-verify-real-session.md`、`research/hub-nonce-results.md`，并核对实际 Hub、relay、风险分类器和测试目录现有钩子。
+审查日期：2026-11-18。审查对象：`pc/verify_real_session.py`、`pc/test_verify_real_session.py`；依据：`research/briefs/brief-verify-real-session.md`、`research/hub-nonce-results.md`，并核对实际 Hub、relay、风险分类器和测试目录现有钩子。
 
 审查结论：**REQUEST CHANGES：5 项 P1、3 项 P2；未发现达到 P0 的问题。** 现有脚本既有不能完成运行的问题，也有能生成错误“通过”证据的问题。
 

@@ -1,6 +1,6 @@
 # 社区与个人 DIY：AI 编码 agent 的硬件控制和状态提示
 
-调研日期：**2026-11-18**。依据 `research/brief-community-diy.md`，评估对象为本项目暂名 AgentDeck 的 **4×4 键盘 + RGB + 浮窗** 第一版。本次只做公开资料调研，没有安装外部项目或验证其实际硬件。
+调研日期：**2026-11-18**。依据 `research/briefs/brief-community-diy.md`，评估对象为本项目暂名 AgentDeck 的 **4×4 键盘 + RGB + 浮窗** 第一版。本次只做公开资料调研，没有安装外部项目或验证其实际硬件。
 
 **最重要的发现：这个方向已有直接竞品。** [VibeDeck](https://getvibedeck.com/) 已把多 agent 状态、Stream Deck 实体键、审批和顶部浮窗放在一起；[Agent F-Row](https://github.com/timeToy34/agent-frow) 则已有 Windows 普通 RGB 键盘、Stream Deck 和置顶浮窗。另有两个同名项目：功能广泛的 [puritysb/AgentDeck](https://github.com/puritysb/AgentDeck)，以及尚未制造的 [Brillar0101/agentdeck](https://github.com/Brillar0101/agentdeck)。不能把“跨 agent + 灯 + 按键 + 浮窗”直接写成独有差异。
 

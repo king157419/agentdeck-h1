@@ -1,6 +1,6 @@
 # 审批 nonce 校验交付
 
-已按 `research/brief-hub-nonce.md` 实现。改前快照保存在 `_rollback/hub-nonce/`，没有覆盖旧备份。没有修改固件、hook 协议、风险规则或真实用户配置，没有打开 COM4，也没有启停正在运行的 Hub。`pc/verify_real_session.py` 和 `pc/test_verify_real_session.py` 未读取、未修改。
+已按 `research/briefs/brief-hub-nonce.md` 实现。改前快照保存在 `_rollback/hub-nonce/`，没有覆盖旧备份。没有修改固件、hook 协议、风险规则或真实用户配置，没有打开 COM4，也没有启停正在运行的 Hub。`pc/verify_real_session.py` 和 `pc/test_verify_real_session.py` 未读取、未修改。
 
 ## 改动文件
 

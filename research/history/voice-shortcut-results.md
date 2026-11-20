@@ -1,6 +1,6 @@
 # 语音快捷键实现结果
 
-2026-11-18，按 `research/brief-voice-shortcut.md` 完成。全部 33 个 `pc/test_*.py` 脚本退出码为 0。
+2026-11-18，按 `research/briefs/brief-voice-shortcut.md` 完成。全部 33 个 `pc/test_*.py` 脚本退出码为 0。
 
 ## 使用
 

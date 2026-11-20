@@ -101,7 +101,7 @@ def main():
     result["validation_groups"] = {"pe_subsystems": 2, "bundled_assets": len(required),
                                     "archived_modules": len(modules), "relay_scenarios": 2}
     report = json.dumps(result, ensure_ascii=False, indent=2) + "\n"
-    (root / "research" / "app-exe-package-check.json").write_text(report, encoding="utf-8")
+    (root / "research" / "history" / "app-exe-package-check.json").write_text(report, encoding="utf-8")
     print(report, end="")
 
 

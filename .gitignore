@@ -21,7 +21,7 @@ agentdeck-test/
 # 原厂固件备份、解包出来的第三方源码
 backup/
 research/via-c-src/
-research/codex-*.out
+research/**/codex-*.out
 dist/
 build/
 research/cxt-web-driver/

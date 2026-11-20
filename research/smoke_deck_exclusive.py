@@ -18,7 +18,7 @@ import deck_input as raw
 from deck_windows import INPUT
 
 TAG = 0xA6D3C5EA
-LOG = ROOT / "research" / "deck-exclusive-smoke.log"
+LOG = ROOT / "research" / "history" / "deck-exclusive-smoke.log"
 RESULT = LOG.with_suffix(".json")
 
 

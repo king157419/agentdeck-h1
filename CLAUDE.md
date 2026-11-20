@@ -17,6 +17,7 @@
 ## 固定约定
 
 - Python 用 `D:\conda\miniconda3\python.exe`。
+- 简报放 `research/briefs/`，测试记录、日志、评审稿放 `research/history/`，不要堆在 `research/` 或根目录。
 - 改固件前先把上一版复制到 `_rollback/<版本号>/`，汇报里给出回滚命令。
 - 测试：`python pc/test_ui.py`、`pc/test_daemon.py`、`pc/test_pc.py`；离线预览：`python pc/sim.py`。
 - 上板（COM4）和屏幕实际观感只能由用户确认，放进回复的确认清单里，不要写进 README。

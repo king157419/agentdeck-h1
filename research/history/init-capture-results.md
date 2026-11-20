@@ -1,6 +1,6 @@
 # 一键初始化与灯光抓包交付结果
 
-已按 `research/brief-init-and-capture.md` 完成实现与离线验证。**未用真实抓包验证**，没有启动真实 ETW 跟踪，也没有生成或冒充真实的 `light.etl`。
+已按 `research/briefs/brief-init-and-capture.md` 完成实现与离线验证。**未用真实抓包验证**，没有启动真实 ETW 跟踪，也没有生成或冒充真实的 `light.etl`。
 
 ## 修改文件与行为
 
