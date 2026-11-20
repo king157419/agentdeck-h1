@@ -7,24 +7,37 @@
                   （Claude Code = Git Bash，Codex = cmd 与 PowerShell）喂中文 UTF-8 载荷，走完
                   SessionStart → UserPromptSubmit → PreToolUse → PermissionRequest → PostToolUse → Stop → SessionEnd，
                   并在 /state、/audit 里核对效果；批准、拒绝、高危两次批准都走 POST /action
+  hold-mode       临时切到 always，结束时恢复原模式（期间真实会话的权限请求也会挂起）
+  hold-auto       未接宏键盘时 auto 不挂起，relay 及时返回 {}，会话显示 native_wait
+  ghost           同会话 PostToolUse 释放仍挂起的 PermissionRequest
   window-switch   开两个标题含项目名的控制台窗口，POST slot 后前台窗口必须变成对应窗口
   overlay-content 两个会话同时在时 /state 列出它们，浮窗截图
   window-load     上面所有操作期间窗口一直在响应
   relay-log       ~/.agentdeck/relay.log 在标记之后没有新错误
+  relay-log-format 日志含时间、agent、事件、短 sid，错误探针不泄露原始 stdin
   app-log         本次运行期间 app.log 没有 ERROR / 卡顿
+  restart-check   可选：重启打包进程后保留未过期会话，hold 默认恢复 auto
+  codex-exec      可选：真跑一次 codex exec（花 Codex 额度），会话进 /state，SessionEnd 后
+                  recent_ended 里是 done/Stop 和回复；额度用完或模型不可用记 SKIP
+  autostart       只读核对当前用户登录计划任务与旧 HKCU Run 迁移
   cleanup         /state 里不留 accept- 会话
 
 运行（项目根目录）：
   D:\\conda\\miniconda3\\python.exe -X utf8 research\\acceptance\\accept.py            # 全部检查
   ... accept.py --dry-run      只读：列出将要执行的 hook 命令、窗口、日志位置，不发请求不跑 hook
   ... accept.py --self-test    离线自检脚本自身的逻辑
+  ... accept.py --restart-check  额外终止并重启默认端口的打包进程，核对会话持久化
+  ... accept.py --codex-exec   额外真跑一次 codex exec（从项目根目录，去掉 SSL_CERT_FILE）
   ... accept.py --port 47891 --home D:\\tmp\\iso   对隔离实例（hub.py --port/--home）跑
 退出码：0 = 全部 PASS；1 = 有 FAIL；2 = 前置条件不满足（hub 不在、token 缺失等）。
 证据：research/acceptance/out/<时间>/（report.txt、report.json、hooks.jsonl、截图）。
 """
 import argparse
+import atexit
+import csv
 import ctypes
 import json
+import math
 import os
 import re
 import shutil
@@ -36,6 +49,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+import xml.etree.ElementTree as ET
 from ctypes import wintypes
 from datetime import datetime
 from pathlib import Path
@@ -59,10 +73,21 @@ SCENARIOS = {
              "risk": "high"},
 }
 SHORT = {"auto": "doc", "bash": "sh", "cmd": "cmd", "powershell": "ps", "exec": "ex"}
-CHECK_GROUPS = ("window", "cursor", "hooks", "overlay", "switch", "logs")
+CHECK_GROUPS = ("window", "cursor", "hooks", "overlay", "switch", "logs", "hold", "ghost", "autostart")
 PROMPT = "后面再说，先把 D:\\工作\\后面的项目 里的测试跑一遍，然后总结进度 ✅🚀"
 CREATE_NO_WINDOW = 0x08000000
 CREATE_NEW_CONSOLE = 0x00000010
+DETACHED_PROCESS = 0x00000008
+CREATE_NEW_PROCESS_GROUP = 0x00000200
+CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+PASSTHROUGH_LIMIT = 2.0
+STOP_TEXT = "后面的步骤已经完成。"
+CODEX_PROMPT = "Reply only: ok"
+CODEX_TIMEOUT = 240
+# Codex output that means the account/model is unavailable: environment, not AgentDeck.
+CODEX_ENV_MARKERS = ("usage limit", "not supported when using Codex with a ChatGPT account")
+GHOST_LIMIT = 2.0
+RELAY_LINE = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d (\S+) (\S+) (\S{1,8})(?: (.*))?$")
 
 
 # --------------------------------------------------------------------------- small helpers
@@ -151,7 +176,7 @@ def build_payload(agent, event, sid, cwd, scenario, turn_id):
                        tool_response={"stdout": "3 passed（后面还有 2 个）\nD:\\工作\\后面的项目\\ok",
                                       "stderr": "", "interrupted": False})
     elif event == "Stop":
-        payload.update(stop_hook_active=False, last_assistant_message="后面的步骤已经完成。")
+        payload.update(stop_hook_active=False, last_assistant_message=STOP_TEXT)
     elif event == "SessionEnd":
         payload["reason"] = "other"
     return payload
@@ -180,6 +205,105 @@ def parse_decision(stdout):
     if extra:
         return None, "decision 含 Codex 会拒绝的字段：%s" % sorted(extra)
     return decision["behavior"], None
+
+
+def empty_json_object(stdout):
+    try:
+        data = json.loads(stdout.strip().decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return False
+    return isinstance(data, dict) and not data
+
+
+def passthrough_problems(code, stdout_bytes, seconds, seen, session_dict, audit_records, sid):
+    problems = []
+    if code != 0:
+        problems.append("relay 退出码 %s，应为 0" % code)
+    if not empty_json_object(stdout_bytes):
+        problems.append("relay stdout 不是 {}")
+    if seconds >= PASSTHROUGH_LIMIT:
+        problems.append("放行耗时 %.3fs，应小于 %.1fs" % (seconds, PASSTHROUGH_LIMIT))
+    if seen:
+        problems.append("请求曾出现在 pending/locked")
+    session = session_dict or {}
+    if session.get("native_wait") is not True:
+        problems.append("会话 native_wait 不是 true")
+    if session.get("state") != "wait":
+        problems.append("会话状态不是 wait：%s" % session.get("state"))
+    if not any(r.get("session_id") == sid and r.get("decision") == "passthrough" for r in audit_records):
+        problems.append("审计没有该会话的 passthrough 记录")
+    return problems
+
+
+def find_ended(state, agent, sid):
+    """Newest /state recent_ended entry for agent/sid, else None."""
+    entries = (state or {}).get("recent_ended")
+    for entry in reversed(entries if isinstance(entries, list) else []):
+        if isinstance(entry, dict) and entry.get("agent") == agent and entry.get("session_id") == sid:
+            return entry
+    return None
+
+
+def ended_problems(state, agent, sid, last_sent=None, stop_text=None):
+    """A session SessionEnd just removed must be in recent_ended with its final state."""
+    if not isinstance((state or {}).get("recent_ended"), list):
+        return ["/state 没有 recent_ended（hub 太旧？）"]
+    entry = find_ended(state, agent, sid)
+    if entry is None:
+        return ["SessionEnd 后 recent_ended 里没有这个会话"]
+    problems = []
+    if entry.get("ended_by") != "SessionEnd":
+        problems.append("recent_ended 的 ended_by 是 %r，应为 SessionEnd" % entry.get("ended_by"))
+    if last_sent == "Stop":
+        if (entry.get("state"), entry.get("last_event")) != ("done", "Stop"):
+            problems.append("结束前是 %s/%s，应为 done/Stop" % (entry.get("state"), entry.get("last_event")))
+        if stop_text is not None and entry.get("last_text") != stop_text:
+            problems.append("结束前 last_text 是 %r，应为 Stop 的回复" % short(entry.get("last_text"), 40))
+    return problems
+
+
+def codex_exec_problems(code, output, seen, ended, alive=None):
+    """Judge one real `codex exec "Reply only: ok"` run.
+
+    seen: /state snapshots of the new cx session(s) while it ran; ended: its recent_ended
+    entry; alive: the session still in /state afterwards (a Codex without SessionEnd).
+    Returns (skip_reason or None, problems).
+    """
+    text = output or ""
+    marker = next((m for m in CODEX_ENV_MARKERS if m.lower() in text.lower()), None)
+    if marker:
+        return "环境：Codex 输出含“%s”（额度或模型不可用，不是 AgentDeck 的问题）" % marker, []
+    problems = []
+    if code != 0:
+        problems.append("codex exec 退出码 %s" % code)
+    final = ended or alive
+    if not seen and final is None:
+        problems.append("codex exec 的会话没进 /state")
+        return None, problems
+    if final is None:
+        problems.append("会话不在 /state，recent_ended 里也没有（SessionEnd 没记录，hub 太旧？）")
+        return None, problems
+    if ended is not None and ended.get("ended_by") != "SessionEnd":
+        problems.append("recent_ended 的 ended_by 是 %r" % ended.get("ended_by"))
+    if (final.get("state"), final.get("last_event")) != ("done", "Stop"):
+        problems.append("Stop 没到 hub：最后是 %s/%s" % (final.get("state"), final.get("last_event")))
+    if "ok" not in str(final.get("last_text") or "").lower():
+        problems.append("last_text 不含回复 ok：%r" % short(final.get("last_text"), 60))
+    return None, problems
+
+
+def relay_line_problems(line, markers=()):
+    problems = []
+    if len(line) > 400:
+        problems.append("整行超过 400 字符")
+    match = RELAY_LINE.fullmatch(line)
+    if not match:
+        problems.append("缺时间/agent/事件/短 sid，日志格式不对")
+    elif len(match.group(4) or "") > 300:
+        problems.append("消息超过 300 字符")
+    if any(marker and marker in line for marker in ("第00000行", PROMPT) + tuple(markers)):
+        problems.append("日志泄露原始 stdin")
+    return problems
 
 
 def matcher_applies(matcher, event, payload):
@@ -226,11 +350,198 @@ def new_log_lines(path, offset, skip_prefix=None):
     return [line for line in lines if line.strip() and not (skip_prefix and line.startswith(skip_prefix))]
 
 
+def read_log_since(path, offset):
+    path = Path(path)
+    try:
+        data = path.read_bytes()
+    except OSError:
+        data = b""
+    if len(data) < offset:
+        try:
+            previous = path.with_name(path.name + ".1").read_bytes()
+        except OSError:
+            previous = b""
+        data = (previous[offset:] if len(previous) >= offset else b"") + data
+    else:
+        data = data[offset:]
+    return [line for line in data.decode("utf-8", "replace").splitlines()
+            if line.strip() and not line.startswith("=== accept")]
+
+
 def file_size(path):
     try:
         return Path(path).stat().st_size
     except OSError:
         return 0
+
+
+def decode_console(data):
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return data.decode("utf-16", "replace")
+    for encoding in ("utf-8", "oem"):
+        try:
+            return data.decode(encoding)
+        except (UnicodeDecodeError, LookupError):
+            pass
+    return data.decode("mbcs", "replace")
+
+
+def parse_whoami(text):
+    ids = set()
+    for row in csv.reader(text.splitlines()):
+        if len(row) >= 2 and re.fullmatch(r"S-\d+(?:-\d+)+", row[1].strip(), re.I):
+            ids.update(value.strip().lower() for value in row[:2] if value.strip())
+    return ids
+
+
+def parse_task_xml(text):
+    # schtasks declares UTF-16 even when stdout actually contains ANSI/OEM bytes.
+    text = re.sub(r"^\s*<\?xml\b[^?]*\?>", "", text.lstrip("\ufeff"), count=1)
+    root = ET.fromstring(text)
+    ns = {"t": "http://schemas.microsoft.com/windows/2004/02/mit/task"}
+
+    def value(node, path, default=""):
+        return node.findtext(path, default=default, namespaces=ns).strip()
+
+    principal = root.find("t:Principals/t:Principal", ns)
+    return {"uri": value(root, "t:RegistrationInfo/t:URI"),
+            "enabled": value(root, "t:Settings/t:Enabled", "true"),
+            "logon_triggers": [{"user_id": value(node, "t:UserId"),
+                                "enabled": value(node, "t:Enabled", "true")}
+                               for node in root.findall("t:Triggers/t:LogonTrigger", ns)],
+            "principal": {"user_id": value(principal, "t:UserId") if principal is not None else "",
+                          "logon_type": value(principal, "t:LogonType") if principal is not None else "",
+                          "run_level": value(principal, "t:RunLevel") if principal is not None else ""},
+            "execs": [{"command": value(node, "t:Command"), "arguments": value(node, "t:Arguments"),
+                       "working_dir": value(node, "t:WorkingDirectory")}
+                      for node in root.findall("t:Actions/t:Exec", ns)]}
+
+
+def normalized_path(value):
+    return os.path.normcase(os.path.normpath(str(value).strip().strip('"')))
+
+
+def autostart_verdict(task, query_error, run_value, user_ids, exe_path, fallback_note):
+    notes = ["计划任务查询：%s" % query_error] if query_error else []
+    if task is None:
+        if run_value is not None and fallback_note:
+            return "WARN", ["计划任务不存在，已选择注册表回退：%s" % fallback_note,
+                            "HKCU Run AgentDeck=%s" % run_value] + notes
+        if run_value is not None:
+            return "FAIL", ["计划任务 AgentDeck 不存在，HKCU Run 仍是 %s——没迁移" % run_value] + notes
+        return "FAIL", ["计划任务和 HKCU Run 都没有 AgentDeck——开机自启没开"] + notes
+    problems = []
+    ids = {item.lower() for item in user_ids}
+    if not any(t.get("user_id", "").lower() in ids and str(t.get("enabled", "true")).lower() != "false"
+               for t in task.get("logon_triggers", [])):
+        problems.append("没有当前用户且已启用的 LogonTrigger")
+    principal = task.get("principal", {})
+    if principal.get("logon_type") != "InteractiveToken":
+        problems.append("Principal LogonType=%s，应为 InteractiveToken" % principal.get("logon_type"))
+    level = principal.get("run_level")
+    if level and level != "LeastPrivilege":
+        problems.append("RunLevel=%s，应为 LeastPrivilege" % level)
+    elif not level:
+        notes.append("RunLevel 缺省，按 schema 默认 LeastPrivilege 接受")
+    execs = task.get("execs", [])
+    first = execs[0] if execs else {}
+    if normalized_path(first.get("command", "")) != normalized_path(exe_path):
+        problems.append("Exec Command=%r，应为 %s" % (first.get("command"), exe_path))
+    if first.get("arguments", "").strip() != "--background":
+        problems.append("Exec Arguments=%r，应为 --background" % first.get("arguments"))
+    if str(task.get("enabled", "true")).lower() == "false":
+        problems.append("Settings Enabled=false，计划任务被禁用")
+    if task.get("uri") and task["uri"].lower() != r"\agentdeck":
+        problems.append("任务 URI=%r，应为根目录 \\AgentDeck" % task.get("uri"))
+    if run_value is not None:
+        problems.append("HKCU Run 仍有 AgentDeck=%s，登录时会启动两次" % run_value)
+    return ("FAIL" if problems else "PASS"), (problems or ["当前用户的 AgentDeck 登录任务正确，HKCU Run 已迁移"]) + notes
+
+
+def autostart_fallback_note(state, app_log_text):
+    value = (state or {}).get("autostart", "")
+    text = json.dumps(value, ensure_ascii=False) if isinstance(value, dict) else value if isinstance(value, str) else ""
+    values = value.values() if isinstance(value, dict) else (value,)
+    fallback = re.compile(r"registry|\brun\b|fallback|注册表|回退", re.I)
+    if any(isinstance(item, str) and fallback.search(item) for item in values):
+        return text
+    for line in reversed(app_log_text.splitlines()):
+        if re.search(r"autostart|自启", line, re.I) and re.search(r"registry|注册表|fallback|回退|Run\s*键", line, re.I):
+            return line
+    return ""
+
+
+def parse_idle_seconds(text):
+    match = re.search(r"^SESSION_IDLE_SECONDS\s*=\s*([^\r\n#]+)", text, re.M)
+    expression = match.group(1).strip() if match else ""
+    if not expression or not re.fullmatch(r"[0-9 *+]+", expression):
+        return 21600
+    try:
+        # Only positive integer sums/products; no eval, names or calls.
+        value = sum(math.prod(int(n.strip()) for n in term.split("*"))
+                    for term in expression.split("+"))
+        return value if value > 0 else 21600
+    except ValueError:
+        return 21600
+
+
+def compare_restart(before, after, idle_limit, now):
+    def key(session):
+        return session.get("agent"), session.get("session_id"), session.get("slot")
+
+    old, new = {key(s): s for s in before}, {key(s): s for s in after}
+    problems, notes = [], []
+    for identity in old.keys() - new.keys():
+        session = old[identity]
+        try:
+            expired = now - float(session.get("last_updated", now)) > idle_limit - 60
+        except (TypeError, ValueError):
+            expired = False
+        label = "%s/%s/slot %s" % identity
+        if expired:
+            notes.append("%s 闲置过期，被丢弃是对的" % label)
+        else:
+            problems.append("重启后丢失会话 %s" % label)
+    for identity in new.keys() - old.keys():
+        notes.append("重启后新增 %s/%s/slot %s（可能有真实事件）" % identity)
+    return problems, notes
+
+
+# These three I/O helpers are read-only and are blocked throughout self_test().
+def query_task_xml(name="AgentDeck"):
+    try:
+        result = subprocess.run(["schtasks", "/Query", "/TN", name, "/XML", "ONE"], capture_output=True,
+                                timeout=20, creationflags=CREATE_NO_WINDOW)
+        if result.returncode == 0:
+            return decode_console(result.stdout), ""
+        return None, decode_console(result.stderr or result.stdout).strip()
+    except (OSError, subprocess.SubprocessError) as error:
+        return None, str(error)
+
+
+def read_run_value(name="AgentDeck"):
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run",
+                            0, winreg.KEY_READ) as key:
+            return winreg.QueryValueEx(key, name)[0]
+    except FileNotFoundError:
+        return None
+
+
+def current_user_ids():
+    ids = set()
+    try:
+        result = subprocess.run(["whoami", "/user", "/fo", "csv", "/nh"], capture_output=True,
+                                timeout=20, creationflags=CREATE_NO_WINDOW)
+        if result.returncode == 0:
+            ids = parse_whoami(decode_console(result.stdout))
+    except (OSError, subprocess.SubprocessError):
+        pass
+    domain, user = os.environ.get("USERDOMAIN"), os.environ.get("USERNAME")
+    if domain and user:
+        ids.add((domain + "\\" + user).lower())
+    return ids
 
 
 # --------------------------------------------------------------------------- hook configuration
@@ -849,8 +1160,8 @@ class HubClient:
         except (OSError, ValueError) as error:
             return None, {"error": repr(error)}
 
-    def state(self):
-        code, body = self.call("GET", "/state")
+    def state(self, timeout=5.0):
+        code, body = self.call("GET", "/state", timeout=timeout)
         return body if code == 200 and isinstance(body, dict) else None
 
     def post(self, path, body):
@@ -862,12 +1173,12 @@ class HubClient:
 class HookRun:
     """One hook command execution, exactly like an agent: stdin = UTF-8 JSON, then wait."""
 
-    def __init__(self, ctx, entry, executor, payload, cwd, timeout):
+    def __init__(self, ctx, entry, executor, payload, cwd, timeout, raw=None):
         self.ctx, self.entry, self.executor = ctx, entry, executor
         self.event = payload["hook_event_name"]
         command, entry_args, self.adapted = adapt_command(entry["command"], entry.get("args"), ctx.args)
         self.spec = process_spec(executor, command, entry_args, ctx.bash, ctx.powershell)
-        self.payload = encode_payload(payload)
+        self.payload = encode_payload(payload) if raw is None else raw
         self.timeout = timeout
         self.stdout = self.stderr = b""
         self.code = None
@@ -1011,6 +1322,7 @@ class Session:
         self.name = expected_name(self.cwd)
         self.turn_id = str(uuid.uuid4())
         self.slot = None
+        self.sent = []
         ctx.created[self.sid] = agent
 
     def payload(self, event):
@@ -1020,9 +1332,9 @@ class Session:
         return [entry for entry in self.ctx.entries[self.agent].get(event, [])
                 if matcher_applies(entry.get("matcher"), event, payload)]
 
-    def start(self, entry, payload, timeout):
+    def start(self, entry, payload, timeout, raw=None):
         executor = resolve_executor(self.agent, self.mode, entry, self.ctx.bash)
-        return HookRun(self.ctx, entry, executor, payload, self.cwd, timeout)
+        return HookRun(self.ctx, entry, executor, payload, self.cwd, timeout, raw=raw)
 
     def find(self, state=None):
         state = state if state is not None else self.ctx.hub.state()
@@ -1048,6 +1360,10 @@ class Context:
         self.consoles = []
         self.hub = None
         self.hub_pid = None
+        self.hold_supported = False
+        self.hold_original = None
+        self.hold_restored = False
+        self.restarted = False
         self.bash = find_git_bash()
         self.powershell = find_powershell()
         self.entries, self.entry_notes = load_hook_config(self.hooks_home)
@@ -1127,6 +1443,45 @@ class Context:
 
 
 # --------------------------------------------------------------------------- checks
+
+def hold_set(ctx, mode):
+    code, body = ctx.hub.post("/action", {"action": "hold " + mode})
+    return code == 200 and isinstance(body, dict) and body.get("hold_mode") == mode, code, body
+
+
+def hold_begin(ctx, register_exit=True):
+    original = (ctx.hub.state() or {}).get("hold_mode")
+    ctx.hold_original = original if original in ("auto", "always", "never") else None
+    ok, code, body = hold_set(ctx, "always")
+    ctx.hold_supported = ok
+    if register_exit:
+        atexit.register(hold_restore, ctx, False)
+    if ok:
+        ctx.report.add("hold-mode", True, "原来 %s，测试期间改成 always（宏键盘没接时也走挂起/批准路径），"
+                       "结束时恢复；期间真实会话的权限请求也会被挂起" % (ctx.hold_original or "未知（按 auto 恢复）"), info=True)
+    elif code == 400:
+        ctx.report.add("hold-mode", True, "hub 不支持 hold 模式（旧版，HTTP 400），按旧行为继续", info=True)
+    else:
+        ctx.report.add("hold-mode", False, "设置 hold always 失败：HTTP %s %s" % (code, short(body)))
+
+
+def hold_restore(ctx, report=True):
+    if ctx.hold_restored or not ctx.hold_supported:
+        return
+    target = ctx.hold_original or "auto"
+    try:
+        ok, code, body = hold_set(ctx, target)
+        actual = (ctx.hub.state() or {}).get("hold_mode")
+        ok = ok and actual == target
+        if ok:
+            ctx.hold_restored = True
+        if report:
+            ctx.report.add("hold-restore", ok, "恢复 %s：HTTP %s %s；/state hold_mode=%s" % (
+                target, code, short(body), actual))
+    except Exception as error:
+        if report:
+            ctx.report.add("hold-restore", False, "恢复 hold 模式出错：%r" % error)
+
 
 def preflight(ctx):
     problems, lines = [], []
@@ -1296,10 +1651,16 @@ def event_step(ctx, session, event, problems, notes):
             notes.append("%s stderr：%s" % (event, short(run.text("stderr"), 120)))
     if not ok:
         return False
+    last_sent = session.sent[-1] if session.sent else None
+    session.sent.append(event)
     if event == "SessionEnd":
         if not wait_for(lambda: session.find() is None, 3):
             problems.append("SessionEnd 后会话仍在 /state")
             return False
+        if last_sent is not None:  # it was registered, so the hub must remember how it ended
+            found = ended_problems(session.ctx.hub.state(), session.agent, session.sid, last_sent, STOP_TEXT)
+            problems.extend("SessionEnd：" + item for item in found)
+            return not found
         return True
     state_session = wait_for(lambda: (lambda s: s if s and (event == "SessionStart" or
                                                              s.get("last_updated", 0) > before_updated) else None)(
@@ -1440,10 +1801,274 @@ def run_session(ctx, agent, mode, scenario, required):
     return not problems
 
 
+def session_requests(state, sid):
+    return [p for p in state.get("pending", []) + state.get("locked", []) if p.get("session_id") == sid]
+
+
+def audit_records(ctx):
+    code, body = ctx.hub.call("GET", "/audit?limit=200")
+    records = [r for r in body if isinstance(r, dict)] if code == 200 and isinstance(body, list) else []
+    try:
+        lines = (ctx.agentdeck / "audit.jsonl").read_text(encoding="utf-8", errors="replace").splitlines()[-500:]
+    except OSError:
+        lines = []
+    for line in lines:
+        try:
+            record = json.loads(line)
+            if isinstance(record, dict):
+                records.append(record)
+        except ValueError:
+            pass
+    return records
+
+
+def start_permission(session, problems, notes, timeout):
+    payload = session.payload("PermissionRequest")
+    entries = session.entries("PermissionRequest", payload)
+    if not entries:
+        problems.append("PermissionRequest：没装 AgentDeck hook（或 matcher 不匹配）")
+        return None
+    if len(entries) > 1:
+        notes.append("PermissionRequest 有 %d 条 relay，只跑第一条" % len(entries))
+    return session.start(entries[0], payload, timeout=timeout)
+
+
+def hold_auto(ctx, cc_mode):
+    if not ctx.hold_supported:
+        ctx.report.add("hold-auto", True, "hub 不支持 hold 模式，无法检查 auto 放行", skip=True)
+        return
+    problems, notes = [], []
+    session, run, skip = None, None, False
+    try:
+        ok, code, body = hold_set(ctx, "auto")
+        if not ok:
+            problems.append("设置 hold auto 失败：HTTP %s %s" % (code, short(body)))
+        else:
+            state = ctx.hub.state() or {}
+            connected = state.get("deck_connected")
+            if "deck_connected" not in state:
+                problems.append("/state 缺 deck_connected，契约字段缺失")
+            elif not isinstance(connected, bool):
+                problems.append("/state deck_connected 不是 bool")
+            if state.get("hold_mode") != "auto":
+                problems.append("/state hold_mode 不是 auto：%s" % state.get("hold_mode"))
+            if connected is True:
+                if state.get("hold_active") is not True:
+                    problems.append("键盘连接且 auto 时 hold_active 不是 true")
+                notes.append("宏键盘已连接（input_reader=%s），auto 模式会挂起；这项只在键盘拔掉时测" % state.get("input_reader"))
+                skip = not problems
+            elif state.get("hold_active") is not False:
+                problems.append("键盘未连接且 auto 时 hold_active 不是 false：%s" % state.get("hold_active"))
+            if not problems and not skip:
+                session = Session(ctx, "cc", cc_mode, "approve", name="accept-auto-%s" % ctx.tag)
+                event_step(ctx, session, "SessionStart", problems, notes)
+                event_step(ctx, session, "UserPromptSubmit", problems, notes)
+                run = start_permission(session, problems, notes, timeout=20)
+                if run is not None:
+                    seen, unreadable = False, False
+                    deadline = run.started + 15
+                    while time.monotonic() < deadline:
+                        state = ctx.hub.state(timeout=min(0.5, max(0.01, deadline - time.monotonic())))
+                        if state is None:
+                            unreadable = True
+                        seen = seen or bool(session_requests(state or {}, session.sid))
+                        if not run.running():
+                            break
+                        time.sleep(min(0.075, max(0, deadline - time.monotonic())))
+                    if unreadable:
+                        problems.append("放行期间读不到 /state")
+                    if run.running():
+                        problems.append("15 秒没放行")
+                        run.kill()
+                        run.wait(5)
+                    current = session.find() or {}
+                    problems += passthrough_problems(run.code, run.stdout, run.seconds, seen,
+                                                    current, audit_records(ctx), session.sid)
+                    if run.error:
+                        problems.append(run.error)
+                    notes += ["放行耗时 %.3fs；state=%s，native_wait=%s；last_text=%r，label=%r，text=%r" % (
+                        run.seconds, current.get("state"), current.get("native_wait"), current.get("last_text"),
+                        current.get("label"), current.get("text")), "stdout=%r" % short(run.text("stdout"), 200)]
+    finally:
+        if run is not None and run.running():
+            run.kill()
+            run.wait(5)
+        try:
+            if session is not None:
+                event_step(ctx, session, "SessionEnd", problems, notes)
+        finally:
+            ok, code, body = hold_set(ctx, "always")
+            if not ok:
+                problems.append("恢复 hold always 失败：HTTP %s %s" % (code, short(body)))
+                skip = False
+    extra = [n for n in notes if n != "adapted"]
+    if "adapted" in notes:
+        extra.append("命令按 --port/--home/--relay-override 改过（隔离实例）")
+    ctx.report.add("hold-auto", not problems, (problems or ([] if skip else ["auto 未挂起，原生权限等待与审计符合契约"])) + extra,
+                   skip=skip)
+
+
+def ghost_check(ctx, cc_mode):
+    problems, notes = [], []
+    if ctx.hold_supported:
+        ok, code, body = hold_set(ctx, "always")
+        if not ok:
+            ctx.report.add("ghost", False, "设置 hold always 失败：HTTP %s %s" % (code, short(body)))
+            return
+    else:
+        notes.append("旧版 hub 总是挂起")
+    session = Session(ctx, "cc", cc_mode, "approve", name="accept-ghost-%s" % ctx.tag)
+    run = None
+    try:
+        event_step(ctx, session, "SessionStart", problems, notes)
+        event_step(ctx, session, "UserPromptSubmit", problems, notes)
+        run = start_permission(session, problems, notes, timeout=50)
+        if run is not None:
+            pending_deadline = run.started + 15
+
+            def locate():
+                remaining = pending_deadline - time.monotonic()
+                if remaining <= 0:
+                    return "timeout"
+                state = ctx.hub.state(timeout=min(0.5, remaining)) or {}
+                if time.monotonic() > pending_deadline:
+                    return "timeout"
+                request = next((p for p in state.get("pending", []) if p.get("session_id") == session.sid), None)
+                return request or ("exited" if not run.running() else None)
+
+            request = wait_for(locate, max(0, pending_deadline - time.monotonic()), 0.075)
+            if not isinstance(request, dict):
+                problems.append("PermissionRequest 15 秒内没进入 pending：%s" % run.brief())
+            else:
+                time.sleep(0.3)
+                payload = session.payload("PostToolUse")
+                entries = session.entries("PostToolUse", payload)
+                if not entries:
+                    problems.append("PostToolUse：没装 AgentDeck hook（或 matcher 不匹配）")
+                else:
+                    # Start all matching installed entries before waiting for the held relay.
+                    t0 = time.monotonic()
+                    posts = [session.start(entry, payload, timeout=20) for entry in entries]
+                    released = run.wait(max(0, t0 + GHOST_LIMIT - time.monotonic()))
+                    if not released:
+                        problems.append("PostToolUse 后 2 秒 relay 还在等")
+                    clear_deadline = (run.ended if released and run.ended is not None else t0 + GHOST_LIMIT) + 1
+
+                    def cleared():
+                        remaining = clear_deadline - time.monotonic()
+                        if remaining <= 0:
+                            return False
+                        state = ctx.hub.state(timeout=min(0.2, remaining))
+                        return (time.monotonic() <= clear_deadline and state is not None
+                                and not session_requests(state, session.sid))
+
+                    if not wait_for(cleared, max(0, clear_deadline - time.monotonic()), 0.075):
+                        problems.append("relay 退出后 1 秒内仍有 pending/locked（或读不到 /state）")
+                    if not released:
+                        if not run.wait(15):
+                            run.kill()
+                            run.wait(5)
+                    release = run.ended - t0 if run.ended is not None else time.monotonic() - t0
+                    notes.append("释放耗时 %.3fs；stdout=%r" % (release, short(run.text("stdout"), 200)))
+                    if release >= GHOST_LIMIT and "PostToolUse 后 2 秒 relay 还在等" not in problems:
+                        problems.append("释放耗时 %.3fs，超过 2 秒" % release)
+                    if release < 0:
+                        problems.append("PostToolUse 启动前 relay 已退出")
+                    problems += run.problems()
+                    if not empty_json_object(run.stdout):
+                        problems.append("PermissionRequest stdout 不是 {}")
+
+                    for post in posts:
+                        post.wait(25)
+                        problems += ["PostToolUse：" + p for p in post.problems(expect_stdout="{}")]
+                    decisions = [r.get("decision") for r in audit_records(ctx) if r.get("request_id") == request.get("id")]
+                    notes.append("审计 decision（仅参考）：%s" % (decisions or "无记录"))
+    finally:
+        if run is not None and run.running():
+            run.kill()
+            run.wait(5)
+        event_step(ctx, session, "SessionEnd", problems, notes)
+    extra = [n for n in notes if n != "adapted"]
+    if "adapted" in notes:
+        extra.append("命令按 --port/--home/--relay-override 改过（隔离实例）")
+    ctx.report.add("ghost", not problems, (problems or ["PostToolUse 已释放仍挂起的权限请求"]) + extra)
+
+
 def open_console(ctx, title, console_mode):
     if console_mode == "conhost":
         return subprocess.Popen(["conhost.exe", "cmd.exe", "/k", "title " + title])
     return subprocess.Popen("cmd.exe /k title " + title, creationflags=CREATE_NEW_CONSOLE)
+
+
+def codex_exec_check(ctx):
+    """Opt-in: one real `codex exec` through the user's global hooks (uses Codex quota).
+
+    codex exec fires SessionEnd milliseconds after Stop, so the session is polled while it
+    runs and its final state is read from /state recent_ended afterwards.
+    """
+    exe = shutil.which("codex.cmd") or shutil.which("codex")
+    if not exe:
+        ctx.report.add("codex-exec", False, "PATH 上没有 codex", skip=True)
+        return
+    state = ctx.hub.state() or {}
+    before = {s.get("session_id") for s in state.get("sessions", []) if s.get("agent") == "cx"}
+    before |= {e.get("session_id") for e in state.get("recent_ended", []) or [] if isinstance(e, dict)}
+    root = os.path.normcase(os.path.normpath(str(ROOT)))
+
+    def mine(item):
+        return (isinstance(item, dict) and item.get("agent") == "cx" and item.get("session_id") not in before
+                and os.path.normcase(os.path.normpath(str(item.get("cwd") or ""))) == root)
+
+    env = dict(os.environ)
+    env.pop("SSL_CERT_FILE", None)  # codex needs it unset on this machine (conda's bundle breaks TLS)
+    ctx.out.mkdir(parents=True, exist_ok=True)
+    out_path = ctx.out / "codex_exec.txt"
+    seen, timeline = {}, []
+    started = time.monotonic()
+    with open(out_path, "wb") as out:
+        proc = subprocess.Popen([exe, "exec", "--skip-git-repo-check", "-s", "read-only", CODEX_PROMPT],
+                                cwd=str(ROOT), env=env, stdin=subprocess.DEVNULL, stdout=out,
+                                stderr=subprocess.STDOUT, creationflags=CREATE_NO_WINDOW)
+        last = None
+        while True:
+            current = [s for s in (ctx.hub.state(timeout=2) or {}).get("sessions", []) if mine(s)]
+            for item in current:
+                seen[item["session_id"]] = item
+            snap = [(s["session_id"][:8], s.get("state"), s.get("last_event"), short(s.get("last_text") or "", 30))
+                    for s in current]
+            if snap != last:
+                timeline.append("%.2fs %s" % (time.monotonic() - started, snap))
+                last = snap
+            if proc.poll() is not None:
+                break
+            if time.monotonic() - started > CODEX_TIMEOUT:
+                proc.kill()
+                proc.wait(10)
+                timeline.append("超过 %d 秒，已终止 codex" % CODEX_TIMEOUT)
+                break
+            time.sleep(0.15)
+    code = proc.returncode
+    output = out_path.read_bytes().decode("utf-8", "replace")
+
+    def final():
+        st = ctx.hub.state() or {}
+        ended = [e for e in st.get("recent_ended", []) or [] if mine(e)]
+        alive = [s for s in st.get("sessions", []) if mine(s)]
+        return (ended[-1] if ended else None, alive[-1] if alive else None)
+
+    ended, alive = wait_for(lambda: (lambda pair: pair if pair[0] else None)(final()), 3) or final()
+    skip, problems = codex_exec_problems(code, output, seen, ended, alive)
+    detail = ["退出码 %s，%.1fs，新 cx 会话 %s" % (code, time.monotonic() - started,
+                                              ", ".join(sid[:8] for sid in seen) or "无")]
+    if ended:
+        detail.append("recent_ended：%s/%s last_text=%r ended_by=%s" % (
+            ended.get("state"), ended.get("last_event"), short(ended.get("last_text") or "", 40), ended.get("ended_by")))
+    elif alive:
+        detail.append("仍在 /state（codex 没发 SessionEnd）：%s/%s" % (alive.get("state"), alive.get("last_event")))
+    if skip:
+        ctx.report.add("codex-exec", False, [skip] + detail + timeline, [out_path], skip=True)
+    else:
+        ctx.report.add("codex-exec", not problems, problems + detail + timeline, [out_path])
 
 
 def find_console(marker, before):
@@ -1600,11 +2225,41 @@ def window_switch(ctx, alpha, beta, problems):
     ctx.report.add("window-switch", not problems, problems + lines, evidence)
 
 
-def relay_log_check(ctx, offset):
+def relay_log_check(ctx, lines):
     path = ctx.agentdeck / "relay.log"
-    lines = new_log_lines(path, offset, skip_prefix="=== accept")
     ctx.report.add("relay-log", not lines, ["标记之后 %d 行新错误" % len(lines)] + [short(l, 200) for l in lines[:10]],
                    [path])
+
+
+def relay_log_format_check(ctx, offset, lines_run, cc_mode):
+    path = ctx.agentdeck / "relay.log"
+    marker = "RAWPROBE-" + uuid.uuid4().hex[:12]
+    raw = ('{"session_id": "accept-logfmt-%s", "hook_event_name": "Stop", "note": "%s ' % (
+        ctx.tag, marker)).encode("utf-8") + b"\xff"
+    payload = {"hook_event_name": "Stop"}
+    entries = [entry for entry in ctx.entries["cc"].get("Stop", [])
+               if matcher_applies(entry.get("matcher"), "Stop", payload)]
+    notes = []
+    if entries:
+        entry = entries[0]
+        executor = resolve_executor("cc", cc_mode, entry, ctx.bash)
+        probe = HookRun(ctx, entry, executor, payload, str(ROOT), timeout=20, raw=raw)
+        if not probe.wait(25):
+            probe.kill()
+            probe.wait(5)
+        if probe.code != 0 or probe.error:
+            notes.append("探针应退出 0：%s" % probe.brief())
+    else:
+        notes.append("cc Stop 没装 AgentDeck hook，无法运行错误探针")
+    lines_all = read_log_since(path, offset)
+    probe_lines = lines_all[len(lines_run):]
+    bad = [(line, relay_line_problems(line, markers=(marker,))) for line in lines_all]
+    bad = [(line, problems) for line, problems in bad if problems]
+    detail = ["运行日志 %d 行，探针日志 %d 行；共检查 %d 行" % (len(lines_run), len(probe_lines), len(lines_all))]
+    detail += ["%s：%s" % ("；".join(problems), short(line, 220)) for line, problems in bad[:8]] + notes
+    if not probe_lines:
+        detail.insert(0, "探针没写日志")
+    ctx.report.add("relay-log-format", not bad and bool(probe_lines), detail, [path], info=not bad and not probe_lines)
 
 
 def app_log_check(ctx, offset):
@@ -1612,7 +2267,7 @@ def app_log_check(ctx, offset):
     if not path.exists():
         ctx.report.add("app-log", True, "没有 %s（隔离的 hub.py 不写这个文件）" % path, skip=True)
         return
-    lines = new_log_lines(path, offset)
+    lines = read_log_since(path, offset)
     pattern = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d+ (\S+) (\w+) (.*)$")
     bad, counts = [], {}
     for line in lines:
@@ -1644,6 +2299,142 @@ def keyboard_info(ctx):
     ctx.report.add("keyboard-reader", not raw, ["最近一次：" + short(reader, 120)] + (
         ["Raw Input 只能旁听：宏键盘的按键同时会打字进前台窗口。要独占需用 Zadig 把接口 0 换成 WinUSB（用户操作）"]
         if raw else []), info=True)
+
+
+def restart_skip_reason(port, home, image, exe_path):
+    if port != DEFAULT_PORT or home:
+        return "只重启默认端口且未指定 --home 的打包实例"
+    if not image or normalized_path(image) != normalized_path(exe_path):
+        return "监听进程不是 %s：%s" % (exe_path, image or "没找到")
+    return ""
+
+
+def restart_check(ctx):
+    exe = ROOT / "dist" / "AgentDeck" / "AgentDeck.exe"
+    pid = listening_pid(ctx.args.port)
+    reason = restart_skip_reason(ctx.args.port, ctx.args.home, process_name(pid) if pid else "", exe)
+    if reason:
+        ctx.report.add("restart-check", True, reason, skip=True)
+        return
+    problems, notes = [], []
+    state = ctx.hub.state()
+    if state is None:
+        ctx.report.add("restart-check", False, "重启前读不到 /state，未重启")
+        return
+    for session in state.get("sessions", []):
+        if str(session.get("session_id", "")).startswith("accept-"):
+            ctx.hub.post("/event?agent=%s" % session["agent"],
+                         {"hook_event_name": "SessionEnd", "session_id": session["session_id"]})
+    state = ctx.hub.state()
+    if state is None:
+        ctx.report.add("restart-check", False, "结束残留会话后读不到 /state，未重启")
+        return
+    before = [s for s in state.get("sessions", []) if not str(s.get("session_id", "")).startswith("accept-")]
+    time.sleep(3)  # sessions.json saves are throttled to two seconds.
+    saved = ctx.agentdeck / "sessions.json"
+    if saved.exists():
+        notes.append("sessions.json mtime=%s" % datetime.fromtimestamp(saved.stat().st_mtime).isoformat(timespec="seconds"))
+    else:
+        notes.append("重启前没有 sessions.json")
+    result = subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True,
+                            timeout=20, creationflags=CREATE_NO_WINDOW)
+    if result.returncode != 0:
+        ctx.report.add("restart-check", False, ["终止进程失败：" + decode_console(result.stderr or result.stdout)] + notes)
+        return
+    if not wait_for(lambda: listening_pid(ctx.args.port) is None, 10, 0.2):
+        ctx.report.add("restart-check", False, ["终止后 10 秒端口仍被占用，未启动第二个进程"] + notes)
+        return
+    flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    try:
+        try:
+            subprocess.Popen([str(exe), "--background"], cwd=exe.parent, stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True,
+                             creationflags=flags | CREATE_BREAKAWAY_FROM_JOB)
+        except OSError:
+            subprocess.Popen([str(exe), "--background"], cwd=exe.parent, stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True, creationflags=flags)
+    except OSError as error:
+        ctx.report.add("restart-check", False, ["AgentDeck 没重新起来——请手动运行 dist\\AgentDeck\\AgentDeck.exe",
+                                               str(error)] + notes)
+        return
+
+    def healthy():
+        code, body = ctx.hub.call("GET", "/health", timeout=1)
+        return code == 200 and isinstance(body, dict) and body.get("ok") is True
+
+    if not wait_for(healthy, 45, 0.2):
+        ctx.report.add("restart-check", False, ["AgentDeck 没重新起来——请手动运行 dist\\AgentDeck\\AgentDeck.exe"] + notes)
+        return
+    try:
+        token = (ctx.agentdeck / "token").read_text(encoding="utf-8").strip()
+    except OSError as error:
+        ctx.report.add("restart-check", False, ["重启后读不到 token：%s" % error] + notes)
+        return
+    ctx.hub = HubClient(ctx.args.port, token)
+    ctx.hub_pid = listening_pid(ctx.args.port)
+    ctx.restarted = True
+    deadline = time.monotonic() + 10
+
+    def read_state():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        state = ctx.hub.state(timeout=min(0.5, remaining))
+        return state if time.monotonic() <= deadline else None
+
+    state = wait_for(read_state, 10, 0.2)
+    if state is None:
+        ctx.report.add("restart-check", False, ["重启后 10 秒仍读不到 /state"] + notes)
+        return
+    if ctx.hold_supported and state.get("hold_mode") != "auto":
+        problems.append("重启后 hold_mode=%s，应默认 auto" % state.get("hold_mode"))
+    try:
+        idle_limit = parse_idle_seconds((ROOT / "pc" / "hub.py").read_text(encoding="utf-8"))
+    except OSError:
+        idle_limit = 21600
+    # Reloading can finish shortly after /health becomes available.
+    while True:
+        missing, extra = compare_restart(before, state.get("sessions", []), idle_limit, time.time())
+        if not missing or time.monotonic() >= deadline:
+            break
+        time.sleep(min(0.2, max(0, deadline - time.monotonic())))
+        state = read_state() or state
+    problems += missing
+    notes += extra + ["重启前 %d 个真实会话，重启后 %d 个；闲置上限 %ds" % (
+        len(before), len(state.get("sessions", [])), idle_limit)]
+    ctx.report.add("restart-check", not problems, (problems or ["打包进程已重启，未过期会话与槽位保留"]) + notes, [saved])
+
+
+def autostart_check(ctx, state=None):
+    text, query_error = query_task_xml()
+    if ctx.restarted:
+        deadline = time.monotonic() + 10
+        while text is None and time.monotonic() < deadline:
+            time.sleep(0.2)
+            text, query_error = query_task_xml()
+    task = None
+    if text is not None:
+        try:
+            task = parse_task_xml(text)
+        except (ET.ParseError, ValueError) as error:
+            ctx.report.add("autostart", False, "计划任务 XML 无法解析：%s" % error)
+            return
+    try:
+        run_value = read_run_value()
+    except OSError as error:
+        ctx.report.add("autostart", False, "无法只读查询 HKCU Run：%s" % error)
+        return
+    user_ids = current_user_ids()
+    try:
+        app_text = (ctx.agentdeck / "logs" / "app.log").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        app_text = ""
+    if state is None and not ctx.args.dry_run:
+        state = ctx.hub.state()
+    status, lines = autostart_verdict(task, query_error, run_value, user_ids,
+                                    ROOT / "dist" / "AgentDeck" / "AgentDeck.exe",
+                                    autostart_fallback_note(state, app_text))
+    ctx.report.add("autostart", status == "PASS", lines, info=status == "WARN")
 
 
 def cleanup(ctx):
@@ -1712,6 +2503,16 @@ def dry_run(ctx):
     if pid:
         for item in enum_windows(pid):
             print("  窗口 %s rect=%s tid=%d" % (label_window(item), item["rect"], item["tid"]))
+    exe = ROOT / "dist" / "AgentDeck" / "AgentDeck.exe"
+    reason = restart_skip_reason(ctx.args.port, ctx.args.home, process_name(pid) if pid else "", exe)
+    print("--restart-check：%s%s" % ("正式运行会 SKIP：" + reason if reason else "正式运行会终止并重启这个打包进程",
+          "（本次 dry-run 不执行）" if ctx.args.restart_check else "（当前未启用，不重启）"))
+    codex = shutil.which("codex.cmd") or shutil.which("codex")
+    print("--codex-exec：%s（%s）" % ("正式运行会在 %s 跑 %s exec --skip-git-repo-check -s read-only %r" % (
+        ROOT, codex, CODEX_PROMPT) if codex else "PATH 上没有 codex，正式运行会 SKIP",
+        "已启用" if ctx.args.codex_exec else "当前未启用"))
+    if not ctx.skipped("autostart"):
+        autostart_check(ctx, state={})  # No HTTP in dry-run; fallback evidence comes from app.log only.
     for name in ("relay.log", "logs/app.log"):
         path = ctx.agentdeck / name
         print("%s：%s（%d 字节）" % (name, path, file_size(path)))
@@ -1723,13 +2524,30 @@ def dry_run(ctx):
     print("打包时间：%s；pc/hub_relay.py 修改于 %s" % ("，".join(build) or "无",
           datetime.fromtimestamp((ROOT / "pc" / "hub_relay.py").stat().st_mtime).strftime("%m-%d %H:%M")))
     agents_first = {agent for agent, _ in required}
-    sessions = 3 * len(agents_first) + (len(required) - len(agents_first)) + len(info) + 2
+    sessions = 3 * len(agents_first) + (len(required) - len(agents_first)) + len(info) + 4
     print("\n正式运行会：写 relay.log 标记、跑上面的命令（%d 个假会话）、截图、移动鼠标悬停浮窗、"
-          "开两个控制台测切窗口，约 2~3 分钟。" % sessions)
+          "开两个控制台测切窗口，约 2~3 分钟；期间 hold 模式临时改成 always（真实会话的权限请求也会挂起），结束恢复。" % sessions)
     return 0
 
 
 def self_test():
+    from unittest.mock import patch
+    attempts = []
+
+    def forbidden(*args, **kwargs):
+        attempts.append((args, kwargs))
+        raise AssertionError("离线自检禁止查询计划任务、注册表或当前用户")
+
+    previous = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True  # Importing pc/hub_risk must not create/update pc/__pycache__.
+    try:
+        with patch.dict(globals(), {name: forbidden for name in ("query_task_xml", "read_run_value", "current_user_ids")}):
+            return _self_test(attempts)
+    finally:
+        sys.dont_write_bytecode = previous
+
+
+def _self_test(io_attempts):
     """Offline checks of the harness's own logic (no hub, no hooks, no windows)."""
     results = []
 
@@ -1758,6 +2576,71 @@ def self_test():
     check("解析 allow/deny", parse_decision(allow) == ("allow", None) and parse_decision(deny) == ("deny", None))
     check("拒绝坏输出", parse_decision(b"")[0] is None and parse_decision(b"{}")[0] is None and parse_decision(
         b'{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow","interrupt":true}}}')[0] is None)
+    for label, data, want in (("空对象", b"{}", True), ("空白", b" \n { }\r\n", True),
+                              ("空 stdout", b"", False), ("数组", b"[]", False), ("null", b"null", False),
+                              ("布尔", b"false", False), ("非空对象", b'{"x":1}', False),
+                              ("重复 JSON", b"{}{}", False), ("坏 UTF-8", b"{\xff}", False)):
+        check("empty_json_object " + label, empty_json_object(data) is want)
+    good = {"code": 0, "stdout_bytes": b"{}", "seconds": 0.5, "seen": False,
+            "session_dict": {"native_wait": True, "state": "wait"},
+            "audit_records": [{"session_id": "accept-s", "decision": "passthrough"}], "sid": "accept-s"}
+    check("passthrough 正常", passthrough_problems(**good) == [])
+    for label, changes in (("退出码", {"code": 1}), ("stdout", {"stdout_bytes": b"[]"}),
+                            ("耗时边界", {"seconds": PASSTHROUGH_LIMIT}), ("曾挂起", {"seen": True}),
+                            ("native_wait", {"session_dict": {"native_wait": False, "state": "wait"}}),
+                            ("状态", {"session_dict": {"native_wait": True, "state": "think"}}),
+                            ("会话缺失", {"session_dict": None}), ("审计缺失", {"audit_records": []}),
+                            ("审计其他会话", {"audit_records": [{"session_id": "other", "decision": "passthrough"}]}),
+                            ("审计其他决定", {"audit_records": [{"session_id": "accept-s", "decision": "allow"}]})):
+        check("passthrough 拒绝" + label, bool(passthrough_problems(**dict(good, **changes))))
+    done = {"agent": "cc", "session_id": "accept-s", "state": "done", "last_event": "Stop",
+            "last_text": STOP_TEXT, "ended_by": "SessionEnd"}
+    ended_state = {"recent_ended": [{"agent": "cx", "session_id": "accept-s"}, done]}
+    check("recent_ended 正常", ended_problems(ended_state, "cc", "accept-s", "Stop", STOP_TEXT) == [])
+    check("recent_ended 取最新一条", find_ended({"recent_ended": [dict(done, state="think"), done]},
+                                             "cc", "accept-s") is done)
+    check("recent_ended 只核对 ended_by（上一步不是 Stop）",
+          ended_problems({"recent_ended": [dict(done, state="wait", last_event="PermissionRequest")]},
+                         "cc", "accept-s", "UserPromptSubmit", STOP_TEXT) == [])
+    for label, state in (("字段缺失", {}), ("非列表", {"recent_ended": {}}), ("空", {"recent_ended": []}),
+                         ("别的 agent", {"recent_ended": [dict(done, agent="cx")]}),
+                         ("ended_by", {"recent_ended": [dict(done, ended_by="idle")]}),
+                         ("状态", {"recent_ended": [dict(done, state="think")]}),
+                         ("事件", {"recent_ended": [dict(done, last_event="UserPromptSubmit")]}),
+                         ("回复", {"recent_ended": [dict(done, last_text="别的")]})):
+        check("recent_ended 拒绝" + label, bool(ended_problems(state, "cc", "accept-s", "Stop", STOP_TEXT)))
+    cx_done = {"agent": "cx", "session_id": "01a1f746", "state": "done", "last_event": "Stop",
+               "last_text": "ok", "ended_by": "SessionEnd"}
+    seen = {"01a1f746": {"state": "think"}}
+    check("codex-exec 正常", codex_exec_problems(0, "ok\r\n", seen, cx_done) == (None, []))
+    check("codex-exec 没 SessionEnd 也认",
+          codex_exec_problems(0, "ok", seen, None, dict(cx_done, ended_by=None)) == (None, []))
+    check("codex-exec 只在 recent_ended 里也认", codex_exec_problems(0, "ok", {}, cx_done) == (None, []))
+    limit = "ERROR: You've hit your usage limit. Upgrade to Pro ... try again at Nov 20th, 2026 1:09 AM."
+    model = "The 'gpt-5.5' model is not supported when using Codex with a ChatGPT account."
+    for label, text in (("额度", limit), ("模型", model)):
+        skip, found = codex_exec_problems(1, text, seen, dict(cx_done, state="think", last_event="UserPromptSubmit"))
+        check("codex-exec %s记 SKIP" % label, skip and found == [], skip)
+    for label, args in (("退出码", (1, "ok", seen, cx_done)),
+                        ("没进 hub", (0, "ok", {}, None)),
+                        ("会话消失没记录", (0, "ok", seen, None)),
+                        ("没 Stop", (0, "ok", seen, dict(cx_done, state="think", last_event="UserPromptSubmit"))),
+                        ("回复不对", (0, "ok", seen, dict(cx_done, last_text="Reply only: ok"[:5]))),
+                        ("ended_by", (0, "ok", seen, dict(cx_done, ended_by="idle")))):
+        skip, found = codex_exec_problems(*args)
+        check("codex-exec 拒绝" + label, skip is None and bool(found), found)
+    good_line = "2026-11-19 22:18:03 cc PermissionRequest 3f2a9c1d hub not reachable: ConnectionRefusedError(10061)"
+    prefix = "2026-11-19 22:18:03 cc Stop - "
+    check("relay 格式正常", relay_line_problems(good_line) == [])
+    check("relay sid 为 -", relay_line_problems(prefix + "error") == [])
+    check("relay 无消息", relay_line_problems(prefix.rstrip()) == [])
+    check("relay 拒绝旧格式", bool(relay_line_problems("cc PreToolUse UnicodeDecodeError('后面')")))
+    check("relay 拒绝 401 字符", bool(relay_line_problems("x" * 401)))
+    check("relay 拒绝 301 字符消息", bool(relay_line_problems(prefix + "x" * 301)))
+    check("relay 接受 300 字符消息", relay_line_problems(prefix + "x" * 300) == [])
+    for marker in ("第00000行", PROMPT, "RAWPROBE-fake"):
+        check("relay 拒绝原始 stdin " + short(marker, 18),
+              bool(relay_line_problems(prefix + marker, markers=("RAWPROBE-fake",))))
 
     class Opt:
         relay_override, port, home = None, DEFAULT_PORT, None
@@ -1789,6 +2672,19 @@ def self_test():
         with open(log, "a", encoding="utf-8") as handle:
             handle.write("cc PreToolUse UnicodeDecodeError('后面')\n=== accept 1 end\n")
         check("relay.log 抓到新错误", new_log_lines(log, offset, "=== accept") == ["cc PreToolUse UnicodeDecodeError('后面')"])
+        check("read_log_since 不轮转", read_log_since(log, offset) == ["cc PreToolUse UnicodeDecodeError('后面')"])
+        check("read_log_since 无新行", read_log_since(log, file_size(log)) == [])
+        log.write_bytes(b"old line\n" * 100)
+        offset = file_size(log)
+        with open(log, "ab") as handle:
+            handle.write((good_line + "\n=== accept end\n").encode("utf-8"))
+        log.rename(log.with_name("relay.log.1"))
+        log.write_text(prefix + "新错误\n", encoding="utf-8")
+        check("read_log_since 合并轮转前后", read_log_since(log, offset) == [good_line, prefix + "新错误"])
+        log.with_name("relay.log.1").write_bytes(b"short\n")
+        check("read_log_since 旧备份不足偏移", read_log_since(log, offset) == [prefix + "新错误"])
+        log.with_name("relay.log.1").unlink()
+        check("read_log_since 没有轮转备份", read_log_since(log, offset) == [prefix + "新错误"])
         home = Path(folder) / "home"
         (home / ".claude").mkdir(parents=True)
         (home / ".codex").mkdir()
@@ -1803,6 +2699,158 @@ def self_test():
         check("读 hook 配置", len(entries["cc"]["SessionStart"]) == 1 and entries["cc"]["PreToolUse"][0]["gate"]
               and entries["cc"]["PreToolUse"][0]["matcher"] == "Bash"
               and entries["cx"]["Stop"][0]["command"].endswith("--agent cx"))
+    check("decode_console UTF-16 LE BOM", decode_console("任务 后面".encode("utf-16")) == "任务 后面")
+    check("decode_console UTF-16 BE BOM", decode_console(b"\xfe\xff" + "任务 后面".encode("utf-16-be")) == "任务 后面")
+    check("decode_console UTF-8", decode_console("后面".encode("utf-8")) == "后面")
+    ansi = b"\xb2\xe2\xca\xd4"
+    try:
+        ansi_text = ansi.decode("oem")
+    except UnicodeDecodeError:
+        ansi_text = ansi.decode("mbcs", "replace")
+    check("decode_console ANSI/OEM 字节", decode_console(ansi) == ansi_text)
+    xml = r'''<?xml version="1.0" encoding="UTF-16"?>
+<Task xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><URI>\AgentDeck</URI></RegistrationInfo>
+  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>DESKTOP\King</UserId></LogonTrigger></Triggers>
+  <Principals><Principal><UserId>S-1-5-21-123</UserId><LogonType>InteractiveToken</LogonType>
+    <RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
+  <Settings><Enabled>true</Enabled></Settings>
+  <Actions><Exec><Command>"D:\apps\AgentDeck\AgentDeck.exe"</Command>
+    <Arguments>--background</Arguments><WorkingDirectory>D:\apps\AgentDeck</WorkingDirectory></Exec></Actions>
+</Task>'''
+    task = parse_task_xml(decode_console(xml.encode("ascii")))
+    exe = r"D:\apps\AgentDeck\AgentDeck.exe"
+    ids = {r"desktop\king", "s-1-5-21-123"}
+
+    def verdict(task_data, run_value=None, fallback="", user_ids=ids):
+        return autostart_verdict(task_data, "fake query error" if task_data is None else "",
+                                 run_value, user_ids, exe, fallback)
+
+    check("parse_task_xml UTF-16 声明与命名空间", task["uri"] == r"\AgentDeck" and task["enabled"] == "true"
+          and task["principal"]["user_id"] == "S-1-5-21-123"
+          and task["execs"][0]["working_dir"] == r"D:\apps\AgentDeck")
+    check("autostart 正常 PASS", verdict(task)[0] == "PASS")
+    check("autostart Run 仍存在 FAIL", verdict(task, exe)[0] == "FAIL")
+    for label, old, new in (("提权", "LeastPrivilege", "HighestAvailable"),
+                             ("密码登录", "InteractiveToken", "Password"),
+                             ("错误命令", "AgentDeck.exe", "wrong.exe"),
+                             ("错误参数", "--background", "--other"),
+                             ("其他用户", r"DESKTOP\King", r"DESKTOP\Other"),
+                             ("任务禁用", "<Settings><Enabled>true", "<Settings><Enabled>false"),
+                             ("触发器禁用", "<LogonTrigger><Enabled>true", "<LogonTrigger><Enabled>false"),
+                             ("非根任务", r"<URI>\AgentDeck", r"<URI>\Other\AgentDeck")):
+        check("autostart " + label + " FAIL", verdict(parse_task_xml(xml.replace(old, new)))[0] == "FAIL")
+    no_level = parse_task_xml(xml.replace("<RunLevel>LeastPrivilege</RunLevel>", ""))
+    status, lines = verdict(no_level)
+    check("autostart 缺 RunLevel PASS 并注明默认值", status == "PASS" and any("缺省" in line for line in lines))
+    check("autostart SID 匹配不区分大小写", verdict(parse_task_xml(xml.replace(r"DESKTOP\King", "S-1-5-21-123")))[0] == "PASS")
+    check("autostart Enabled 缺省 true", verdict(parse_task_xml(xml.replace("<Enabled>true</Enabled>", "")))[0] == "PASS")
+    check("autostart 缺任务仍有 Run FAIL", verdict(None, exe)[0] == "FAIL")
+    check("autostart 缺任务 Run 回退 WARN", verdict(None, exe, "registry fallback")[0] == "WARN")
+    status, lines = verdict(None)
+    check("autostart 两者都没有 FAIL 并保留查询错误", status == "FAIL" and any("fake query error" in line for line in lines))
+    check("parse_whoami CSV", parse_whoami('"DESKTOP\\King","S-1-5-21-123"\r\n') == ids)
+    check("parse_whoami 忽略坏行", parse_whoami('ERROR: whoami failed\n"User Name","SID"') == set())
+    check("autostart fallback state 字符串", autostart_fallback_note({"autostart": "Registry fallback"}, "") == "Registry fallback")
+    check("autostart fallback state 字典", "registry" in autostart_fallback_note({"autostart": {"backend": "registry"}}, ""))
+    check("autostart fallback 不把键名当证据", autostart_fallback_note({"autostart": {"registry": False, "fallback": False}}, "") == "")
+    check("autostart fallback 不把 running 当 Run", autostart_fallback_note({"autostart": {"mode": "task", "status": "running"}}, "") == "")
+    check("autostart fallback app 最后一条", autostart_fallback_note({}, "autostart registry old\n自启 回退到 Run 键\n无关") == "自启 回退到 Run 键")
+    check("autostart fallback 没有证据", autostart_fallback_note({"autostart": "task"}, "registry 无关\nautostart enabled") == "")
+    before = [{"agent": "cc", "session_id": "real-s", "slot": 1, "last_updated": 10000}]
+    check("compare_restart 保留会话", compare_restart(before, before, 21600, 10001) == ([], []))
+    check("compare_restart 丢失新会话 FAIL", bool(compare_restart(before, [], 21600, 10001)[0]))
+    problems, notes = compare_restart(before, [], 21600, 31600)
+    check("compare_restart 过期允许丢弃", not problems and any("闲置过期，被丢弃是对的" in note for note in notes))
+    problems, notes = compare_restart(before, before + [{"agent": "cx", "session_id": "new", "slot": 2}], 21600, 10001)
+    check("compare_restart 额外会话仅备注", not problems and len(notes) == 1)
+    check("compare_restart 槽位改变 FAIL", bool(compare_restart(before, [dict(before[0], slot=2)], 21600, 10001)[0]))
+    check("parse_idle_seconds 乘法", parse_idle_seconds("SESSION_IDLE_SECONDS = 6 * 60 * 60\n") == 21600)
+    check("parse_idle_seconds 加法与注释", parse_idle_seconds("SESSION_IDLE_SECONDS = 2 * 60 + 3 # seconds") == 123)
+    for expression in ("", "SESSION_IDLE_SECONDS = bad()", "SESSION_IDLE_SECONDS = 2 ** 3",
+                       "SESSION_IDLE_SECONDS = 0", "SESSION_IDLE_SECONDS = 12 / 2", "SESSION_IDLE_SECONDS = 1 - 2"):
+        check("parse_idle_seconds 安全缺省 " + short(expression, 36), parse_idle_seconds(expression) == 21600)
+
+    from types import SimpleNamespace
+
+    class FakeHub:
+        def __init__(self, mode="auto", code=200):
+            self.mode, self.code, self.posts = mode, code, []
+
+        def state(self):
+            return {"hold_mode": self.mode}
+
+        def post(self, path, body):
+            self.posts.append((path, body))
+            if self.code == 400:
+                return 400, {"error": "unknown action"}
+            if self.code != 200:
+                return self.code, {"error": "fake failure"}
+            self.mode = body["action"].split()[1]
+            return 200, {"status": "ok", "hold_mode": self.mode}
+
+    class FakeReport:
+        def __init__(self):
+            self.rows = []
+
+        def add(self, *args, **kwargs):
+            self.rows.append((args, kwargs))
+
+    def hold_context(mode="auto", code=200):
+        return SimpleNamespace(hub=FakeHub(mode, code), report=FakeReport(), hold_supported=False,
+                               hold_original=None, hold_restored=False)
+
+    fake = hold_context()
+    hold_begin(fake, register_exit=False)
+    check("hold_begin 支持 always", fake.hold_supported and fake.hold_original == "auto" and fake.hub.mode == "always")
+    hold_restore(fake)
+    hold_restore(fake)
+    check("hold_restore 恢复且幂等", fake.hold_restored and fake.hub.mode == "auto" and fake.hub.posts == [
+        ("/action", {"action": "hold always"}), ("/action", {"action": "hold auto"})])
+    fake = hold_context(code=400)
+    hold_begin(fake, register_exit=False)
+    hold_restore(fake)
+    check("hold 旧版 400 不恢复 POST", not fake.hold_supported and len(fake.hub.posts) == 1)
+    fake = hold_context("never")
+    hold_begin(fake, register_exit=False)
+    hold_restore(fake, report=False)
+    check("hold_restore 保留原 never 且静默", fake.hold_restored and fake.hub.mode == "never" and len(fake.report.rows) == 1)
+    fake = hold_context("invalid")
+    hold_begin(fake, register_exit=False)
+    hold_restore(fake)
+    check("hold_restore 未知原模式按 auto", fake.hold_restored and fake.hold_original is None and fake.hub.mode == "auto")
+    fake = hold_context(code=503)
+    hold_begin(fake, register_exit=False)
+    check("hold_begin 非 400 错误 FAIL", not fake.hold_supported and fake.report.rows[0][0][1] is False)
+    fake = hold_context()
+    hold_begin(fake, register_exit=False)
+    fake.hub.state = lambda: {"hold_mode": "always"}
+    hold_restore(fake)
+    check("hold_restore 核对 state，不只信 POST", not fake.hold_restored and fake.report.rows[-1][0][1] is False)
+    fake = hold_context()
+    hold_begin(fake, register_exit=False)
+    fake.hub.code = 503
+    hold_restore(fake)
+    check("hold_restore POST 失败保留重试", not fake.hold_restored and fake.report.rows[-1][0][1] is False)
+    fake = hold_context()
+    hold_begin(fake, register_exit=False)
+
+    def failed_post(*args, **kwargs):
+        raise OSError("fake unavailable hub")
+
+    fake.hub.post = failed_post
+    hold_restore(fake, report=False)
+    check("hold_restore 退出回调失败仍静默", not fake.hold_restored and len(fake.report.rows) == 1)
+    fake = hold_context("never")
+    hold_begin(fake, register_exit=False)
+    working_post = fake.hub.post
+    fake.hub.post = failed_post
+    hold_restore(fake)
+    check("hold_restore 异常报告且保留重试", not fake.hold_restored and fake.report.rows[-1][0][1] is False)
+    fake.hub.post = working_post
+    hold_restore(fake, report=False)
+    check("hold_restore 失败后退出回调重试成功", fake.hold_restored and fake.hub.mode == "never"
+          and fake.hub.posts[-1] == ("/action", {"action": "hold never"}) and len(fake.report.rows) == 2)
     sys.path.insert(0, str(ROOT / "pc"))
     try:
         from hub_risk import PROTECTED_BRANCHES, classify
@@ -1817,6 +2865,7 @@ def self_test():
     finally:
         sys.path.pop(0)
     check("找到 Git Bash（非 WSL）", find_git_bash() is not None, str(find_git_bash()))
+    check("自检未调用计划任务/注册表/用户查询", not io_attempts)
     for name, ok, detail in results:
         print("%s  %s%s" % ("PASS" if ok else "FAIL", name, "  (%s)" % detail if detail and not ok else ""))
     failed = [r for r in results if not r[1]]
@@ -1836,6 +2885,7 @@ def run(ctx):
     if not preflight(ctx):
         finish(ctx)
         return 2
+    hold_begin(ctx)
     build_freshness(ctx)
     usable, where = desktop_status()
     ctx.desktop_usable, ctx.desktop_where = usable, where
@@ -1866,10 +2916,16 @@ def run(ctx):
                 run_session(ctx, agent, mode, scenario, required=True)
         for agent, mode in info:
             run_session(ctx, agent, mode, "approve", required=False)
+    cc_mode = next((m for a, m in required if a == "cc"), "auto")
+    if not ctx.skipped("hold"):
+        hold_auto(ctx, cc_mode)
+    if not ctx.skipped("ghost"):
+        ghost_check(ctx, cc_mode)
     if not (ctx.skipped("overlay") and ctx.skipped("switch")):
-        cc_mode = next((m for a, m in required if a == "cc"), "auto")
         cx_mode = next((m for a, m in required if a == "cx"), "cmd")
         overlay_and_switch(ctx, cc_mode, cx_mode)
+    if ctx.args.codex_exec:
+        codex_exec_check(ctx)
     if prober:
         problems, lines, _ = summarize_probe(prober.finish())
         ctx.report.add("window-load", not problems, (problems or ["hook、批准、切窗口期间所有窗口始终 1 秒内响应"]) + lines)
@@ -1879,13 +2935,23 @@ def run(ctx):
                 handle.write("=== accept %s end\n" % ctx.run_id)
         except OSError:
             pass
-        relay_log_check(ctx, relay_offset)
+        lines_run = read_log_since(relay_path, relay_offset)
+        relay_log_check(ctx, lines_run)
+        relay_log_format_check(ctx, relay_offset, lines_run, cc_mode)
         app_log_check(ctx, app_offset)
         keyboard_info(ctx)
+    if ctx.args.restart_check:
+        restart_check(ctx)
+    if not ctx.skipped("autostart"):
+        autostart_check(ctx)
     return None
 
 
 def finish(ctx):
+    try:
+        hold_restore(ctx)
+    except Exception as error:
+        ctx.report.add("hold-restore", False, "恢复 hold 模式出错：%r" % error)
     try:
         cleanup(ctx)
     except Exception as error:
@@ -1919,6 +2985,9 @@ def main(argv=None):
     parser.add_argument("--out", help="证据根目录（默认 research/acceptance/out）")
     parser.add_argument("--dry-run", action="store_true", help="只读演练：列出命令与窗口，不发请求不跑 hook")
     parser.add_argument("--self-test", action="store_true", help="离线自检脚本逻辑")
+    parser.add_argument("--restart-check", action="store_true", help="额外终止并重启默认打包进程，核对会话持久化（默认不开）")
+    parser.add_argument("--codex-exec", action="store_true",
+                        help="额外真跑一次 codex exec（花 Codex 额度），核对 Stop 的回复进了 /state（默认不开）")
     args = parser.parse_args(argv)
     args.skip = {item.strip() for item in args.skip.split(",") if item.strip()}
     unknown = args.skip - set(CHECK_GROUPS)

@@ -1,0 +1,5 @@
+with_window: n=50 median=262.895 ms
+without_window: n=50 median=251.171 ms
+median_difference: 11.725 ms
+paired_median_delta: 10.168 ms
+window_lookup_overhead <= 30 ms: PASS

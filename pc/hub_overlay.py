@@ -177,6 +177,11 @@ def display_model(state, now=None):
     for number in range(1, 7):
         session = sessions.get(number)
         label = STATES.get(session.get("state"), "IDLE") if session else "IDLE"
+        hint = ANSWER_HINTS.get(session.get("needs_answer"), "") if session else ""
+        if session and session.get("state") == "error" and session.get("label"):
+            hint = str(session["label"])
+        elif session and state.get("hold_active") is False and session.get("native_wait"):
+            hint = "在应用里批准"
         activity = ""
         if session and session.get("state") in ("think", "tool") and isinstance(session.get("activity"), str):
             activity = " ".join(session["activity"].split())
@@ -187,7 +192,7 @@ def display_model(state, now=None):
                       if session else "",
                       "label": label, "color": COLORS[label],
                       "occupied": session is not None,
-                      "hint": ANSWER_HINTS.get(session.get("needs_answer"), "") if session else "",
+                      "hint": hint,
                       "needs_input": bool(session) and session.get("state") in ("wait", "locked"),
                       "activity": activity,
                       # Several sessions in one window (terminal tabs): focus cannot pick the tab.
@@ -239,7 +244,9 @@ def display_model(state, now=None):
         "expanded": True,
         "empty_text": EMPTY_TEXT if not session_count else "",
         "feedback": feedback,
-        "notice": (DRIVER_NOTICE if reader == "raw" else ABSENT_NOTICE if reader == "absent" else ""),
+        "notice": (DRIVER_NOTICE if reader == "raw" else
+                   "宏键盘未连接 · 批准请在应用里点" if state.get("deck_connected") is False else
+                   ABSENT_NOTICE if reader == "absent" else ""),
         "notice_action": reader == "raw",
     }
 

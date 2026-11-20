@@ -284,7 +284,8 @@ class RealTkWindowTests(unittest.TestCase):
             registry = NoRegistry()
             application = app.TrayApplication(
                 Mock(home=Path(directory)), commands=SimpleQueue(), prefs=app.Preferences(Path(directory)),
-                keys_path=app.resource_dir() / "hub_keys.json", autostart=app.AutoStart(registry, "AgentDeck.exe"),
+                keys_path=app.resource_dir() / "hub_keys.json", autostart=app.AutoStart(
+                    registry, "AgentDeck.exe", scheduler=Mock(query=Mock(return_value=None)), sid="test-sid"),
                 overlay=Mock(root=root, hidden=False, state={}), registry=registry)
             application.state = {"sessions": [], "input_reader": "raw"}
             window = application.show_status()
@@ -334,7 +335,8 @@ class RealTkWindowTests(unittest.TestCase):
             registry = NoRegistry()
             application = app.TrayApplication(
                 Mock(home=Path(directory)), commands=SimpleQueue(), prefs=app.Preferences(Path(directory)),
-                keys_path=app.resource_dir() / "hub_keys.json", autostart=app.AutoStart(registry, "AgentDeck.exe"),
+                keys_path=app.resource_dir() / "hub_keys.json", autostart=app.AutoStart(
+                    registry, "AgentDeck.exe", scheduler=Mock(query=Mock(return_value=None)), sid="test-sid"),
                 overlay=Mock(root=root, hidden=False, state={}), registry=registry)
             application.state = {}
             window = application.show_status()
@@ -384,7 +386,8 @@ class RealTkWindowTests(unittest.TestCase):
             registry = NoRegistry()
             application = app.TrayApplication(
                 Mock(home=Path(directory)), commands=SimpleQueue(), prefs=app.Preferences(Path(directory)),
-                keys_path=app.resource_dir() / "hub_keys.json", autostart=app.AutoStart(registry, "AgentDeck.exe"),
+                keys_path=app.resource_dir() / "hub_keys.json", autostart=app.AutoStart(
+                    registry, "AgentDeck.exe", scheduler=Mock(query=Mock(return_value=None)), sid="test-sid"),
                 overlay=Mock(root=root, hidden=False, state={}), registry=registry)
             application.state = {"sessions": [], "input_reader": "usb"}
 
@@ -409,6 +412,8 @@ class SoakTests(unittest.TestCase):
     """F2: the app spawns no child processes (each spawn shows a busy cursor)."""
 
     def test_hub_with_real_keyboard_reader_spawns_nothing(self):
+        # Real reader on purpose: it guards against driver detection spawning
+        # PowerShell again. Raw Input and the registry are only read.
         spawned = []
         real_popen = subprocess.Popen
 

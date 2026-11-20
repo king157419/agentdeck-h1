@@ -4,8 +4,8 @@
 
 1. 打开 `dist/AgentDeck/`，双击 `AgentDeck.exe`。Hub、USB 键盘后端、热键和浮窗在同一个进程中启动，托盘图标显示总状态；无需安装 Python 或打开终端。保留整个文件夹，包括 `AgentDeck-relay.exe` 和 `_internal/`，不要只复制主程序。
 2. 在托盘菜单点“安装到项目…”，选择工作项目的根目录。安装后，在该项目的 Codex 会话里输入 `/hooks` 并信任 AgentDeck 钩子，再开始任务。Claude Code 也使用同一项目安装；程序不会自动改全局 hooks。
-3. 每次手动打开（含再次双击）都会弹出“AgentDeck 状态”窗口：钩子、开机自启、读键方式、托盘位置，缺什么点对应按钮；第一次点“开始使用”。窗口开着时每秒刷新（会话数、读键方式在启动后才知道）。托盘图标默认在右下角 ^ 里。托盘菜单和浮窗右键菜单（或浮窗上的 ≡）功能相同：状态、会话、下一个待批、键位、诊断、装驱动说明。
-4. 需要登录 Windows 后启动时，勾选“开机自启”（登录启动带 `--background`，不弹状态窗口）；取消勾选会移除当前用户的 AgentDeck 启动项。退出请使用托盘的“退出”。
+3. 每次手动打开（含再次双击）都会弹出“AgentDeck 状态”窗口：钩子、开机自启、宏键盘（USB 直读 / Raw Input / 未连接）、托盘位置，缺什么点对应按钮；第一次点“开始使用”。窗口开着时每秒刷新（会话数、宏键盘状态在启动后才知道）。托盘图标默认在右下角 ^ 里。托盘菜单和浮窗右键菜单（或浮窗上的 ≡）功能相同：状态、会话、下一个待批、键位、诊断、装驱动说明。
+4. 需要登录 Windows 后启动时，勾选“开机自启”（登录启动带 `--background`，不弹状态窗口）。自启用当前用户的计划任务 `\AgentDeck`（登录触发，延迟 10 秒）；旧版的 HKCU Run 启动项会在启动时迁移成计划任务，计划任务建不成时保留注册表方式，状态窗口会写明原因。取消勾选会同时移除计划任务和 Run 启动项。退出请使用托盘的“退出”。
 5. exe 写入 Claude 全局钩子时用 exec 形式（`command` + `args`，不经过 shell），Git Bash 不会再吃掉路径里的反斜杠；Codex 钩子命令保持原样，不需要重新信任。旧版写入的 Claude 钩子会在启动时自动改写（先备份）。
 
 首次运行会把默认 `hub_keys.json` 和 `hub_prompts.json` 复制到 `~/.agentdeck/`（Windows 通常是 `%USERPROFILE%\.agentdeck\`）。以后编辑这里的文件，重启程序后生效，升级不会覆盖你的修改。默认使用 `default` 键位；可在同目录 `app.json` 中设置 `"profile": "v2_emulation"` 后重启，键位窗口按当前 profile 显示。日志保存在 `~/.agentdeck/logs/app.log`，可从“打开日志文件夹”进入。键盘先尝试 USB 直读，失败后自动使用 Windows Raw Input，无需更换系统 HID 驱动；程序不会修改驱动。诊断显示当前可用的读键方式。1602 串口被占用时只记日志，Hub 继续工作。
@@ -462,9 +462,14 @@ session end, stop/interrupt events, and hub shutdown release pending hooks with
 
 Sessions are keyed by the full `(agent, session_id)` pair. The lowest free slot
 1..6 is assigned once and released on `SessionEnd`; other slots never move.
-A seventh new session receives HTTP 409 and its relay falls back to native
-handling. Sessions are not silently evicted. `/state` includes each session's
-cwd, project/name, state, last update, LCD key, slot and full pending details.
+第 7 个新会话会淘汰最久没更新、没有 pending/locked 请求、也不是语音目标的
+会话；六个槽位全部忙时才返回 HTTP 409，由 agent 原生处理。`/state` includes each session's
+cwd, project/name, state, last update, last hook event (`last_event`), LCD key, slot and full pending details.
+
+`/state` 的 `recent_ended` 列出最近 8 个被移除的会话（旧的在前）：`agent`、`session_id`、`slot`、`name`、`cwd`、
+移除前的 `state` 和 `last_event`、`last_text`/`last_kind`/`last_text_at`、`label`、`ended_at`，`ended_by` 为
+`SessionEnd`、`idle`（6 小时没动静）或 `evicted`（被第 7 个会话挤掉），`reason` 是 SessionEnd 自带的 reason（最多 64 字）。
+`codex exec` 在 Stop 之后几毫秒就发 SessionEnd，会话立刻从 `sessions` 消失；它的 done 状态和回复只能在这里看到。只存内存，重启清空。
 
 The first waiting request is displayed automatically. Further arrivals preserve
 that request. After a decision or timeout the next request is displayed in
@@ -573,6 +578,36 @@ iex/Invoke-Expression downloads, PowerShell encoded commands, base64 decoded
 scripts piped to shells, recursive forced root/home deletion, recursive drive
 root deletion, format/mkfs, and dd writing to `/dev/`. Regex classification does
 not parse every shell expression or replace the agent's permission policy.
+
+## 宏键盘断连、原生审批与恢复（hold 模式）
+
+托盘程序和命令行默认都是 `auto`（命令行可用 `--hold-mode`），每次启动恢复 auto：读取器为 `usb` 或 `raw`（宏键盘在场）时才拦权限请求。
+`always` 总是拦截（无硬件时用浮窗或热键审批可选此项），`never` 总是交给应用。
+向 `/action` 发送 `{"action":"hold auto"}`、`hold always` 或 `hold never`
+可即时切换，沿用 token 校验，模式不写盘。`/state` 增加 `deck_connected`、
+`hold_mode`、`hold_active`；没有读取器或读取器异常时视为未连接。
+
+不拦截时，PermissionRequest 立即返回 `{}`，包括 critical 请求；会话显示
+“在应用里批准”，`state: wait`、`native_wait: true`，LCD 名称前缀为 `APP: `，
+不进入 pending/locked，审计记 `passthrough` / `hold`。本该拦下的 gate 请求同样放行并审计（低风险 gate 照旧直接放行、不记审计），
+但不把会话设成等待；需要回答问题/接受计划的原生分支保持原行为。切换到不拦截
+会立即释放现存的非 gate pending；auto 模式下键盘断开持续 1 秒后也会释放（USB 与 Raw Input 切换时的瞬断不算）。
+
+用户已在应用里处理审批后，后续工具/回合事件会清理幽灵 pending，审计记
+`abandoned` / `event`、`moved_on: true`。工具进度只清理同 `agent_id` 的请求；
+普通工具事件和新提示不会取消 gate，Stop/StopFailure/Interrupt/SessionEnd 会取消。
+Notification 不取消待批；`idle_prompt` 仅将没有 pending/locked 的 tool/think 会话改为空闲。
+Claude 的 `StopFailure` 显示错误类型与最近的 API 错误文本；它已加入安装器写的 cc 全局钩子，打包版启动时若 cc 缺这个钩子会自动补（只在两边钩子都启用时补，cx 条目不变）。
+
+会话原子保存到 `~/.agentdeck/sessions.json`，最多每 2 秒写一次，内容不变不写，
+退出时强制检查保存。重启丢弃超过 6 小时的会话、无效或重复槽位，清除失效窗口句柄；
+原 wait/locked 恢复成应用内审批，不恢复待批请求。文件缺失/损坏或写盘失败只记警告。
+
+relay 所有事件都尽力携带窗口信息；查窗等待上限为普通事件 50 ms、审批/gate 250 ms。
+普通事件的连接、发送、读取共用 2 秒预算，审批/gate 保留长读取超时。
+`relay.log` 每行是 `YYYY-mm-dd HH:MM:SS <agent> <event> <sid前8位> <message>`，
+消息最多 300 字符，不记录原始 stdin；达到 512 KiB 后覆盖轮转为 `relay.log.1`。
+非 200 回复记录状态码和最多 100 字符错误，异常记录类型与消息。
 
 ## 录 Demo
 

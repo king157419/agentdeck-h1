@@ -1,6 +1,7 @@
 """Offline tray behavior checks: all OS, registry, sockets and GUI effects replaced."""
 import errno
 import ctypes
+import codecs
 import io
 import json
 from pathlib import Path
@@ -12,10 +13,79 @@ import threading
 from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, Mock, patch
+import xml.etree.ElementTree as ET
 
 import agentdeck_app as app
 import hub_install
 import voice_shortcut_capture as shortcut_capture
+
+
+class ExplodingOS:
+    """A module-level tripwire: no test can use the real login configuration."""
+    def __getattr__(self, name):
+        raise AssertionError("real winreg access: " + name)
+
+
+class ExplodingScheduler:
+    def query(self, name):
+        raise AssertionError("real schtasks query")
+
+    def create(self, name, xml_text):
+        raise AssertionError("real schtasks create")
+
+    def delete(self, name):
+        raise AssertionError("real schtasks delete")
+
+
+# Low-level adapter tests use this saved class only inside a subprocess.run patch.
+RealSchTasks = app.SchTasks
+app.SchTasks = ExplodingScheduler
+sys.modules["winreg"] = ExplodingOS()
+_subprocess_run = subprocess.run
+
+
+def guarded_subprocess_run(argv, *args, **kwargs):
+    program = argv[0] if isinstance(argv, (list, tuple)) else str(argv).split()[0]
+    if Path(str(program).strip('"')).name.lower() in ("schtasks", "schtasks.exe"):
+        raise AssertionError("real schtasks subprocess; inject a fake run")
+    return _subprocess_run(argv, *args, **kwargs)
+
+
+subprocess.run = guarded_subprocess_run
+SID = "S-1-5-21-1-2-3-1001"
+TARGET = (Path("D:/App folder/AgentDeck.exe"), "--background", Path("D:/App folder"))
+NS = {"t": "http://schemas.microsoft.com/windows/2004/02/mit/task"}
+
+
+class FakeScheduler:
+    def __init__(self, xml=None, *, create_error=None, readback=None, query_error=None,
+                 delete_error=None, keep_on_delete=False):
+        self.xml = xml
+        self.calls = []
+        self.create_error = create_error
+        self.readback = readback
+        self.query_error = query_error
+        self.delete_error = delete_error
+        self.keep_on_delete = keep_on_delete
+
+    def query(self, name):
+        self.calls.append(("query", name))
+        if self.query_error:
+            raise self.query_error
+        return self.xml
+
+    def create(self, name, xml_text):
+        self.calls.append(("create", name, xml_text))
+        if self.create_error:
+            raise self.create_error
+        self.xml = xml_text if self.readback is None else self.readback
+
+    def delete(self, name):
+        self.calls.append(("delete", name))
+        if self.delete_error:
+            raise self.delete_error
+        if not self.keep_on_delete:
+            self.xml = None
 
 
 class MenuItem:
@@ -52,8 +122,9 @@ class FakeRegistry:
     def __exit__(self, *args):
         return False
 
-    def OpenKey(self, root, path):
+    def OpenKey(self, root, path, reserved=0, rights=0):
         assert (root, path) == (self.HKEY_CURRENT_USER, app.RUN_KEY)
+        assert reserved == 0 and rights in (0, self.KEY_SET_VALUE)
         return self
 
     def CreateKeyEx(self, root, path, reserved, rights):
@@ -378,13 +449,15 @@ class AutostartTests(unittest.TestCase):
     def setUp(self):
         self.registry = FakeRegistry()
         self.command = '"D:\\App folder\\AgentDeck.exe"'
-        self.start = app.AutoStart(self.registry, self.command)
+        self.scheduler = FakeScheduler()
+        self.start = app.AutoStart(self.registry, self.command, scheduler=self.scheduler, sid=SID, target=TARGET)
 
     def test_register_and_unregister_only_agentdeck_value(self):
         self.assertFalse(self.start.enabled())
         self.start.set_enabled(True)
         self.assertTrue(self.start.enabled())
-        self.assertEqual(self.registry.values["AgentDeck"], self.command)
+        self.assertNotIn("AgentDeck", self.registry.values)
+        self.assertEqual(self.start.snapshot()["mode"], "task")
         self.start.set_enabled(False)
         self.start.set_enabled(False)
         self.assertFalse(self.start.enabled())
@@ -400,13 +473,209 @@ class AutostartTests(unittest.TestCase):
         registry = FakeRegistry()
         executable = Path("D:/App folder/AgentDeck.exe")
         with patch.object(sys, "frozen", True, create=True), patch.object(sys, "executable", str(executable)):
-            start = app.AutoStart(registry)
+            scheduler = FakeScheduler()
+            start = app.AutoStart(registry, scheduler=scheduler, sid=SID,
+                                  target=(executable.resolve(), "--background", executable.resolve().parent))
             self.assertTrue(start.command.endswith("--background"))
             registry.values["AgentDeck"] = app.launch_command()  # written by an older build
             self.assertTrue(start.enabled())
             self.assertTrue(start.upgrade())
-            self.assertEqual(registry.values["AgentDeck"], start.command)
+            self.assertNotIn("AgentDeck", registry.values)
+            self.assertEqual(start.snapshot()["mode"], "task")
             self.assertFalse(start.upgrade())
+
+    def test_upgrade_accepts_all_current_run_forms_and_verifies_before_delete(self):
+        executable = Path("D:/AgentDeck/AgentDeck.exe")
+        target = (executable, "--background", executable.parent)
+        with patch.object(sys, "frozen", True, create=True), patch.object(sys, "executable", str(executable)):
+            for form in ("command", "quoted", "legacy", "quoted_legacy"):
+                with self.subTest(form=form):
+                    registry, scheduler = FakeRegistry(), FakeScheduler()
+                    start = app.AutoStart(registry, scheduler=scheduler, sid=SID, target=target)
+                    values = {"command": start.command, "quoted": start.quoted, "legacy": start.legacy,
+                              "quoted_legacy": '"%s"' % executable.resolve()}
+                    registry.values["AgentDeck"] = values[form]
+                    original_delete = registry.DeleteValue
+
+                    def delete(key, name):
+                        self.assertTrue(app.task_matches(scheduler.xml, target))
+                        self.assertEqual(scheduler.calls[-1], ("query", "AgentDeck"))
+                        original_delete(key, name)
+
+                    registry.DeleteValue = delete
+                    self.assertTrue(start.upgrade())
+                    self.assertNotIn("AgentDeck", registry.values)
+                    self.assertEqual(start.snapshot()["mode"], "task")
+                    self.assertEqual(sum(c[0] == "create" for c in scheduler.calls), 1)
+
+    def test_upgrade_create_failure_preserves_quoted_run_fallback(self):
+        self.registry.values["AgentDeck"] = self.command
+        self.scheduler.create_error = OSError("拒绝访问\n详细信息")
+        with self.assertLogs(app.log, level="WARNING"):
+            self.assertTrue(self.start.upgrade())
+        self.assertEqual(self.registry.values["AgentDeck"], self.start.quoted)
+        self.assertEqual(self.start.snapshot()["mode"], "registry")
+        self.assertIn("拒绝访问", self.start.snapshot()["reason"])
+        self.assertNotIn("\n", self.start.snapshot()["reason"])
+        self.assertIn("用注册表方式（计划任务不可用：", self.start.describe())
+        reason = self.start.snapshot()["reason"]
+        self.start.refresh()
+        self.assertEqual(self.start.snapshot()["reason"], reason)
+
+    def test_upgrade_retries_after_prior_create_denial(self):
+        self.registry.values["AgentDeck"] = self.command
+        self.scheduler.create_error = OSError("拒绝访问")
+        with self.assertLogs(app.log, level="WARNING"):
+            self.assertTrue(self.start.upgrade())
+        self.start.refresh()
+        self.assertEqual(self.start.snapshot()["mode"], "registry")
+        self.assertIn("拒绝访问", self.start.snapshot()["error"])
+        self.assertEqual(self.registry.values["AgentDeck"], self.start.quoted)
+        self.scheduler.create_error = None
+        self.assertTrue(self.start.upgrade())
+        self.assertEqual(self.start.snapshot()["mode"], "task")
+        self.assertIsNone(self.start.snapshot()["error"])
+        self.assertIsNone(self.start.snapshot()["reason"])
+        self.assertNotIn("AgentDeck", self.registry.values)
+        self.assertEqual(sum(c[0] == "create" for c in self.scheduler.calls), 2)
+
+    def test_upgrade_readback_mismatch_preserves_run(self):
+        self.registry.values["AgentDeck"] = self.command
+        self.scheduler.readback = app.task_xml((Path("D:/Other.exe"), "", Path("D:/")), SID)
+        with self.assertLogs(app.log, level="WARNING"):
+            self.assertTrue(self.start.upgrade())
+        self.assertEqual(self.registry.values["AgentDeck"], self.start.quoted)
+        self.assertEqual(self.start.snapshot()["mode"], "registry")
+        self.assertTrue(self.start.snapshot()["reason"])
+
+    def test_upgrade_respects_off_stale_run_and_foreign_or_disabled_task(self):
+        for value in (None, '"D:\\Old\\AgentDeck.exe"'):
+            for xml in (None, app.task_xml((Path("D:/Other.exe"), "", Path("D:/")), SID),
+                        app.task_xml(TARGET, SID).replace("<Enabled>true</Enabled>", "<Enabled>false</Enabled>")):
+                with self.subTest(value=value, xml=xml):
+                    registry, scheduler = FakeRegistry(), FakeScheduler(xml)
+                    if value is not None:
+                        registry.values["AgentDeck"] = value
+                    start = app.AutoStart(registry, self.command, scheduler=scheduler, sid=SID, target=TARGET)
+                    self.assertFalse(start.upgrade())
+                    self.assertEqual(registry.values.get("AgentDeck"), value)
+                    self.assertFalse(any(c[0] == "create" for c in scheduler.calls))
+        for xml in (app.task_xml((Path("D:/Other.exe"), "", Path("D:/")), SID),
+                    app.task_xml(TARGET, SID).replace("<Enabled>true</Enabled>", "<Enabled>false</Enabled>")):
+            self.registry.values["AgentDeck"] = self.command
+            self.scheduler.xml = xml
+            self.assertFalse(self.start.upgrade())
+            self.assertEqual(self.registry.values["AgentDeck"], self.command)
+            self.assertFalse(any(c[0] == "create" for c in self.scheduler.calls))
+
+    def test_matching_task_removes_only_owned_run_without_create(self):
+        self.scheduler.xml = app.task_xml(TARGET, SID)
+        self.registry.values["AgentDeck"] = self.command
+        self.start.upgrade()
+        self.assertEqual(self.registry.values, {"OtherApp": "other.exe"})
+        self.assertEqual(self.start.snapshot()["mode"], "task")
+        self.assertFalse(any(c[0] == "create" for c in self.scheduler.calls))
+
+    def test_matching_task_preserves_stale_run_path(self):
+        self.scheduler.xml = app.task_xml(TARGET, SID)
+        self.registry.values["AgentDeck"] = '"D:\\Old\\AgentDeck.exe"'
+        self.start.upgrade()
+        self.assertEqual(self.registry.values["AgentDeck"], '"D:\\Old\\AgentDeck.exe"')
+        self.assertEqual(self.start.snapshot()["mode"], "task")
+        self.assertFalse(any(c[0] == "create" for c in self.scheduler.calls))
+
+    def test_upgrade_query_failure_does_not_treat_unreadable_task_as_missing(self):
+        self.registry.values["AgentDeck"] = self.command
+        self.scheduler.query_error = subprocess.TimeoutExpired("fake schtasks", 15)
+        self.assertFalse(self.start.upgrade())
+        self.assertEqual(self.registry.values["AgentDeck"], self.command)
+        self.assertFalse(any(c[0] == "create" for c in self.scheduler.calls))
+        self.assertTrue(self.start.snapshot()["reason"])
+
+    def test_refresh_timeout_is_cached_and_enabled_does_not_repeat_io(self):
+        self.scheduler.query_error = subprocess.TimeoutExpired("fake schtasks", 15)
+        self.registry.values["AgentDeck"] = self.command
+        self.start.refresh()
+        self.assertEqual(self.start.snapshot()["mode"], "registry")
+        self.assertTrue(self.start.snapshot()["checked"])
+        self.assertIn("15", self.start.snapshot()["reason"])
+        calls = list(self.scheduler.calls)
+        self.assertTrue(self.start.enabled())
+        self.start.snapshot()
+        self.start.describe()
+        self.assertEqual(self.scheduler.calls, calls)
+
+    def test_snapshot_and_describe_do_not_wait_for_scheduler_lock(self):
+        entered, release, read = threading.Event(), threading.Event(), threading.Event()
+        results = []
+
+        def query(name):
+            entered.set()
+            if not release.wait(3):
+                raise AssertionError("test did not release scheduler")
+            return None
+
+        def cached():
+            results.extend((self.start.snapshot(), self.start.describe()))
+            read.set()
+
+        self.scheduler.query = query
+        operation = threading.Thread(target=self.start.refresh)
+        reader = threading.Thread(target=cached)
+        operation.start()
+        try:
+            self.assertTrue(entered.wait(1))
+            reader.start()
+            self.assertTrue(read.wait(1), "cached UI state waited for a scheduler operation")
+            self.assertFalse(results[0]["checked"])
+            self.assertEqual(results[1], "检查中…")
+        finally:
+            release.set()
+            operation.join(3)
+            if reader.ident is not None:
+                reader.join(3)
+        self.assertFalse(operation.is_alive())
+        self.assertFalse(reader.is_alive())
+
+    def test_sid_is_computed_only_when_building_task(self):
+        start = app.AutoStart(self.registry, self.command, scheduler=self.scheduler, target=TARGET)
+        with patch.object(app, "current_user_sid", side_effect=AssertionError("unexpected SID lookup")):
+            start.refresh()
+            self.assertFalse(start.upgrade())
+        with patch.object(app, "current_user_sid", return_value=SID) as lookup:
+            start.set_enabled(True)
+        lookup.assert_called_once_with()
+
+    def test_set_enabled_falls_back_and_propagates_registry_failure(self):
+        self.scheduler.create_error = OSError("拒绝访问")
+        self.start.set_enabled(True)
+        self.assertEqual(self.registry.values["AgentDeck"], self.start.quoted)
+        self.assertEqual(self.start.snapshot()["mode"], "registry")
+        self.registry.SetValueEx = Mock(side_effect=OSError("registry denied"))
+        with self.assertRaisesRegex(OSError, "registry denied"):
+            self.start.set_enabled(True)
+
+    def test_disable_removes_task_and_run_and_reports_surviving_task(self):
+        self.scheduler.xml = app.task_xml(TARGET, SID)
+        self.registry.values["AgentDeck"] = self.command
+        self.start.set_enabled(False)
+        self.assertIsNone(self.scheduler.xml)
+        self.assertNotIn("AgentDeck", self.registry.values)
+        self.assertIsNone(self.start.snapshot()["mode"])
+        self.scheduler.xml = app.task_xml(TARGET, SID)
+        self.scheduler.keep_on_delete = True
+        with self.assertRaisesRegex(RuntimeError, "无法删除计划任务 AgentDeck"):
+            self.start.set_enabled(False)
+
+    def test_disable_delete_failure_still_removes_run_and_raises(self):
+        self.scheduler.xml = app.task_xml(TARGET, SID)
+        self.scheduler.delete_error = OSError("拒绝访问")
+        self.registry.values["AgentDeck"] = self.command
+        with self.assertRaisesRegex(RuntimeError, "无法删除计划任务 AgentDeck：拒绝访问"):
+            self.start.set_enabled(False)
+        self.assertNotIn("AgentDeck", self.registry.values)
+        self.assertIsNotNone(self.scheduler.xml)
+        self.assertIn("拒绝访问", self.start.snapshot()["error"])
 
     def test_frozen_launch_command_quotes_exe_without_python(self):
         executable = Path("D:/App folder/AgentDeck.exe")
@@ -419,6 +688,177 @@ class AutostartTests(unittest.TestCase):
             self.assertEqual(app.launch_command(), subprocess.list2cmdline(
                 ["D:\\Conda folder\\pythonw.exe", str(Path(app.__file__).resolve())]))
 
+    def test_launch_target_separates_command_arguments_and_working_directory(self):
+        executable = Path("D:/App folder/AgentDeck.exe").resolve()
+        with patch.object(sys, "frozen", True, create=True), patch.object(sys, "executable", str(executable)):
+            self.assertEqual(app.launch_target(True), (executable, "--background", executable.parent))
+            self.assertEqual(app.launch_target(), (executable, "", executable.parent))
+        script = Path(app.__file__).resolve()
+        with patch.object(sys, "frozen", False, create=True), patch.object(sys, "executable", "D:/Conda folder/python.exe"):
+            self.assertEqual(app.launch_target(True), (Path("D:/Conda folder/pythonw.exe"),
+                             subprocess.list2cmdline([str(script), "--background"]), script.parent))
+
+
+class SchedulerTests(unittest.TestCase):
+    def test_module_guards_reject_uninjected_os_adapters(self):
+        with self.assertRaisesRegex(AssertionError, "real schtasks subprocess"):
+            RealSchTasks().query("AgentDeck")
+        with self.assertRaisesRegex(AssertionError, "real schtasks query"):
+            app.SchTasks().query("AgentDeck")
+        with self.assertRaisesRegex(AssertionError, "real winreg access"):
+            sys.modules["winreg"].OpenKey
+
+    def test_xml_has_per_user_interactive_trigger_normal_priority_and_all_settings(self):
+        target = (Path("D:/App & <tools>/AgentDeck.exe"), '--background "a&<b"', Path("D:/App & <tools>"))
+        xml = app.task_xml(target, SID)
+        self.assertIn('encoding="UTF-16"', xml)
+        self.assertIn("&amp;", xml)
+        self.assertIn("&lt;", xml)
+        root = ET.fromstring(xml[xml.index("<Task"):])
+        self.assertEqual(root.tag, "{%s}Task" % NS["t"])
+        self.assertEqual(root.attrib["version"], "1.2")
+        expected = {
+            "RegistrationInfo/Author": "AgentDeck",
+            "RegistrationInfo/Description": "AgentDeck：登录后在后台启动托盘和浮窗",
+            "Triggers/LogonTrigger/Enabled": "true", "Triggers/LogonTrigger/UserId": SID,
+            "Triggers/LogonTrigger/Delay": "PT10S", "Principals/Principal/UserId": SID,
+            "Principals/Principal/LogonType": "InteractiveToken", "Principals/Principal/RunLevel": "LeastPrivilege",
+            "Actions/Exec/Command": str(target[0]), "Actions/Exec/Arguments": target[1],
+            "Actions/Exec/WorkingDirectory": str(target[2]),
+        }
+        settings = {"MultipleInstancesPolicy": "IgnoreNew", "DisallowStartIfOnBatteries": "false",
+                    "StopIfGoingOnBatteries": "false", "AllowHardTerminate": "true", "StartWhenAvailable": "false",
+                    "RunOnlyIfNetworkAvailable": "false", "IdleSettings/StopOnIdleEnd": "false",
+                    "IdleSettings/RestartOnIdle": "false", "AllowStartOnDemand": "true", "Enabled": "true",
+                    "Hidden": "false", "RunOnlyIfIdle": "false", "WakeToRun": "false",
+                    "ExecutionTimeLimit": "PT0S", "Priority": "4"}
+        expected.update({"Settings/" + key: value for key, value in settings.items()})
+        for path, value in expected.items():
+            with self.subTest(path=path):
+                self.assertEqual(root.findtext("/".join("t:" + part for part in path.split("/")), namespaces=NS), value)
+        self.assertEqual(root.find("t:Principals/t:Principal", NS).attrib["id"], "Author")
+        self.assertEqual(root.find("t:Actions", NS).attrib["Context"], "Author")
+        self.assertIsNone(root.find("t:RegistrationInfo/t:URI", NS))
+
+    def test_create_writes_utf16_bom_and_always_removes_temporary_xml(self):
+        xml = app.task_xml(TARGET, SID)
+        for failing in (False, True):
+            paths = []
+
+            def run(argv, **kwargs):
+                self.assertEqual(Path(argv[0]).name.lower(), "schtasks.exe")
+                self.assertEqual(argv[1:3], ["/Create", "/XML"])
+                self.assertEqual(argv[4:], ["/TN", "AgentDeck", "/F"])
+                path = Path(argv[3])
+                paths.append(path)
+                self.assertEqual(path.read_bytes(), codecs.BOM_UTF16_LE + xml.encode("utf-16-le"))
+                self.assertTrue(kwargs["creationflags"] & 0x08000000)
+                self.assertTrue(kwargs["capture_output"])
+                self.assertEqual(kwargs["timeout"], 15)
+                return SimpleNamespace(returncode=int(failing), stdout=b"", stderr="拒绝访问".encode("cp936"))
+
+            with self.subTest(failing=failing), patch.object(app, "oem_encoding", return_value="cp936"), patch.object(
+                    app.subprocess, "run", side_effect=run):
+                if failing:
+                    with self.assertRaisesRegex((OSError, RuntimeError), "拒绝访问"):
+                        RealSchTasks().create("AgentDeck", xml)
+                else:
+                    RealSchTasks().create("AgentDeck", xml)
+            self.assertEqual(len(paths), 1)
+            self.assertFalse(paths[0].exists())
+
+    def test_query_decodes_oem_bytes_missing_and_timeout(self):
+        xml = '<?xml version="1.0" encoding="UTF-16"?><Task>café</Task>'
+        scheduler = RealSchTasks()
+        with patch.object(app, "oem_encoding", return_value="cp437"), patch.object(app.subprocess, "run", return_value=
+                SimpleNamespace(returncode=0, stdout=xml.encode("cp437"), stderr=b"")) as run:
+            self.assertEqual(scheduler.query("AgentDeck"), xml)
+        self.assertEqual(Path(run.call_args.args[0][0]).name.lower(), "schtasks.exe")
+        self.assertEqual(run.call_args.args[0][1:], ["/Query", "/TN", "AgentDeck", "/XML", "ONE"])
+        self.assertTrue(run.call_args.kwargs["creationflags"] & 0x08000000)
+        self.assertEqual(run.call_args.kwargs["timeout"], 15)
+        with patch.object(app.subprocess, "run", return_value=SimpleNamespace(
+                returncode=1, stdout=b"", stderr=b"localized missing task")):
+            self.assertIsNone(scheduler.query("AgentDeck"))
+        with patch.object(app.subprocess, "run", side_effect=subprocess.TimeoutExpired("fake", 15)):
+            with self.assertRaises((subprocess.TimeoutExpired, OSError, RuntimeError)):
+                scheduler.query("AgentDeck")
+
+    def test_create_timeout_still_removes_temporary_file(self):
+        paths = []
+
+        def timeout(argv, **kwargs):
+            paths.append(Path(argv[3]))
+            self.assertTrue(paths[-1].exists())
+            raise subprocess.TimeoutExpired("fake schtasks", 15)
+
+        with patch.object(app.subprocess, "run", side_effect=timeout):
+            with self.assertRaises((subprocess.TimeoutExpired, OSError, RuntimeError)):
+                RealSchTasks().create("AgentDeck", app.task_xml(TARGET, SID))
+        self.assertEqual(len(paths), 1)
+        self.assertFalse(paths[0].exists())
+
+    def test_delete_checks_presence_after_nonzero_without_parsing_localized_error(self):
+        scheduler = RealSchTasks()
+        missing = SimpleNamespace(returncode=1, stdout=b"", stderr=b"localized missing task")
+        with patch.object(app.subprocess, "run", return_value=missing) as run:
+            scheduler.delete("AgentDeck")
+        self.assertEqual(run.call_args_list[0].args[0][1:], ["/Delete", "/TN", "AgentDeck", "/F"])
+        self.assertEqual(run.call_args_list[1].args[0][1:], ["/Query", "/TN", "AgentDeck", "/XML", "ONE"])
+        with patch.object(app.subprocess, "run", side_effect=[missing, SimpleNamespace(
+                returncode=0, stdout=app.task_xml(TARGET, SID).encode("cp437", "replace"), stderr=b"")]):
+            with self.assertRaises((OSError, RuntimeError)):
+                scheduler.delete("AgentDeck")
+
+    def test_task_matches_exported_defaults_account_name_and_oem_path(self):
+        target = (Path("D:/中文/café/AgentDeck.exe"), "--background", Path("D:/中文/café"))
+        xml = ('<?xml version="1.0" encoding="UTF-16"?><Task xmlns="%s" version="1.2">'
+               '<Principals><Principal id="Author"><UserId>%s</UserId><LogonType>InteractiveToken</LogonType>'
+               '</Principal></Principals><Triggers><LogonTrigger><Delay>PT1M</Delay>'
+               '<UserId>COMPUTER\\user</UserId></LogonTrigger></Triggers><Actions Context="Author"><Exec>'
+               '<Command>"%s"</Command><Arguments> --background </Arguments></Exec></Actions></Task>'
+               % (NS["t"], SID, target[0]))
+        with patch.object(app, "oem_encoding", return_value="cp437"):
+            exported = xml.encode("cp437", "replace").decode("cp437")
+            self.assertTrue(app.task_matches(exported, target))
+            for changed in (exported.replace("AgentDeck.exe", "Other.exe"),
+                            exported.replace(" --background ", " --other "),
+                            exported.replace("<Actions", "<Settings><Enabled>false</Enabled></Settings><Actions"),
+                            exported.replace("LogonTrigger", "TimeTrigger"),
+                            exported.replace("<Delay>", "<Enabled>false</Enabled><Delay>"), "<bad xml"):
+                with self.subTest(xml=changed):
+                    self.assertFalse(app.task_matches(changed, target))
+        no_args = app.task_xml((TARGET[0], "", TARGET[2]), SID).replace("<Arguments></Arguments>", "")
+        self.assertTrue(app.task_matches(no_args, (TARGET[0], "", TARGET[2])))
+
+
+class HomeGuardTests(unittest.TestCase):
+    def test_simulated_home_never_touches_scheduler_or_registry(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(Path, "home", return_value=Path(directory) / "real"):
+            start = app.AutoStart(ExplodingOS(), scheduler=ExplodingScheduler(), target=TARGET, sid=SID, home=directory)
+            self.assertIn("模拟环境", start.describe())
+            for method, args in ((start.upgrade, ()), (start.refresh, ()), (start.set_enabled, (True,)),
+                                 (start.set_enabled, (False,))):
+                with self.assertLogs(app.log, level="INFO") as messages:
+                    self.assertFalse(method(*args))
+                self.assertEqual(len(messages.output), 1)
+        with tempfile.TemporaryDirectory() as directory, patch.object(Path, "home", side_effect=OSError("no home")):
+            self.assertTrue(app.AutoStart(ExplodingOS(), scheduler=ExplodingScheduler(), target=TARGET,
+                                          sid=SID, home=directory).blocked)
+
+    def test_init_simulation_skips_autostart_but_installs_hooks(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(Path, "home", return_value=Path(directory) / "real"):
+            result = app.init_all(directory)
+            self.assertEqual(result["autostart"], "skipped")
+            self.assertTrue(hub_install.global_status(home=Path(directory))["enabled"])
+            self.assertTrue(app.Preferences(directory).values["initialized"])
+
+    def test_uninstall_with_simulated_home_uses_exploding_defaults_safely(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(Path, "home", return_value=Path(directory) / "real"), patch.object(
+                app, "SchTasks", ExplodingScheduler), patch.dict(sys.modules, {"winreg": ExplodingOS()}), patch.object(
+                sys, "stdout", io.StringIO()):
+            self.assertEqual(app.main(["--home", directory, "--uninstall"]), 0)
+
 
 class InitializationTests(unittest.TestCase):
     def setUp(self):
@@ -426,7 +866,8 @@ class InitializationTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.home = Path(self.temp.name)
         self.registry = FakeRegistry()
-        self.start = app.AutoStart(self.registry, "AgentDeck.exe")
+        self.scheduler = FakeScheduler()
+        self.start = app.AutoStart(self.registry, "AgentDeck.exe", scheduler=self.scheduler, sid=SID, target=TARGET)
         guard = patch.object(Path, "home", side_effect=AssertionError("real home access"))
         guard.start()
         self.addCleanup(guard.stop)
@@ -462,7 +903,8 @@ class InitializationTests(unittest.TestCase):
         snapshot = {p.relative_to(self.home): p.read_bytes() for p in self.home.rglob("*") if p.is_file()}
         self.assertEqual(app.init_all(self.home, autostart=self.start), result)
         self.assertEqual({p.relative_to(self.home): p.read_bytes() for p in self.home.rglob("*") if p.is_file()}, snapshot)
-        self.assertEqual(len(self.registry.writes), 1)
+        self.assertEqual(self.registry.writes, [])
+        self.assertEqual(sum(c[0] == "create" for c in self.scheduler.calls), 1)
         self.assertEqual(trust.read_text(encoding="utf-8"), "# leave trust to Codex\n")
         self.assertEqual(self.registry.values["OtherApp"], "other.exe")
 
@@ -477,6 +919,7 @@ class InitializationTests(unittest.TestCase):
 
     def test_startup_failure_can_be_retried_without_duplicate_hooks(self):
         failing = Mock()
+        failing.blocked = None
         failing.enabled.return_value = False
         failing.set_enabled.side_effect = OSError("registry denied")
         with self.assertRaisesRegex(OSError, "registry denied"):
@@ -683,11 +1126,161 @@ class ApplicationTests(unittest.TestCase):
         self.registry = FakeRegistry()
         self.prefs = app.Preferences(self.home)
         self.queue = SimpleQueue()
+        self.scheduler = FakeScheduler()
         self.application = app.TrayApplication(self.engine, commands=self.queue, prefs=self.prefs,
                                               keys_path=app.resource_dir() / "hub_keys.json",
-                                              autostart=app.AutoStart(self.registry, "AgentDeck.exe"),
+                                              autostart=app.AutoStart(self.registry, "AgentDeck.exe", scheduler=self.scheduler,
+                                                                      sid=SID, target=TARGET),
                                               overlay=self.overlay, registry=TrayRegistry())
         self.application.message = Mock()
+
+    def test_construction_performs_no_scheduler_call_and_startup_upgrades(self):
+        self.assertEqual(self.scheduler.calls, [])
+        self.assertFalse(self.application.autostart_enabled)
+        self.registry.values["AgentDeck"] = "AgentDeck.exe"
+        self.application._autostart_startup()
+        self.assertTrue(any(c[0] == "create" for c in self.scheduler.calls))
+        self.assertTrue(self.application.autostart_enabled)
+        self.assertTrue(self.application.autostart.snapshot()["checked"])
+
+    def test_status_autostart_rows_use_cached_state_only(self):
+        start = self.application.autostart
+
+        def row():
+            return next(row for row in self.application.status_model()["rows"] if row[0] == "开机自启")
+
+        self.assertEqual(row()[1:4], ("检查中…", None, None))
+        self.assertEqual(self.scheduler.calls, [])
+        self.scheduler.xml = app.task_xml(TARGET, SID)
+        start.refresh()
+        calls = list(self.scheduler.calls)
+        self.assertEqual(row()[1:4], ("✓ 已开启（计划任务）", True, None))
+        self.assertEqual(self.scheduler.calls, calls)
+        self.scheduler.xml = None
+        self.scheduler.create_error = OSError("拒绝访问")
+        start.set_enabled(True)
+        self.assertIn("用注册表方式（计划任务不可用：拒绝访问）", row()[1])
+        self.assertTrue(row()[2])
+        start.set_enabled(False)
+        self.assertEqual(row()[1:4], ("未开启", False, "开启"))
+        blocked = app.AutoStart(ExplodingOS(), scheduler=ExplodingScheduler(), sid=SID, target=TARGET, home=self.home)
+        self.application.autostart = blocked
+        self.assertEqual(row()[1:4], (blocked.blocked, None, None))
+        hub_install.apply("install", home=self.home, output=io.StringIO())
+        self.prefs.values["initialized"] = True
+        self.assertTrue(self.application.status_model()["complete"])
+
+    def test_macro_keyboard_row_reports_connection_and_driver_action(self):
+        for reader, text, ok, button in (("usb", "✓ 已连接（USB 直读）", True, None),
+                ("raw", "已连接（Raw Input：按键会同时打字）", False, "装驱动说明"),
+                ("absent", "未连接：批准交给应用自己的弹窗", False, None), (None, "启动中…", None, None)):
+            with self.subTest(reader=reader):
+                self.application.state = {"input_reader": reader}
+                rows = {row[0]: row for row in self.application.status_model()["rows"]}
+                self.assertNotIn("读键方式", rows)
+                self.assertEqual(rows["宏键盘"][1:4], (text, ok, button))
+                if reader == "raw":
+                    self.assertEqual(rows["宏键盘"][4], "driver")
+        # /state hold_active (hold always) means an absent deck still holds requests.
+        self.application.state = {"input_reader": "absent", "deck_connected": False,
+                                  "hold_mode": "always", "hold_active": True}
+        rows = {row[0]: row for row in self.application.status_model()["rows"]}
+        self.assertEqual(rows["宏键盘"][1:4], ("未连接：当前设为一直等宏键盘，请求会等到超时", False, None))
+        self.application.state = {"input_reader": "absent", "deck_connected": False,
+                                  "hold_mode": "auto", "hold_active": False}
+        rows = {row[0]: row for row in self.application.status_model()["rows"]}
+        self.assertEqual(rows["宏键盘"][1], "未连接：批准交给应用自己的弹窗")
+
+    def test_live_autostart_work_is_daemon_thread_and_notifies_via_dispatch(self):
+        self.application._background_enabled = True
+        started = []
+
+        def thread(**kwargs):
+            started.append(kwargs)
+            return SimpleNamespace(start=lambda: None)
+
+        work = Mock(side_effect=RuntimeError("fake startup failure"))
+        with patch.object(app.threading, "Thread", side_effect=thread):
+            self.application._autostart_work(work, "test")
+        self.assertEqual(started[0]["name"], "AgentDeck autostart")
+        self.assertTrue(started[0]["daemon"])
+        work.assert_not_called()
+        with self.assertLogs(app.log, level="ERROR"):
+            started[0]["target"]()
+        self.application.message.assert_not_called()
+        action, payload = self.queue.get_nowait()
+        self.assertEqual((action, payload), ("notice", ("开机自启操作失败", "fake startup failure")))
+        self.application.dispatch(action, payload)
+        self.application.message.assert_called_once_with("开机自启操作失败", "fake startup failure", error=True)
+
+    def test_concurrent_live_autostart_toggles_finish_disabled(self):
+        self.application._background_enabled = True
+        creating, release, second_waiting = threading.Event(), threading.Event(), threading.Event()
+        threads = []
+        thread_type = threading.Thread
+        original_create = self.scheduler.create
+        operation_lock = self.application._autostart_lock
+
+        class ObservedLock:
+            """Observe both workers reaching the real serialization boundary."""
+            attempts = 0
+
+            def __enter__(self):
+                self.attempts += 1
+                if self.attempts == 2:
+                    second_waiting.set()
+                operation_lock.acquire()
+
+            def __exit__(self, *args):
+                operation_lock.release()
+
+        def create(name, xml_text):
+            creating.set()
+            if not release.wait(3):
+                raise AssertionError("test did not release task creation")
+            original_create(name, xml_text)
+
+        def thread(**kwargs):
+            instance = thread_type(**kwargs)
+            threads.append(instance)
+            return instance
+
+        self.application._autostart_lock = ObservedLock()
+        self.scheduler.create = create
+        try:
+            with patch.object(app.threading, "Thread", side_effect=thread):
+                self.application.dispatch("autostart")
+                self.assertTrue(creating.wait(1))
+                self.application.dispatch("autostart")
+                self.assertTrue(second_waiting.wait(1))
+                self.assertFalse(self.application.autostart_enabled)
+        finally:
+            release.set()
+            for instance in threads:
+                instance.join(3)
+        self.assertEqual(len(threads), 2)
+        self.assertTrue(all(t.daemon and t.name == "AgentDeck autostart" for t in threads))
+        self.assertFalse(any(t.is_alive() for t in threads))
+        self.assertEqual(sum(c[0] == "create" for c in self.scheduler.calls), 1)
+        self.assertEqual(sum(c[0] == "delete" for c in self.scheduler.calls), 1)
+        self.assertIsNone(self.scheduler.xml)
+        self.assertFalse(self.application.autostart_enabled)
+        self.assertNotIn("AgentDeck", self.registry.values)
+        self.assertTrue(self.queue.empty())
+
+    def test_synchronous_autostart_work_reraises_failure(self):
+        with self.assertLogs(app.log, level="ERROR"), self.assertRaisesRegex(RuntimeError, "fake failure"):
+            self.application._autostart_work(Mock(side_effect=RuntimeError("fake failure")), "test")
+        self.assertTrue(self.queue.empty())
+
+    def test_autostart_actions_all_use_helper(self):
+        with patch.object(self.application, "_autostart_work") as work:
+            for action in ("hooks", "start", "autostart"):
+                with self.subTest(action=action):
+                    self.application.status_action(action)
+                    self.assertEqual(work.call_args.args[1], action)
+            self.application.dispatch("autostart")
+            self.assertEqual(work.call_args.args[1], "autostart")
 
     def test_menu_callbacks_enqueue_without_native_actions(self):
         menu = self.application.menu(SimpleNamespace(Menu=Menu, MenuItem=MenuItem))
@@ -965,11 +1558,17 @@ class ApplicationTests(unittest.TestCase):
                          "selected")
 
     def test_autostart_menu_toggles_registration_and_checkmark(self):
+        menu = self.application.menu(SimpleNamespace(Menu=Menu, MenuItem=MenuItem))
+        row = next(r for r in menu.children() if isinstance(r, MenuItem) and r.text == "开机自启")
+        self.assertFalse(row.options["checked"](row))
         self.application.dispatch("autostart")
         self.assertTrue(self.application.autostart_enabled)
-        self.assertEqual(self.registry.values["AgentDeck"], "AgentDeck.exe")
+        self.assertTrue(row.options["checked"](row))
+        self.assertTrue(app.task_matches(self.scheduler.xml, TARGET))
+        self.assertNotIn("AgentDeck", self.registry.values)
         self.application.dispatch("autostart")
         self.assertFalse(self.application.autostart_enabled)
+        self.assertFalse(row.options["checked"](row))
         self.assertEqual(self.registry.values, {"OtherApp": "other.exe"})
 
     def test_logs_action_opens_only_app_log_folder(self):
@@ -1115,19 +1714,20 @@ class ApplicationTests(unittest.TestCase):
                 self.assertEqual(status.call_count, expected)
 
     def test_status_model_explains_setup_reader_and_tray(self):
+        self.application.autostart.refresh()
         self.application.state = {"sessions": [{"slot": 1}], "input_reader": "raw"}
         model = self.application.status_model()
         rows = {row[0]: row for row in model["rows"]}
         self.assertFalse(model["complete"])
         self.assertEqual(rows["钩子"][1:4], ("未启用", False, "修复"))
         self.assertEqual(rows["开机自启"][3], "开启")
-        self.assertIn("按键会同时打字", rows["读键方式"][1])
-        self.assertEqual(rows["读键方式"][3], "装驱动说明")
+        self.assertIn("按键会同时打字", rows["宏键盘"][1])
+        self.assertEqual(rows["宏键盘"][3], "装驱动说明")
         self.assertIn("右下角 ^", rows["托盘图标"][1])
         self.assertIn("重开", rows["会话"][1])
         self.application.state = {"sessions": [], "input_reader": "usb"}
-        self.assertEqual({row[0]: row for row in self.application.status_model()["rows"]}["读键方式"][1:4],
-                         ("✓ USB 直读", True, None))
+        self.assertEqual({row[0]: row for row in self.application.status_model()["rows"]}["宏键盘"][1:4],
+                         ("✓ 已连接（USB 直读）", True, None))
 
     def test_status_window_start_button_initializes_and_has_done_button(self):
         tk, window, buttons = self.build_status()
@@ -1150,7 +1750,7 @@ class ApplicationTests(unittest.TestCase):
 
     def test_status_window_refreshes_sessions_and_reader_while_open(self):
         """Acceptance 2026-11-19: opened at startup with an empty state, the window kept
-        '会话 0 个' / '读键方式 启动中…' forever and never offered the driver guide."""
+        '会话 0 个' / '宏键盘 启动中…' forever and never offered the driver guide."""
         texts, created, buttons = [], [], {}
 
         def make_label(parent, text="", **kwargs):

@@ -1,0 +1,236 @@
+[
+  {
+    "file": "test_capture_etl.py",
+    "exit_code": 0,
+    "last_line": "OK",
+    "elapsed_s": 3.02
+  },
+  {
+    "file": "test_daemon.py",
+    "exit_code": 0,
+    "last_line": "daemon offline tests: 10 groups passed",
+    "elapsed_s": 0.48
+  },
+  {
+    "file": "test_deck.py",
+    "exit_code": 0,
+    "last_line": "AgentDeck offline tests: 56 groups passed",
+    "elapsed_s": 1.902
+  },
+  {
+    "file": "test_deck_exclusive.py",
+    "exit_code": 0,
+    "last_line": "deck exclusive offline tests: 9 groups passed",
+    "elapsed_s": 0.35
+  },
+  {
+    "file": "test_deck_input.py",
+    "exit_code": 0,
+    "last_line": "deck Raw Input offline tests: 5 groups passed",
+    "elapsed_s": 0.337
+  },
+  {
+    "file": "test_deck_keymap.py",
+    "exit_code": 0,
+    "last_line": "Keymap offline tests: 13 groups passed",
+    "elapsed_s": 0.573
+  },
+  {
+    "file": "test_deck_probe.py",
+    "exit_code": 0,
+    "last_line": "deck probe offline tests: 7 groups passed",
+    "elapsed_s": 0.354
+  },
+  {
+    "file": "test_deck_usb.py",
+    "exit_code": 0,
+    "last_line": "deck USB offline tests: 26 groups passed",
+    "elapsed_s": 0.487
+  },
+  {
+    "file": "test_focus_lock.py",
+    "exit_code": 0,
+    "last_line": "focus lock offline tests: 4 groups passed",
+    "elapsed_s": 0.622
+  },
+  {
+    "file": "test_hub.py",
+    "exit_code": 0,
+    "last_line": "OK",
+    "elapsed_s": 6.28
+  },
+  {
+    "file": "test_hub_app_support.py",
+    "exit_code": 0,
+    "last_line": "OK",
+    "elapsed_s": 0.937
+  },
+  {
+    "file": "test_hub_demo.py",
+    "exit_code": 0,
+    "last_line": "OK",
+    "elapsed_s": 0.445
+  },
+  {
+    "file": "test_hub_desktop.py",
+    "exit_code": 0,
+    "last_line": "OK",
+    "elapsed_s": 0.733
+  },
+  {
+    "file": "test_hub_desktop_mac.py",
+    "exit_code": 0,
+    "last_line": "OK",
+    "elapsed_s": 0.652
+  },
+  {
+    "file": "test_hub_doctor.py",
+    "exit_code": 0,
+    "last_line": "OK",
+    "elapsed_s": 0.83
+  },
+  {
+    "file": "test_hub_fixes.py",
+    "exit_code": 0,
+    "last_line": "OK",
+    "elapsed_s": 5.51
+  },
+  {
+    "file": "test_hub_gate.py",
+    "exit_code": 0,
+    "last_line": "OK",
+    "elapsed_s": 3.023
+  },
+  {
+    "file": "test_hub_hold.py",
+    "exit_code": 0,
+    "last_line": "OK",
+    "elapsed_s": 1.726
+  },
+  {
+    "file": "test_hub_hotkey.py",
+    "exit_code": 0,
+    "last_line": "OK",
+    "elapsed_s": 0.404
+  },
+  {
+    "file": "test_hub_input_capture.py",
+    "exit_code": 0,
+    "last_line": "OK",
+    "elapsed_s": 0.675
+  },
+  {
+    "file": "test_hub_install.py",
+    "exit_code": 0,
+    "last_line": "OK",
+    "elapsed_s": 2.241
+  },
+  {
+    "file": "test_hub_keyboard.py",
+    "exit_code": 0,
+    "last_line": "OK",
+    "elapsed_s": 0.634
+  },
+  {
+    "file": "test_hub_keypad.py",
+    "exit_code": 0,
+    "last_line": "OK",
+    "elapsed_s": 3.397
+  },
+  {
+    "file": "test_hub_macos_fix.py",
+    "exit_code": 0,
+    "last_line": "OK",
+    "elapsed_s": 0.567
+  },
+  {
+    "file": "test_hub_nonce.py",
+    "exit_code": 0,
+    "last_line": "OK",
+    "elapsed_s": 1.879
+  },
+  {
+    "file": "test_hub_nonce_integration.py",
+    "exit_code": 0,
+    "last_line": "OK",
+    "elapsed_s": 1.53
+  },
+  {
+    "file": "test_hub_overlay.py",
+    "exit_code": 0,
+    "last_line": "OK",
+    "elapsed_s": 0.622
+  },
+  {
+    "file": "test_hub_overlay_position.py",
+    "exit_code": 0,
+    "last_line": "OK",
+    "elapsed_s": 0.425
+  },
+  {
+    "file": "test_hub_relay.py",
+    "exit_code": 0,
+    "last_line": "OK",
+    "elapsed_s": 5.723
+  },
+  {
+    "file": "test_hub_risk.py",
+    "exit_code": 0,
+    "last_line": "OK",
+    "elapsed_s": 0.207
+  },
+  {
+    "file": "test_hub_runtime.py",
+    "exit_code": 0,
+    "last_line": "OK",
+    "elapsed_s": 1.252
+  },
+  {
+    "file": "test_hub_tk_wake.py",
+    "exit_code": 0,
+    "last_line": "OK",
+    "elapsed_s": 19.641
+  },
+  {
+    "file": "test_hub_ui_live.py",
+    "exit_code": 0,
+    "last_line": "OK",
+    "elapsed_s": 32.552
+  },
+  {
+    "file": "test_hub_virtual_device.py",
+    "exit_code": 0,
+    "last_line": "OK",
+    "elapsed_s": 0.412
+  },
+  {
+    "file": "test_hub_virtual_nonce_integration.py",
+    "exit_code": 0,
+    "last_line": "OK",
+    "elapsed_s": 5.663
+  },
+  {
+    "file": "test_hub_watchdog.py",
+    "exit_code": 0,
+    "last_line": "OK",
+    "elapsed_s": 4.266
+  },
+  {
+    "file": "test_pc.py",
+    "exit_code": 0,
+    "last_line": "PC and firmware loop: 4 groups passed",
+    "elapsed_s": 0.342
+  },
+  {
+    "file": "test_ui.py",
+    "exit_code": 0,
+    "last_line": "UI: 7 groups passed",
+    "elapsed_s": 0.109
+  },
+  {
+    "file": "test_verify_real_session.py",
+    "exit_code": 0,
+    "last_line": "OK",
+    "elapsed_s": 49.543
+  }
+]

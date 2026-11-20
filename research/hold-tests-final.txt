@@ -1,0 +1,40 @@
+test_capture_etl.py exit=0 3s skipped_lines=0 :: OK
+test_daemon.py exit=0 1s skipped_lines=0 :: daemon offline tests: 10 groups passed
+test_deck.py exit=0 2s skipped_lines=0 :: AgentDeck offline tests: 56 groups passed
+test_deck_exclusive.py exit=0 0s skipped_lines=0 :: deck exclusive offline tests: 9 groups passed
+test_deck_input.py exit=0 0s skipped_lines=0 :: deck Raw Input offline tests: 5 groups passed
+test_deck_keymap.py exit=0 1s skipped_lines=0 :: Keymap offline tests: 13 groups passed
+test_deck_probe.py exit=0 1s skipped_lines=0 :: deck probe offline tests: 7 groups passed
+test_deck_usb.py exit=0 1s skipped_lines=0 :: deck USB offline tests: 26 groups passed
+test_focus_lock.py exit=0 1s skipped_lines=0 :: focus lock offline tests: 4 groups passed
+test_hub.py exit=0 6s skipped_lines=0 :: OK
+test_hub_app_support.py exit=0 1s skipped_lines=0 :: OK
+test_hub_demo.py exit=0 1s skipped_lines=0 :: OK
+test_hub_desktop.py exit=0 1s skipped_lines=0 :: OK
+test_hub_desktop_mac.py exit=0 1s skipped_lines=0 :: OK
+test_hub_doctor.py exit=0 1s skipped_lines=0 :: OK
+test_hub_fixes.py exit=0 5s skipped_lines=0 :: OK
+test_hub_gate.py exit=0 4s skipped_lines=0 :: OK
+test_hub_hold.py exit=0 2s skipped_lines=0 :: OK
+test_hub_hotkey.py exit=0 0s skipped_lines=0 :: OK
+test_hub_input_capture.py exit=0 1s skipped_lines=0 :: OK
+test_hub_install.py exit=0 2s skipped_lines=0 :: OK
+test_hub_keyboard.py exit=0 0s skipped_lines=0 :: OK
+test_hub_keypad.py exit=0 3s skipped_lines=1 :: OK
+test_hub_macos_fix.py exit=0 1s skipped_lines=0 :: OK
+test_hub_nonce.py exit=0 2s skipped_lines=0 :: OK
+test_hub_nonce_integration.py exit=0 1s skipped_lines=0 :: OK
+test_hub_overlay.py exit=0 0s skipped_lines=0 :: OK
+test_hub_overlay_position.py exit=0 0s skipped_lines=0 :: OK
+test_hub_relay.py exit=0 5s skipped_lines=0 :: OK
+test_hub_risk.py exit=0 0s skipped_lines=0 :: OK
+test_hub_runtime.py exit=0 2s skipped_lines=0 :: OK
+test_hub_tk_wake.py exit=0 20s skipped_lines=0 :: OK
+test_hub_ui_live.py exit=0 34s skipped_lines=0 :: OK
+test_hub_virtual_device.py exit=0 0s skipped_lines=0 :: OK
+test_hub_virtual_nonce_integration.py exit=0 6s skipped_lines=0 :: OK
+test_hub_watchdog.py exit=0 4s skipped_lines=0 :: OK
+test_pc.py exit=0 0s skipped_lines=0 :: PC and firmware loop: 4 groups passed
+test_ui.py exit=0 1s skipped_lines=0 :: UI: 7 groups passed
+test_verify_real_session.py exit=0 50s skipped_lines=0 :: OK
+DONE

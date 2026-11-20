@@ -4,6 +4,7 @@ Run ``python pc/hub.py --backend none``; see hub_README.md for setup.
 No device, window, or user configuration is accessed just by importing this file.
 """
 import argparse
+from collections import deque
 from dataclasses import dataclass, field
 from fnmatch import fnmatchcase
 import hashlib
@@ -21,6 +22,7 @@ import select
 import shlex
 import socket
 import sys
+import tempfile
 import threading
 import time
 from urllib.parse import parse_qs, urlsplit
@@ -42,16 +44,21 @@ SWITCH_GUARD_SECONDS = 0.3
 GATE_CONFIRMED_SECONDS = 30.0
 VOICE_NOTICE_SECONDS = 5.0
 SESSION_IDLE_SECONDS = 6 * 60 * 60
+# /state keeps the last few removed sessions: codex exec fires SessionEnd right after
+# Stop, so its done state and reply would otherwise never be visible.
+RECENT_ENDED_LIMIT = 8
 MAX_BODY = 8 * 1024 * 1024
 WAIT_SLICE = 0.25            # how often a waiting decision checks its hook client
 INPUT_NOTICE_SECONDS = 2.0
+UNHELD_SETTLE_SECONDS = 1.0  # deck must stay disconnected this long before held requests are released
 # Claude Code: "allow" alone does not answer these; the native UI must handle them.
 NEEDS_ANSWER_TOOLS = ("AskUserQuestion", "ExitPlanMode")
-MOVED_ON_EVENTS = ("UserPromptSubmit", "PostToolUse", "PostToolUseFailure")
+TOOL_PROGRESS_EVENTS = ("PreToolUse", "PostToolUse", "PostToolUseFailure")
+MOVED_ON_EVENTS = TOOL_PROGRESS_EVENTS + ("UserPromptSubmit", "Stop", "StopFailure", "Interrupt")
 EVENT_STATES = {
     "SessionStart": "idle", "UserPromptSubmit": "think", "PreToolUse": "tool",
     "PostToolUse": "think", "PostToolUseFailure": "error", "Stop": "done",
-    "Interrupt": "idle",
+    "Interrupt": "idle", "StopFailure": "error",
 }
 EVENTS = set(EVENT_STATES) | {"PermissionRequest", "Notification", "SessionEnd"}
 LAST_TEXT_LIMIT = 4000
@@ -65,6 +72,10 @@ RAW_INPUT_BLOCKED = ("prompt", "nav", "voice_down", "voice", "screenshot")
 LEAK_TEXT = "按键会漏进窗口：先用 Zadig 把接口 0 换成 WinUSB"
 log = logging.getLogger("agentdeck.hub")
 keylog = logging.getLogger("agentdeck.hub.keys")
+UNKNOWN_EVENTS = set()
+UNKNOWN_EVENTS_LOCK = threading.Lock()
+SESSION_FIELDS = ("agent", "session_id", "slot", "cwd", "name", "state", "hwnd",
+                  "window_exe", "last_text", "last_updated", "last_kind", "last_text_at")
 
 from hub_risk import (  # noqa: F401  (re-exported: hub.classify stays public)
     AUTHORIZED_KEYS, CRITICAL_RULES, KEY_PATH, RISK_RULES, SENSITIVE_PATH, SHELL_WRITE,
@@ -126,7 +137,7 @@ INPUT_SENT = {"prompt": "已发送预设", "screenshot": "已截图并粘贴路�
               "voice": "语音已切换", "voice_up": "停止说话", "interrupt": "已打断",
               "nav up": "已按 ↑", "nav down": "已按 ↓", "nav enter": "已回车",
               "scroll end": "已翻到底", "scroll": "已滚动"}
-EVENT_KINDS = {"Stop": "回复", "Notification": "提醒", "UserPromptSubmit": "你"}
+EVENT_KINDS = {"Stop": "回复", "StopFailure": "错误", "Notification": "提醒", "UserPromptSubmit": "你"}
 
 
 def tool_summary(tool_input, limit=ACTIVITY_LIMIT):
@@ -163,7 +174,7 @@ def question_text(tool_input):
 
 def event_text(name, event):
     """(text, kind) worth showing as the session's latest line, else (None, None)."""
-    if name == "Stop":
+    if name in ("Stop", "StopFailure"):
         text = event.get("last_assistant_message")
     elif name == "Notification":
         text = event.get("message")
@@ -263,6 +274,7 @@ class Pending:
     gate: bool = False
     gate_confirmed: bool = False
     input_hash: str = ""
+    agent_id: str = ""
     nonce: int = field(kw_only=True)
 
     def public(self):
@@ -281,11 +293,14 @@ class Hub:
                  focus_guard=None, hold_path=None, monotonic=None, wall_time=None,
                  risk_rules=None, critical_rules=None, prompts=None, home=None, audit=None,
                  lcd_enabled=True, desktop_enabled=True, gate_mode="high", require_nonce=False,
-                 lcd_async=None,
+                 lcd_async=None, hold_mode="always", sessions_path=None, window_alive=None,
                  production_hosts=(), protected_branches=PROTECTED_BRANCHES, mcp_write_tools=()):
         if not math.isfinite(approve_timeout) or approve_timeout <= 0:
             raise ValueError("approve timeout must be positive and finite")
         self.approve_timeout = approve_timeout
+        if hold_mode not in ("auto", "always", "never"):
+            raise ValueError("hold_mode must be auto, always, or never")
+        self.hold_mode = hold_mode
         if not isinstance(require_nonce, bool):
             raise ValueError("require_nonce must be a boolean")
         self.require_nonce = require_nonce
@@ -325,6 +340,7 @@ class Hub:
         self.gate_passed = {}
         self.locked = {}
         self.agents_seen = {"cc": None, "cx": None}
+        self.recent_ended = deque(maxlen=RECENT_ENDED_LIMIT)
         self.selected = None
         self.displayed_request_id = None
         self.display_switched_at = float("-inf")
@@ -347,6 +363,131 @@ class Hub:
         self.input_seq = 0
         self.show_requests = 0        # "show" key presses; the overlay un-hides on change
         self.input_reader = None      # callable -> "usb" / "raw" / None (set by main)
+        self.sessions_path = Path(sessions_path) if sessions_path is not None else None
+        self.window_alive = window_alive or self._window_alive
+        self.sessions_io_lock = threading.Lock()
+        self.sessions_saved_content = None
+        self.sessions_write_at = float("-inf")
+        self.sessions_warnings = set()
+        self.unheld_since = None
+        self._load_sessions()
+
+    @staticmethod
+    def _window_alive(hwnd):
+        if sys.platform != "win32":
+            return True
+        import ctypes
+        from ctypes import wintypes
+        is_window = ctypes.WinDLL("user32").IsWindow
+        is_window.argtypes, is_window.restype = [wintypes.HWND], wintypes.BOOL
+        return bool(is_window(hwnd))
+
+    def _input_reader(self):
+        try:
+            return self.input_reader() if callable(self.input_reader) else None
+        except Exception:
+            return None
+
+    def deck_connected(self):
+        return self._input_reader() in ("usb", "raw")
+
+    def hold_active(self):
+        return self.hold_mode == "always" or (self.hold_mode == "auto" and self.deck_connected())
+
+    def _load_sessions(self):
+        if self.sessions_path is None:
+            return
+        try:
+            entries = load_json(self.sessions_path)
+            if isinstance(entries, dict):
+                entries = entries["sessions"]
+            if not isinstance(entries, list):
+                raise ValueError("sessions must be a list")
+            self.sessions_saved_content = json.dumps(entries, ensure_ascii=True, sort_keys=True)
+            used = set()
+            for entry in entries:
+                try:
+                    if not isinstance(entry, dict):
+                        continue
+                    agent, sid, slot = entry["agent"], entry["session_id"], entry["slot"]
+                    updated = entry["last_updated"]
+                    if (agent not in ("cc", "cx") or not isinstance(sid, str) or not 0 < len(sid) <= 256
+                            or type(slot) is not int or not 1 <= slot <= 6 or slot in used
+                            or type(updated) not in (int, float) or not math.isfinite(updated)
+                            or self.wall_time() - updated > SESSION_IDLE_SECONDS):
+                        continue
+                    key = session_key(agent, sid)
+                    identity = (agent, sid)
+                    if not re.fullmatch(r"[A-Za-z0-9_-]+", key) or identity in self.sessions:
+                        continue
+                    if any(not isinstance(entry.get(field, ""), str)
+                           for field in ("cwd", "name", "state", "window_exe", "last_text", "last_kind")):
+                        continue
+                    session = {field: entry[field] for field in SESSION_FIELDS if field in entry}
+                    session.update(key=key, cwd=entry.get("cwd", ""), name=entry.get("name", "agent"),
+                                   project=entry.get("name", "agent"), last_text=entry.get("last_text", "")[-LAST_TEXT_LIMIT:])
+                    state = session.get("state", "idle")
+                    session["state"] = state if state in set(EVENT_STATES.values()) | {"wait", "locked"} else "idle"
+                    if state in ("wait", "locked"):
+                        session.update(state="wait", native_wait=True, label="在应用里批准")
+                    hwnd = session.get("hwnd")
+                    alive = False
+                    if type(hwnd) is int and 0 < hwnd < 2**64:
+                        try:
+                            alive = bool(self.window_alive(hwnd))
+                        except Exception:
+                            pass
+                    if not alive:
+                        session.pop("hwnd", None)
+                        session.pop("window_exe", None)
+                    self.sessions[identity] = session
+                    used.add(slot)
+                except (KeyError, TypeError, ValueError):
+                    continue
+            self.selected = min(self.sessions, key=lambda identity: self.sessions[identity]["slot"], default=None)
+        except Exception as error:
+            log.warning("Cannot load sessions from %s: %s", self.sessions_path, error)
+
+    def _save_sessions(self, force=False):
+        if self.sessions_path is None:
+            return
+        # Disk work never holds the state lock. Serialize writers separately so
+        # close() cannot be overtaken by an older maintenance snapshot.
+        with self.sessions_io_lock:
+            now = self.monotonic()
+            if not force and now - self.sessions_write_at < 2:
+                return
+            self.sessions_write_at = now
+            temporary = None
+            try:
+                with self.lock:
+                    entries = [{field: session.get(field, "" if field in ("cwd", "name", "window_exe", "last_text") else None)
+                                for field in SESSION_FIELDS if field in session or field not in ("last_kind", "last_text_at")}
+                               for session in sorted(self.sessions.values(), key=lambda item: item["slot"])]
+                content = json.dumps(entries, ensure_ascii=True, sort_keys=True)
+                if content == self.sessions_saved_content:
+                    return
+                self.sessions_path.parent.mkdir(parents=True, exist_ok=True)
+                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.sessions_path.parent,
+                                                 prefix="sessions-", suffix=".tmp", delete=False) as stream:
+                    temporary = Path(stream.name)
+                    stream.write(content + "\n")
+                os.replace(temporary, self.sessions_path)
+                self.sessions_saved_content = content
+            except Exception as error:
+                # OSError text may contain a fresh temporary filename on every
+                # attempt; use the stable cause so one disk failure logs once.
+                warning = (type(error).__name__, getattr(error, "errno", None),
+                           getattr(error, "winerror", None), getattr(error, "strerror", None) or str(error))
+                if warning not in self.sessions_warnings:
+                    self.sessions_warnings.add(warning)
+                    log.warning("Cannot save sessions to %s: %s", self.sessions_path, error)
+            finally:
+                if temporary is not None:
+                    try:
+                        temporary.unlink(missing_ok=True)
+                    except OSError:
+                        pass
 
     def note_input(self, text, ok=True, lcd=None):
         """Make every key press visible: overlay header (state) and LCD for failures."""
@@ -533,6 +674,8 @@ class Hub:
             return "KEY: " + self.input_notice[0]
         if session.get("needs_answer"):
             return "ANSWER: " + session["name"]
+        if session.get("native_wait"):
+            return "APP: " + session["name"]
         return session["name"]
 
     def _update_voice(self):
@@ -599,7 +742,9 @@ class Hub:
 
     def _resolve(self, request, behavior=None, source="timeout", *, decision=None, moved_on=False):
         """``moved_on``: the agent no longer waits (client gone or later event)."""
-        self._audit(request, decision or behavior or "timeout", "gate" if request.gate else source)
+        self._audit(request, decision or behavior or "timeout",
+                    "gate" if request.gate and not moved_on else source,
+                    **({"moved_on": True} if moved_on else {}))
         if request.gate:
             if behavior == "allow":
                 request.response = {}
@@ -623,6 +768,11 @@ class Hub:
                 # The agent's own permission dialog now has the question; Enter
                 # there would approve it without AgentDeck's confirmations.
                 session["native_wait"] = True
+                if decision == "passthrough":
+                    session["label"] = "在应用里批准"
+            elif moved_on:
+                session.pop("native_wait", None)
+                session.pop("label", None)
             session["state"] = ("locked" if locked and not remaining else "wait" if remaining or native
                                 else "tool" if behavior == "allow" else "idle")
             session["last_updated"] = self.wall_time()
@@ -631,8 +781,47 @@ class Hub:
         if self.displayed_request_id == request.id:
             self._next_request()
 
-    def _remove_session(self, identity):
+    def _abandon_requests(self, identity, name, agent_id=""):
+        """Progress releases native permissions only for the same subagent.
+
+        Ordinary tool telemetry and new prompts never cancel a gate; terminal
+        events cancel all requests because the session/turn has ended.
+        """
+        released = 0
+        for request in list(self.pending.values()):
+            if request.session != identity:
+                continue
+            if name in TOOL_PROGRESS_EVENTS + ("UserPromptSubmit",) and request.gate:
+                continue
+            if name in TOOL_PROGRESS_EVENTS and request.agent_id != agent_id:
+                continue
+            self._resolve(request, source="event", decision="abandoned", moved_on=True)
+            released += 1
+        if released:
+            log.info("%s session %s released %d abandoned request(s)", name, identity[1][:8], released)
+
+    def _release_unheld(self, settle=0.0):
+        """``settle``: maintenance waits out a reader briefly reporting none (USB -> Raw Input)."""
+        if self.hold_active():
+            self.unheld_since = None
+            return
+        now = self.monotonic()
+        if self.unheld_since is None:
+            self.unheld_since = now
+        if now - self.unheld_since < settle:
+            return
+        released = 0
+        for request in list(self.pending.values()):
+            if not request.gate:
+                self._resolve(request, source="hold", decision="passthrough")
+                released += 1
+        if released:
+            log.info("Hold %s released %d request(s) to native approval", self.hold_mode, released)
+
+    def _remove_session(self, identity, event_name=None, ended_by="", reason=""):
         """Share SessionEnd cleanup with slot eviction and idle expiry."""
+        if event_name:
+            self._abandon_requests(identity, event_name)
         cleared_display = False
         for request in list(self.locked.values()):
             if request.session == identity:
@@ -653,12 +842,22 @@ class Hub:
             if request.session == identity:
                 self._resolve(request)
         if removed is not None:
+            self._remember_ended(removed, ended_by or event_name or "", reason)
             self._send(["end " + removed["key"]])
         if self.selected == identity:
             self.selected = next(iter(self.sessions), None)
             self._next_request()
         elif cleared_display:
             self._next_request()
+
+    def _remember_ended(self, session, ended_by, reason):
+        """Keep the final state and reply of a removed session for /state."""
+        entry = {key: session.get(key) for key in (
+            "agent", "session_id", "slot", "name", "cwd", "state", "last_event",
+            "last_text", "last_kind", "last_text_at", "label", "last_updated")}
+        entry.update(ended_by=ended_by, reason=reason[:64] if isinstance(reason, str) else "",
+                     ended_at=self.wall_time())
+        self.recent_ended.append(entry)
 
     def _reclaimable_sessions(self):
         busy = {request.session for requests in (self.pending, self.locked) for request in requests.values()}
@@ -679,7 +878,7 @@ class Hub:
         wall_now = self.wall_time()
         for identity, session in self._reclaimable_sessions():
             if wall_now - session["last_updated"] > SESSION_IDLE_SECONDS:
-                self._remove_session(identity)
+                self._remove_session(identity, ended_by="idle")
 
     def event(self, agent, event, *, gate=False, received_at=None, disconnected=None):
         """Handle a hook; permission and intercepted gate requests wait outside the lock.
@@ -693,6 +892,12 @@ class Hub:
             raise HubError("agent must be cc or cx; event must be an object")
         name = event.get("hook_event_name")
         sid = event.get("session_id") or event.get("thread_id") or event.get("conversation_id")
+        if isinstance(name, str) and name not in EVENTS:
+            short_name = name[:64]
+            with UNKNOWN_EVENTS_LOCK:
+                if short_name not in UNKNOWN_EVENTS and len(UNKNOWN_EVENTS) < 256:
+                    UNKNOWN_EVENTS.add(short_name)
+                    log.warning("Unsupported hook_event_name: %s", short_name)
         if not isinstance(name, str) or name not in EVENTS or not isinstance(sid, str) or not sid or len(sid) > 256:
             raise HubError("a supported hook_event_name and session_id are required")
         if "cwd" in event and not isinstance(event["cwd"], str):
@@ -712,6 +917,7 @@ class Hub:
             risk = classify(tool_name, tool_input, self.risk_rules, self.critical_rules,
                             production_hosts=self.production_hosts, protected_branches=self.protected_branches,
                             mcp_write_tools=self.mcp_write_tools)
+        # Unheld gate requests skip here too: no passthrough audit for every low-risk tool call.
         if gate and (self.gate_mode == "off" or (self.gate_mode == "high" and risk == "low")):
             return {}
         with self.lock:
@@ -721,8 +927,11 @@ class Hub:
             self.agents_seen[agent] = self.wall_time()
             self._expire()
             if name == "SessionEnd":
-                self._remove_session(identity)
+                self._remove_session(identity, event_name=name, reason=event.get("reason"))
                 return {}
+            if name in MOVED_ON_EVENTS and not gate:
+                agent_id = event.get("agent_id")
+                self._abandon_requests(identity, name, agent_id if isinstance(agent_id, str) else "")
             cleared_display = False
             if name not in ("PermissionRequest", "Notification"):
                 for request in list(self.locked.values()):
@@ -740,14 +949,15 @@ class Hub:
                         raise HubError("all six session slots are occupied", 409)
                     oldest, removed = min(candidates, key=lambda item: item[1]["last_updated"])
                     slot = removed["slot"]
-                    self._remove_session(oldest)
+                    self._remove_session(oldest, ended_by="evicted")
                 self.sessions[identity] = {"agent": agent, "session_id": sid, "key": key,
                                            "cwd": "", "name": "agent", "project": "agent",
                                            "state": "idle", "slot": slot}
             session = self.sessions[identity]
             cwd = event.get("cwd", session["cwd"])
             session.update(cwd=cwd, name=agent_lcd.ascii_name(cwd),
-                           project=agent_lcd.ascii_name(cwd), last_updated=self.wall_time())
+                           project=agent_lcd.ascii_name(cwd), last_updated=self.wall_time(),
+                           last_event=name)
             window = event.get("agentdeck_window")
             if isinstance(window, dict):
                 # The relay's top-level window of the agent process: focus by handle,
@@ -758,6 +968,8 @@ class Hub:
                     session["window_exe"] = exe[:260] if isinstance(exe, str) else ""
             if name not in ("PermissionRequest", "Notification"):
                 session.pop("needs_answer", None)
+                session.pop("native_wait", None)
+                session.pop("label", None)
             if self.selected is None:
                 self.selected = identity
             if name == "PermissionRequest" and not gate and tool_name in NEEDS_ANSWER_TOOLS:
@@ -779,7 +991,18 @@ class Hub:
                                   risk,
                                   self.wall_time(), received_at + self.approve_timeout,
                                   command=summary, project=session["project"], gate=gate,
-                                  input_hash=tool_input_hash(tool_input), nonce=self._new_nonce())
+                                  input_hash=tool_input_hash(tool_input), nonce=self._new_nonce(),
+                                  agent_id=event.get("agent_id") if isinstance(event.get("agent_id"), str) else "")
+                if not self.hold_active():
+                    self._audit(request, "passthrough", "hold")
+                    if not gate:
+                        session.update(state="wait", native_wait=True, label="在应用里批准")
+                        self._publish(session)
+                        if self.selected == identity:
+                            self._show()
+                    return {}
+                session.pop("native_wait", None)
+                session.pop("label", None)
                 request.gate_confirmed = not gate and (identity, request.input_hash) in self.gate_passed
                 if request.risk == "critical" and not gate:
                     request.status = "locked"
@@ -797,31 +1020,11 @@ class Hub:
                 if self.displayed_request_id is None or self.displayed_request_id in self.locked:
                     self._next_request()
             else:
-                if name in ("Stop", "Interrupt"):
-                    for request in list(self.pending.values()):
-                        if request.session == identity:
-                            self._resolve(request)
-                elif name in MOVED_ON_EVENTS:
-                    # The agent moved on without our answer (native dialog, Esc):
-                    # a new prompt ends the turn; a finished identical tool call
-                    # proves the permission was decided elsewhere. PreToolUse is
-                    # not used: parallel tool calls and the gate's own telemetry
-                    # event would cancel requests that are still being shown.
-                    digest = event.get("tool_input_hash")
-                    if not isinstance(digest, str):
-                        digest = tool_input_hash(tool_input) if "tool_input" in event else None
-                    for request in list(self.pending.values()):
-                        if request.session == identity and not request.gate and (
-                                name == "UserPromptSubmit" or (
-                                    request.tool_name == tool_name and request.input_hash == digest)):
-                            self._resolve(request, source="event", decision="abandoned", moved_on=True)
-                if name in MOVED_ON_EVENTS or name in ("Stop", "Interrupt", "SessionStart"):
-                    session.pop("native_wait", None)
                 text, kind = event_text(name, event)
                 if text:
                     session.update(last_text=text[-LAST_TEXT_LIMIT:], last_kind=kind,
                                    last_text_at=self.wall_time())
-                if name in ("Stop", "SessionStart", "Interrupt"):
+                if name in ("Stop", "StopFailure", "SessionStart", "Interrupt"):
                     session.pop("activity", None)
                 elif name == "PreToolUse" and isinstance(tool_name, str) and tool_name:
                     summary = tool_summary(tool_input)
@@ -835,11 +1038,16 @@ class Hub:
                 else:
                     session.pop("wait_kind", None)
                 state = EVENT_STATES.get(name)
+                if name == "StopFailure":
+                    error = event.get("error")
+                    session["label"] = "出错：" + (error[:40] if isinstance(error, str) else "unknown")
                 if name == "Notification":
                     kind = event.get("notification_type", "")
                     message = str(event.get("message") or "").lower()
                     if kind in agent_lcd.WAIT_NOTIFICATIONS or (not kind and "permission" in message):
                         state = "wait"
+                    elif kind == "idle_prompt" and session["state"] in ("tool", "think"):
+                        state = "idle"
                 if name == "PreToolUse" and event.get("tool_name") == "AskUserQuestion":
                     state = "wait"
                 if any(p.session == identity for p in self.pending.values()):
@@ -887,18 +1095,17 @@ class Hub:
                 item["locked_requests"] = [p.public() for p in self.locked.values() if p.session == identity]
                 sessions.append(item)
             selected = self.sessions.get(self.selected)
-            reader = None
-            if callable(self.input_reader):
-                try:
-                    reader = self.input_reader()
-                except Exception:
-                    reader = None
+            reader = self._input_reader()
+            connected = reader in ("usb", "raw")
             return {"sessions": sessions, "pending": [p.public() for p in self.pending.values()],
                     "last_input": dict(self.last_input) if self.last_input else None,
                     "input_reader": reader if reader in ("usb", "raw", "absent") else None,
+                    "deck_connected": connected, "hold_mode": self.hold_mode,
+                    "hold_active": self.hold_mode == "always" or (self.hold_mode == "auto" and connected),
                     "show_requests": self.show_requests,
                     "locked": [p.public() for p in self.locked.values()],
                     "agents_seen": dict(self.agents_seen),
+                    "recent_ended": [dict(entry) for entry in self.recent_ended],
                     "nonce_required": self.require_nonce,
                     "input_mode": self.rendered_source or 'headless',
                     "input_request": dict(self.rendered_request),
@@ -969,9 +1176,9 @@ class Hub:
         command = parts[0]
         argument = parts[1] if len(parts) == 2 else None
         if command not in ("slot", "cycle", "next_wait", "approve", "deny", "interrupt", "voice",
-                           "voice_down", "voice_up", "screenshot", "prompt", "show", "scroll", "nav"):
+                           "voice_down", "voice_up", "screenshot", "prompt", "show", "scroll", "nav", "hold"):
             raise HubError("unknown action")
-        if command not in ("slot", "cycle", "prompt", "scroll", "nav") and argument is not None:
+        if command not in ("slot", "cycle", "prompt", "scroll", "nav", "hold") and argument is not None:
             raise HubError("unexpected action argument")
         if command == "scroll":
             if argument == "end":
@@ -985,6 +1192,8 @@ class Hub:
                     raise HubError("scroll needs a nonzero step up to %d, or end" % SCROLL_LIMIT)
         if command == "nav" and argument not in NAV_KEYS:
             raise HubError("nav needs up, down or enter")
+        if command == "hold" and argument not in ("auto", "always", "never"):
+            raise HubError("hold needs auto, always or never")
         with self.lock:
             outcome = self._action_locked(payload, command, argument, source, received_at)
         if callable(outcome):
@@ -1026,6 +1235,10 @@ class Hub:
             self._validate_decision(payload, command, source, received_at)
         self._update_voice()
         self._expire()
+        if command == "hold":
+            self.hold_mode = argument
+            self._release_unheld()
+            return {"status": "ok", "hold_mode": self.hold_mode}
         if command == "show":
             self.show_requests += 1
             return {"action": command, "status": "shown"}
@@ -1229,11 +1442,13 @@ class Hub:
         with self.lock:
             self._update_voice()
             self._expire()
+            self._release_unheld(settle=UNHELD_SETTLE_SECONDS)
             if self.lcd_enabled and self.selected is not None and self.monotonic() - self.last_focus >= daemon.HEARTBEAT:
                 self._show()
             elif self.lcd_enabled and self.selected is not None and self.monotonic() >= self.lcd_retry_at:
                 self.lcd_retry_at = float('inf')
                 self._show()
+        self._save_sessions()
 
     def close(self):
         with self.lock:
@@ -1249,6 +1464,7 @@ class Hub:
             self.displayed_request_id = None
             if self.lcd_thread is not None:
                 self.lcd_jobs.put(None)
+        self._save_sessions(force=True)
 
 
 class HubServer(ThreadingHTTPServer):
@@ -1497,6 +1713,7 @@ def main(argv=None, *, ui_factory=None):
     parser.add_argument("command", nargs="?", choices=("doctor",))
     parser.add_argument("--port", type=int, default=PORT)
     parser.add_argument("--approve-timeout", type=float, default=APPROVE_TIMEOUT)
+    parser.add_argument("--hold-mode", choices=("auto", "always", "never"), default="auto")
     parser.add_argument("--backend", type=parse_backends, default="none",
                         help="comma-separated inputs: usb,hotkey; default: none (HTTP only)")
     parser.add_argument("--overlay", action="store_true", help="show the floating six-session panel")
@@ -1539,6 +1756,7 @@ def main(argv=None, *, ui_factory=None):
               risk_rules=load_json(args.risk_rules) if args.risk_rules else None,
               critical_rules=load_json(args.critical_rules) if args.critical_rules else None,
               home=home, lcd_enabled=not args.no_lcd, desktop_enabled=not args.no_desktop,
+              hold_mode=args.hold_mode, sessions_path=home / ".agentdeck" / "sessions.json",
               desktop=None if args.no_desktop else DesktopEffects(**desktop_options), **options)
     server = overlay = http_thread = maintenance = marker = None
     readers = []

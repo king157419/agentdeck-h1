@@ -188,17 +188,16 @@ class MovedOnTests(unittest.TestCase):
     def event(self, name, sid="s", **fields):
         return self.engine.event("cc", dict(hook_event_name=name, session_id=sid, **fields))
 
-    def test_finished_identical_tool_or_new_prompt_clears_pending(self):
-        worker, result = self.permission(command="echo 1")
-        self.event("PreToolUse", tool_name="Bash", tool_input={"command": "echo 1"})
-        self.event("PostToolUse", tool_name="Bash", tool_input={"command": "other"})
-        self.assertEqual(len(self.engine.state()["pending"]), 1)  # parallel/other tools keep it
-        self.event("PostToolUse", tool_name="Bash",
-                   tool_input_hash=hub.tool_input_hash({"command": "echo 1"}))
-        worker.join(2)
-        self.assertEqual(result, [{}])
-        self.assertEqual(self.engine.state()["pending"], [])
-        self.assertEqual(self.engine.audit.recent(1)[0]["decision"], "abandoned")
+    def test_same_subagent_progress_or_new_prompt_clears_pending(self):
+        for name in ("PreToolUse", "PostToolUse", "PostToolUseFailure"):
+            with self.subTest(event=name):
+                worker, result = self.permission(command="echo 1")
+                # Tool identity/input may differ after the native permission UI.
+                self.event(name, tool_name="Read", tool_input={"path": "other"})
+                worker.join(2)
+                self.assertEqual(result, [{}])
+                self.assertEqual(self.engine.state()["pending"], [])
+                self.assertEqual(self.engine.audit.recent(1)[0]["decision"], "abandoned")
         worker, result = self.permission(command="echo 2")
         self.event("UserPromptSubmit")
         worker.join(2)

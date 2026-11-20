@@ -9,6 +9,7 @@ PROTECTED_BRANCHES = ("main", "master", "release/*")
 
 # High-risk regexes control the double press; critical regexes require native approval.
 RISK_RULES = [
+    r"(?m)(?:^|\\n)[ \t]*\*\*\* Delete File:",  # apply_patch; \\n: patch nested in JSON
     r"\brm\s+(?=[^\n|;&]*(?:-\w*r|--recursive))(?=[^\n|;&]*(?:-\w*f|--force))",
     r"\bRemove-Item\b[^\n|;&]*-Recurse\b",
     r"\b(?:del|rmdir)\b[^\n|;&]*/s\b",

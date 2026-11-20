@@ -12,12 +12,13 @@ import time
 # _body(); dropping tool_response and cutting replies/prompts to TEXT_LIMIT keeps
 # huge payloads (60 KB answers, 1 MiB tool output) far below the hub's body limit.
 ORDINARY_KEYS = ("hook_event_name", "session_id", "thread_id", "conversation_id", "cwd",
-                 "tool_name", "notification_type", "agentdeck_window")
+                 "tool_name", "notification_type", "agentdeck_window", "agent_id")
 MESSAGE_LIMIT = 300
 TEXT_LIMIT = 4000            # last reply / prompt kept for the overlay preview
-WINDOW_EVENTS = ("SessionStart", "UserPromptSubmit", "Stop", "Notification", "Interrupt")
 CONNECT_TIMEOUT = 0.1        # unknown hub state: a listening loopback port accepts in ms
 LIVE_CONNECT_TIMEOUT = 0.5   # hub.json names a live process: allow a busy accept loop
+ORDINARY_TIMEOUT = 2.0
+LOG_LIMIT = 512 * 1024
 
 
 _SURROGATE = None
@@ -58,9 +59,21 @@ def _home(home):
 
 def _log(home, agent, event, error):
     try:  # Best-effort diagnostics only; never change the hook's output.
-        with open(_home(home) / ".agentdeck" / "relay.log", "a", encoding="utf-8",
+        event = event if isinstance(event, dict) else {}
+        def field(value):
+            return " ".join(str(value).split()) if value not in (None, "") else "-"
+
+        name = field(event.get("hook_event_name"))
+        session = event.get("session_id") or event.get("thread_id") or event.get("conversation_id")
+        message = (type(error).__name__ + ": " + str(error)) if isinstance(error, BaseException) else str(error)
+        message = message.replace("\r", " ").replace("\n", " ")[:MESSAGE_LIMIT]
+        path = _home(home) / ".agentdeck" / "relay.log"
+        if path.exists() and path.stat().st_size >= LOG_LIMIT:
+            os.replace(path, path.with_name("relay.log.1"))
+        with open(path, "a", encoding="utf-8",
                   errors="backslashreplace") as log:
-            log.write("%s %s %r\n" % (agent, event.get("hook_event_name") if isinstance(event, dict) else None, error))
+            log.write("%s %s %s %s %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"),
+                                              field(agent), name, field(session)[:8], message))
     except Exception:
         pass
 
@@ -250,6 +263,13 @@ def find_agent_window(pid=None, *, processes=None, windows=None, started=None, m
 def _body(event, raw, full):
     if full:
         if raw is not None:
+            window = event.get("agentdeck_window")
+            if isinstance(window, dict):
+                stripped = raw.lstrip()
+                if stripped.startswith(b"{"):
+                    entry = b'"agentdeck_window":' + json.dumps(window, ensure_ascii=True).encode("ascii")
+                    comma = b"" if stripped[1:].lstrip().startswith(b"}") else b","
+                    return b"{" + entry + comma + stripped[1:]
             return raw  # exact hook bytes: no re-encoding of Chinese or lone surrogates
         return json.dumps(event, ensure_ascii=True).encode("ascii")
     slim = {key: event[key] for key in ORDINARY_KEYS if key in event}
@@ -259,8 +279,14 @@ def _body(event, raw, full):
         slim["title"] = event["title"][:MESSAGE_LIMIT]
     name = event.get("hook_event_name")
     # The overlay shows each session's latest line: the tail is what was said last.
-    if name == "Stop" and isinstance(event.get("last_assistant_message"), str):
+    if name in ("Stop", "StopFailure") and isinstance(event.get("last_assistant_message"), str):
         slim["last_assistant_message"] = event["last_assistant_message"][-TEXT_LIMIT:]
+    if name == "StopFailure":
+        for key, limit in (("error", 64), ("error_details", MESSAGE_LIMIT)):
+            if isinstance(event.get(key), str):
+                slim[key] = event[key][:limit]
+    if name == "SessionEnd" and isinstance(event.get("reason"), str):
+        slim["reason"] = event["reason"][:64]  # shown in /state recent_ended
     if name == "UserPromptSubmit" and isinstance(event.get("prompt"), str):
         slim["prompt"] = event["prompt"][-TEXT_LIMIT:]
     if name == "PreToolUse" and isinstance(event.get("tool_input"), dict):
@@ -308,7 +334,8 @@ def gate_failure(event, agent, home, reason):
         options.setdefault("protected_branches", PROTECTED_BRANCHES)
         risk = classify(tool_name, event.get("tool_input", {}), **options)
     except Exception as error:
-        _log(home, agent, event, "gate fallback classification failed: %r (%s)" % (error, reason))
+        _log(home, agent, event, "gate fallback classification failed: %s: %s (%s)" %
+             (type(error).__name__, error, reason))
         return None
     if risk in ("high", "critical"):
         return gate_denial("hub unavailable (%s); %s-risk operation blocked" % (reason, risk))
@@ -339,55 +366,73 @@ def relay(event, agent, *, port=47800, approve_timeout=110, home=None,
             return gate_failure(event, agent, home, "hub not running") if gate else None
         decision = gate or event.get("hook_event_name") == "PermissionRequest"
         window = None
+        found_window = None
         window_thread = None
-        # Tool events are the hot loop (two per tool call); the window rarely moves,
-        # so only turn-level events pay the ~10-40 ms process/window lookup.
-        if (not decision and event.get("hook_event_name") in WINDOW_EVENTS
-                and os.environ.get("AGENTDECK_NO_WINDOW") != "1"):  # timing-test opt-out
+        if os.environ.get("AGENTDECK_NO_WINDOW") != "1":  # timing-test opt-out
             if window_finder is None and connection_factory is None:
                 window_finder = find_agent_window
             if window_finder is not None:
                 def lookup_window():
-                    nonlocal window
+                    nonlocal found_window
                     try:
-                        window = window_finder()
+                        found_window = window_finder()
                     except Exception:
                         pass  # best-effort telemetry must never prevent hook forwarding
 
                 try:
-                    if connection_factory is None:
-                        # Toolhelp can take tens of ms on busy machines. Overlap it with
-                        # cold HTTP imports/connect, then join before serializing the event.
-                        from threading import Thread
-                        window_thread = Thread(target=lookup_window, daemon=True)
-                        window_thread.start()
-                    else:
-                        lookup_window()
+                    # Overlap every event's window lookup with cold HTTP imports/connect.
+                    from threading import Thread
+                    window_thread = Thread(target=lookup_window, daemon=True)
+                    window_thread.start()
                 except Exception:
                     window_thread = None
         if connection_factory is None:
             import http.client  # lazy: keeps the hub-down failure path fast
             connection_factory = http.client.HTTPConnection
-        connection = connection_factory("127.0.0.1", port, timeout=LIVE_CONNECT_TIMEOUT
-                                        if status == "up" else CONNECT_TIMEOUT)
+        deadline = None if decision else time.monotonic() + ORDINARY_TIMEOUT
+
+        def remaining():
+            budget = deadline - time.monotonic()
+            if budget <= 0:
+                raise TimeoutError("ordinary event exceeded 2 s budget")
+            return budget
+
+        connect_timeout = LIVE_CONNECT_TIMEOUT if status == "up" else CONNECT_TIMEOUT
+        if deadline is not None:
+            connect_timeout = min(connect_timeout, remaining())
+        connection = connection_factory("127.0.0.1", port, timeout=connect_timeout)
         connection.connect()
         if window_thread is not None:
-            window_thread.join()
+            window_thread.join(0.25 if decision else min(0.05, remaining()))
+            if not window_thread.is_alive():
+                window = found_window
         if isinstance(window, dict):
             event = dict(event, agentdeck_window=window)
         body = _body(event, raw, decision)
-        read_timeout = approve_timeout + 5 if decision else 5
-        if started is not None:
+        read_timeout = approve_timeout + 5 if decision else None
+        if decision and started is not None:
             # One budget from hook start: the agent's own timeout is 120 s.
             read_timeout = max(0.5, read_timeout - max(0.0, time.monotonic() - started))
-        connection.sock.settimeout(read_timeout)
+        connection_socket = connection.sock
+        connection_socket.settimeout(read_timeout if decision else remaining())
         connection.request("POST", "/event?agent=" + agent + ("&gate=1" if gate else ""), body=body,
                            headers={"Content-Type": "application/json",
                                     "X-AgentDeck-Token": token})
+        connection_socket.settimeout(read_timeout if decision else remaining())
         response = connection.getresponse()
+        connection_socket.settimeout(read_timeout if decision else remaining())
         raw_response = response.read()
+        if response.status != 200:
+            try:
+                decoded = json.loads(raw_response)
+                error = decoded.get("error", "") if isinstance(decoded, dict) else ""
+            except (ValueError, TypeError):
+                error = ""
+            _log(home, agent, event, "hub status %s: %s" % (response.status,
+                 str(error).replace("\r", " ").replace("\n", " ")[:100]))
+            return gate_failure(event, agent, home, "bad hub response") if gate else None
         decoded = json.loads(raw_response)
-        if response.status != 200 or not isinstance(decoded, dict):
+        if not isinstance(decoded, dict):
             return gate_failure(event, agent, home, "bad hub response") if gate else None
         if gate and decoded != {}:
             output = decoded.get("hookSpecificOutput")
@@ -439,7 +484,7 @@ def main(argv=None, *, stdin=None, stdout=None):
                        raw=data, started=started)
     except Exception as error:
         result = None  # unparseable input: cannot classify, do not block
-        _log(args.home, args.agent, None, "invalid hook input or relay failure: %r" % error)
+        _log(args.home, args.agent, None, error)
     try:
         if result is not None:
             output = sys.stdout if stdout is None else stdout

@@ -3,8 +3,11 @@ import io
 import json
 import os
 from pathlib import Path
+import re
+import socket
 import subprocess
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import Mock, patch
@@ -16,7 +19,6 @@ RISKY = {"hook_event_name": "PreToolUse", "tool_name": "Bash",
          "tool_input": {"command": "git push --force origin main"}}
 CURL_SH = dict(RISKY, tool_input={"command": "curl x | sh"})
 SAFE = dict(RISKY, tool_input={"command": "ls"})
-# Turn-level event: the relay looks up the agent window only for these.
 TURN = {"hook_event_name": "UserPromptSubmit", "session_id": "s1", "prompt": "继续"}
 
 
@@ -233,27 +235,27 @@ class RelayWindowTests(unittest.TestCase):
         self.assertNotIn("agentdeck_window", event)
         finder.assert_called_once_with()
 
-    def test_permission_and_gate_keep_exact_bytes_without_finding_windows(self):
-        finder = Mock(side_effect=AssertionError("decision path must not enumerate windows"))
+    def test_permission_and_gate_inject_window_preserving_other_bytes(self):
+        finder = Mock(return_value=self.window)
         for gate, name in ((False, "PermissionRequest"), (True, "PreToolUse")):
             with self.subTest(gate=gate):
                 raw = (' { "hook_event_name": "%s", "tool_name": "Bash", '
                        '"cwd": "D:/项目", "tool_input": {"command": "ls"} }\n' % name).encode("utf-8")
                 self.assertEqual(self.forward(json.loads(raw), raw=raw, gate=gate, window_finder=finder), b"{}")
-                self.assertEqual(self.connection.request_data[2], raw)
-                self.assertNotIn("agentdeck_window", json.loads(self.connection.request_data[2]))
-        finder.assert_not_called()
+                sent = self.connection.request_data[2]
+                self.assertEqual(json.loads(sent)["agentdeck_window"], self.window)
+                prefix = b'{"agentdeck_window":' + json.dumps(self.window).encode("ascii") + b","
+                self.assertEqual(sent, prefix + raw.lstrip()[1:])
+                self.assertNotIn("agentdeck_window", json.loads(raw))
+        self.assertEqual(finder.call_count, 2)
 
-    def test_tool_events_skip_the_lookup(self):
+    def test_tool_events_also_include_window(self):
         finder = Mock(return_value=self.window)
         for name in ("PreToolUse", "PostToolUse", "PostToolUseFailure"):
             with self.subTest(name=name):
                 self.assertEqual(self.forward(dict(SAFE, hook_event_name=name), window_finder=finder), b"{}")
-                self.assertNotIn("agentdeck_window", json.loads(self.connection.request_data[2]))
-        finder.assert_not_called()
-        for name in hub_relay.WINDOW_EVENTS:
-            self.forward(dict(TURN, hook_event_name=name), window_finder=finder)
-        self.assertEqual(finder.call_count, len(hub_relay.WINDOW_EVENTS))
+                self.assertEqual(json.loads(self.connection.request_data[2])["agentdeck_window"], self.window)
+        self.assertEqual(finder.call_count, 3)
 
     def test_injected_transport_skips_default_finder(self):
         with patch.object(hub_relay, "find_agent_window", side_effect=AssertionError("real desktop")) as finder:
@@ -315,6 +317,35 @@ class RelayWindowTests(unittest.TestCase):
                                   stdin=io.StringIO(json.dumps(TURN)), stdout=output)
         self.assertEqual((code, output.getvalue()), (0, "{}"))
         self.assertEqual(json.loads(self.connection.request_data[2])["hook_event_name"], "UserPromptSubmit")
+
+    def test_raw_window_injection_handles_empty_object_and_non_object(self):
+        event = {"agentdeck_window": self.window}
+        for raw in (b"{}", b" \t{ \r\n }\n"):
+            sent = hub_relay._body(event, raw, True)
+            self.assertEqual(json.loads(sent), event)
+            self.assertTrue(sent.endswith(raw.lstrip()[1:]))
+            self.assertNotIn(b",", sent[len(b'{"agentdeck_window":') +
+                                        len(json.dumps(self.window).encode("ascii")):])
+        for raw in (b" [] ", b"oops"):
+            self.assertEqual(hub_relay._body(event, raw, True), raw)
+
+    def test_window_lookup_timeout_omits_metadata_without_delaying_forwarding(self):
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def blocked_finder():
+            release.wait(3)
+            return self.window
+
+        for gate, name, limit in ((False, "PreToolUse", 0.15),
+                                  (False, "PermissionRequest", 0.4),
+                                  (True, "PreToolUse", 0.4)):
+            with self.subTest(gate=gate, name=name):
+                started = time.monotonic()
+                self.assertEqual(self.forward(dict(SAFE, hook_event_name=name),
+                                              gate=gate, window_finder=blocked_finder), b"{}")
+                self.assertLess(time.monotonic() - started, limit)
+                self.assertNotIn("agentdeck_window", json.loads(self.connection.request_data[2]))
 
 
 class RelayTests(unittest.TestCase):
@@ -444,7 +475,8 @@ class RelayTests(unittest.TestCase):
             self.assertTrue(connection.closed)
             result = hub_relay.relay({"hook_event_name": "Stop"}, "cc", home=home,
                                      connection_factory=factory)
-            self.assertEqual(connection.read_timeout, 5)
+            self.assertGreater(connection.read_timeout, 0)
+            self.assertLessEqual(connection.read_timeout, 2)
             connection.status = 401
             self.assertIsNone(hub_relay.relay({}, "cc", home=home, connection_factory=factory))
             connection.status, connection.raw = 200, b"not json"
@@ -527,6 +559,142 @@ class RelayTests(unittest.TestCase):
                 "print(any(m in sys.modules for m in ('serial','tkinter','usb','hub','daemon')))" %
                 str(Path(hub_relay.__file__).parent)], capture_output=True, text=True, timeout=10)
             self.assertEqual(check.stdout.strip(), "False")
+
+
+class RelayHardeningTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.home = Path(directory.name)
+        self.data = self.home / ".agentdeck"
+        self.data.mkdir()
+        (self.data / "token").write_text("test-token", encoding="utf-8")
+
+    def test_log_format_truncation_and_no_stdin_payload(self):
+        event = {"hook_event_name": "StopFailure", "session_id": "abcdefgh-rest",
+                 "tool_input": "private-stdin-never-log", "last_assistant_message": "also-private"}
+        hub_relay._log(self.home, "cc", event, ValueError("first\r\n" + "x" * 400))
+        line = (self.data / "relay.log").read_text(encoding="utf-8").rstrip("\n")
+        prefix = r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} cc StopFailure abcdefgh "
+        self.assertRegex(line, prefix)
+        message = re.sub(prefix, "", line)
+        self.assertEqual(len(message), 300)
+        self.assertTrue(message.startswith("ValueError: first  "))
+        self.assertNotIn("private", line)
+        self.assertNotIn("\r", line)
+        hub_relay._log(self.home, None, None, "missing")
+        last = (self.data / "relay.log").read_text(encoding="utf-8").splitlines()[-1]
+        self.assertRegex(last, r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} - - - missing$")
+
+    def test_log_rotates_at_512_kib_and_replaces_previous_backup(self):
+        path = self.data / "relay.log"
+        backup = self.data / "relay.log.1"
+        backup.write_text("old backup", encoding="utf-8")
+        path.write_bytes(b"x" * (512 * 1024 - 1))
+        hub_relay._log(self.home, "cx", {}, "cross threshold")
+        self.assertEqual(backup.read_text(encoding="utf-8"), "old backup")
+        previous = path.read_bytes()
+        hub_relay._log(self.home, "cx", {}, "new file")
+        self.assertEqual(backup.read_bytes(), previous)
+        self.assertTrue(path.read_text(encoding="utf-8").endswith("cx - - new file\n"))
+
+    def test_malformed_stdin_logs_only_exception_without_input_bytes(self):
+        private_input = "secret stdin payload\nnot-json"
+        output = io.StringIO()
+        self.assertEqual(hub_relay.main(["--agent", "cc", "--home", str(self.home)],
+            stdin=io.StringIO(private_input), stdout=output), 0)
+        self.assertEqual(output.getvalue(), "")
+        line = (self.data / "relay.log").read_text(encoding="utf-8")
+        self.assertIn(" cc - - JSONDecodeError: ", line)
+        self.assertNotIn("secret", line)
+        self.assertNotIn("not-json", line)
+
+    def test_non_200_status_and_capped_error_are_logged(self):
+        connection = Connection("127.0.0.1", 1, 0.1)
+        connection.status = 429
+        connection.raw = json.dumps({"error": "e" * 120, "private": "never-log-response"}).encode("ascii")
+        self.assertIsNone(hub_relay.relay(dict(TURN, session_id="session12345"), "cc", home=self.home,
+            connection_factory=lambda *args, **kwargs: connection))
+        line = (self.data / "relay.log").read_text(encoding="utf-8")
+        self.assertIn("cc UserPromptSubmit session1 hub status 429: " + "e" * 100 + "\n", line)
+        self.assertNotIn("e" * 101, line)
+        self.assertNotIn("private", line)
+        connection.raw = b"not-json"
+        hub_relay.relay(TURN, "cc", home=self.home, connection_factory=lambda *args, **kwargs: connection)
+        self.assertIn("hub status 429:", (self.data / "relay.log").read_text(encoding="utf-8"))
+
+    def test_stop_failure_and_agent_id_are_forwarded_with_caps(self):
+        event = {"hook_event_name": "StopFailure", "session_id": "s", "agent_id": "child-1",
+                 "error": "e" * 100, "error_details": "d" * 600,
+                 "last_assistant_message": "discard-prefix" + "尾" * 4000,
+                 "tool_response": "private-large-response"}
+        body = json.loads(hub_relay._body(event, None, False))
+        self.assertEqual(body["agent_id"], "child-1")
+        self.assertEqual(body["error"], "e" * 64)
+        self.assertEqual(body["error_details"], "d" * 300)
+        self.assertEqual(body["last_assistant_message"], "尾" * 4000)
+        self.assertNotIn("tool_response", body)
+        for name in ("PreToolUse", "PostToolUse", "PostToolUseFailure"):
+            self.assertEqual(json.loads(hub_relay._body(dict(event, hook_event_name=name), None, False))["agent_id"],
+                             "child-1")
+
+    def test_session_end_reason_is_forwarded_capped_and_only_for_session_end(self):
+        event = {"hook_event_name": "SessionEnd", "session_id": "s", "reason": "r" * 100,
+                 "transcript_path": "C:/private/transcript.jsonl"}
+        body = json.loads(hub_relay._body(event, None, False))
+        self.assertEqual(body["reason"], "r" * 64)
+        self.assertNotIn("transcript_path", body)
+        self.assertNotIn("reason", json.loads(hub_relay._body(dict(event, hook_event_name="Stop"), None, False)))
+        self.assertNotIn("reason", json.loads(hub_relay._body(dict(event, reason=5), None, False)))
+
+    def test_ordinary_socket_timeouts_share_one_deadline(self):
+        connection = Connection("127.0.0.1", 1, 0.1)
+        timeouts = []
+        connection.settimeout = timeouts.append
+        ticks = iter([10, 10.1, 10.4, 10.9, 11.6])
+        with patch.object(hub_relay.time, "monotonic", side_effect=lambda: next(ticks)):
+            self.assertIsNotNone(hub_relay.relay(TURN, "cc", home=self.home,
+                connection_factory=lambda *args, **kwargs: connection))
+        self.assertEqual(len(timeouts), 3)
+        for actual, expected in zip(timeouts, (1.6, 1.1, 0.4)):
+            self.assertAlmostEqual(actual, expected)
+
+    def test_hub_accepting_but_never_replying_returns_within_2_5_seconds(self):
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        listener.settimeout(5)
+        release = threading.Event()
+        failures = []
+
+        def stall():
+            try:
+                with listener.accept()[0] as connection:
+                    connection.recv(65536)
+                    release.wait(5)
+            except Exception as error:
+                failures.append(error)
+
+        thread = threading.Thread(target=stall, daemon=True)
+        thread.start()
+        port = listener.getsockname()[1]
+        (self.data / "hub.json").write_text(json.dumps({"pid": os.getpid(), "port": port}), encoding="utf-8")
+        environment = dict(os.environ, AGENTDECK_NO_WINDOW="1")
+        began = time.monotonic()
+        try:
+            process = subprocess.run(["D:/conda/miniconda3/python.exe", "-X", "utf8", hub_relay.__file__,
+                "--agent", "cc", "--home", str(self.home), "--port", str(port)],
+                input=json.dumps(TURN).encode("utf-8"), capture_output=True, timeout=4, env=environment,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            elapsed = time.monotonic() - began
+        finally:
+            release.set()
+            listener.close()
+            thread.join(2)
+        self.assertEqual(failures, [])
+        self.assertEqual((process.returncode, process.stdout, process.stderr), (0, b"", b""))
+        self.assertLessEqual(elapsed, 2.5)
+        self.assertIn("TimeoutError:", (self.data / "relay.log").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

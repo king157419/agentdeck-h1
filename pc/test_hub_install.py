@@ -17,6 +17,127 @@ import hub_install
 
 
 class InstallTests(unittest.TestCase):
+    def test_bundled_stop_failure_uses_the_regular_claude_exec_shape(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(hub_install.sys, "frozen", True, create=True), \
+                patch.object(hub_install.sys, "executable", str(Path(directory) / "AgentDeck.exe")):
+            hooks = hub_install.updated({}, "install", "cc")["hooks"]
+        failure = hooks["StopFailure"][0]["hooks"][0]
+        self.assertEqual(failure, hooks["Stop"][0]["hooks"][0])
+        self.assertEqual(set(failure), {"type", "command", "args", "timeout"})
+        self.assertEqual(failure["args"], ["--agent", "cc"])
+        self.assertEqual(failure["timeout"], 10)
+        self.assertNotIn("StopFailure", hub_install.EVENTS["cx"])
+
+    def test_global_status_missing_events_only_counts_own_regular_agent_hooks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            executable = home / "AgentDeck.exe"
+            executable.with_name("AgentDeck-relay.exe").touch()
+            with patch.object(hub_install.sys, "frozen", True, create=True), \
+                    patch.object(hub_install.sys, "executable", str(executable)):
+                empty = hub_install.global_status(home=home)
+                self.assertEqual(empty["missing_events"], {"cc": [], "cx": []})
+                self.assertFalse(empty["needs_repair"])
+                for agent, folders in hub_install.TARGETS.items():
+                    path = home.joinpath(*folders)
+                    path.parent.mkdir()
+                    data = hub_install.updated({}, "install", agent, gate=True)
+                    if agent == "cc":
+                        del data["hooks"]["StopFailure"]
+                        # A foreign hook or our other agent's hook cannot fill a gap.
+                        data["hooks"]["Notification"] = [{"hooks": [
+                            {"type": "command", "command": "python foreign.py"},
+                            {"type": "command", **hub_install.hook_fields("cx")}]}]
+                        data["hooks"]["PreToolUse"] = [group for group in data["hooks"]["PreToolUse"]
+                            if any(hub_install.is_gate(entry) for entry in group["hooks"])]
+                    path.write_text(json.dumps(data), encoding="utf-8")
+                status = hub_install.global_status(home=home)
+                self.assertEqual(status["missing_events"], {
+                    "cc": ["PreToolUse", "Notification", "StopFailure"], "cx": []})
+                self.assertTrue(status["enabled"])
+                self.assertTrue(status["needs_repair"])
+                self.assertFalse(status["shell_form"])
+                self.assertEqual(status["missing_paths"], [])
+                self.assertEqual(status["errors"], [])
+            # Source installs report missing events without requesting an exe repair.
+            self.assertFalse(hub_install.global_status(home=home)["needs_repair"])
+
+    def test_missing_claude_events_do_not_repair_while_codex_hooks_are_off(self):
+        # Repair runs apply("install") for both agents; it must not add Codex
+        # hooks the user never installed (they would also need Codex trust).
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            executable = home / "AgentDeck.exe"
+            executable.with_name("AgentDeck-relay.exe").touch()
+            with patch.object(hub_install.sys, "frozen", True, create=True), \
+                    patch.object(hub_install.sys, "executable", str(executable)):
+                path = home.joinpath(*hub_install.TARGETS["cc"])
+                path.parent.mkdir()
+                data = hub_install.updated({}, "install", "cc")
+                del data["hooks"]["StopFailure"]
+                path.write_text(json.dumps(data), encoding="utf-8")
+                status = hub_install.global_status(home=home)
+            self.assertFalse(status["enabled"])
+            self.assertFalse(status["needs_repair"])
+            self.assertEqual(status["missing_events"], {"cc": ["StopFailure"], "cx": []})
+
+    def test_missing_codex_events_do_not_trigger_bundled_repair(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            executable = home / "AgentDeck.exe"
+            executable.with_name("AgentDeck-relay.exe").touch()
+            with patch.object(hub_install.sys, "frozen", True, create=True), \
+                    patch.object(hub_install.sys, "executable", str(executable)):
+                for agent, folders in hub_install.TARGETS.items():
+                    path = home.joinpath(*folders)
+                    path.parent.mkdir()
+                    data = hub_install.updated({}, "install", agent)
+                    if agent == "cx":
+                        del data["hooks"]["Stop"]
+                    path.write_text(json.dumps(data), encoding="utf-8")
+                status = hub_install.global_status(home=home)
+            self.assertEqual(status["missing_events"], {"cc": [], "cx": ["Stop"]})
+            self.assertTrue(status["enabled"])
+            self.assertFalse(status["needs_repair"])
+
+    def test_claude_stop_failure_repair_never_writes_matching_codex_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            executable = home / "AgentDeck.exe"
+            executable.with_name("AgentDeck-relay.exe").touch()
+            with patch.object(hub_install.sys, "frozen", True, create=True), \
+                    patch.object(hub_install.sys, "executable", str(executable)):
+                for agent, folders in hub_install.TARGETS.items():
+                    path = home.joinpath(*folders)
+                    path.parent.mkdir()
+                    data = hub_install.updated({}, "install", agent, gate=True)
+                    if agent == "cc":
+                        del data["hooks"]["StopFailure"]
+                    path.write_bytes(b"\xef\xbb\xbf" + (json.dumps(data, indent=3) + "\r\n").encode("utf-8"))
+                cc = home.joinpath(*hub_install.TARGETS["cc"])
+                cx = home.joinpath(*hub_install.TARGETS["cx"])
+                original = cx.read_bytes()
+                modified = cx.stat().st_mtime_ns
+                replace = hub_install.os.replace
+                copy2 = hub_install.shutil.copy2
+
+                def checked_replace(source, target):
+                    self.assertEqual(Path(target), cc)
+                    return replace(source, target)
+
+                def checked_backup(source, target):
+                    self.assertEqual(Path(source), cc)
+                    return copy2(source, target)
+
+                with patch.object(hub_install.os, "replace", side_effect=checked_replace), \
+                        patch.object(hub_install.shutil, "copy2", side_effect=checked_backup):
+                    self.assertEqual(hub_install.apply("install", home=home, output=io.StringIO()), [cc])
+                self.assertEqual(cx.read_bytes(), original)
+                self.assertEqual(cx.stat().st_mtime_ns, modified)
+                self.assertEqual(list(cx.parent.glob("*.bak-agentdeck-*")), [])
+                self.assertEqual(hub_install.global_status(home=home)["missing_events"], {"cc": [], "cx": []})
+
     def test_default_python_is_the_running_interpreter(self):
         with patch.object(hub_install.sys, "platform", "darwin"), \
                 patch.object(hub_install.sys, "executable", "C:/active env/python.exe"):
@@ -614,7 +735,7 @@ class LegacyWindowsInstallTests(unittest.TestCase):
                             self.assertEqual(hub_install.command(agent, **options).encode("utf-8"),
                                              self.legacy.command(agent, **options).encode("utf-8"))
 
-    def test_windows_global_reinstall_of_pre_mac_config_never_writes(self):
+    def test_windows_global_reinstall_of_pre_mac_codex_config_never_writes(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             snapshots = {}
@@ -631,7 +752,8 @@ class LegacyWindowsInstallTests(unittest.TestCase):
                 with patch.object(hub_install.sys, "executable", r"C:\another python\python.exe"), \
                         patch.object(hub_install.os, "replace", side_effect=AssertionError("reinstall wrote config")), \
                         patch.object(hub_install.shutil, "copy2", side_effect=AssertionError("reinstall made backup")):
-                    self.assertEqual(hub_install.apply("install", home=home, gate=True, output=output), [])
+                    self.assertEqual(hub_install.apply("install", home=home, agents=("cx",),
+                                                       gate=True, output=output), [])
             self.assertEqual(output.getvalue(), "")
             self.assertEqual({path: path.read_bytes() for path in snapshots}, snapshots)
             self.assertEqual(list(home.rglob("*.bak-agentdeck-*")), [])

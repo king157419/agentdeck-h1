@@ -38,6 +38,42 @@ class OverlayModelTests(unittest.TestCase):
                 slot = display_model({"sessions": [{"slot": 1, "state": state}]})["slots"][0]
                 self.assertEqual((slot["label"], slot["color"]), (expected, COLORS[expected]))
 
+    def test_disconnected_deck_notice_and_raw_driver_priority(self):
+        for reader in ("absent", None, "usb"):
+            with self.subTest(reader=reader):
+                state = {"deck_connected": False, "input_reader": reader}
+                model = display_model(state)
+                self.assertEqual(model["notice"], "宏键盘未连接 · 批准请在应用里点")
+                self.assertFalse(model["notice_action"])
+        raw = display_model({"deck_connected": False, "input_reader": "raw"})
+        self.assertIn("Zadig", raw["notice"])
+        self.assertTrue(raw["notice_action"])
+
+    def test_snapshots_without_deck_connected_keep_legacy_notice(self):
+        self.assertEqual(display_model({"input_reader": "absent"})["notice"], "没检测到宏键盘")
+        self.assertEqual(display_model({})["notice"], "")
+        self.assertIn("Zadig", display_model({"input_reader": "raw"})["notice"])
+        self.assertEqual(display_model({"deck_connected": True, "input_reader": "usb"})["notice"], "")
+
+    def test_passthrough_and_error_row_hints_preserve_source(self):
+        state = {"hold_active": False, "sessions": [
+            {"slot": 1, "state": "wait", "native_wait": True},
+            {"slot": 2, "state": "error", "label": "出错：rate_limit"},
+            {"slot": 3, "state": "wait"},
+            {"slot": 4, "state": "wait", "needs_answer": "AskUserQuestion"},
+        ]}
+        before = deepcopy(state)
+        slots = display_model(state)["slots"]
+        self.assertEqual([slot["hint"] for slot in slots[:4]],
+                         ["在应用里批准", "出错：rate_limit", "", "需回答"])
+        self.assertEqual(slots[1]["label"], "ERR")
+        self.assertEqual(slots[1]["color"], COLORS["ERR"])
+        self.assertEqual(state, before)
+        state["hold_active"] = True
+        self.assertEqual(display_model(state)["slots"][0]["hint"], "")
+        state.pop("hold_active")
+        self.assertEqual(display_model(state)["slots"][0]["hint"], "")
+
     def test_only_displayed_request_appears_and_summary_is_at_most_80(self):
         model = display_model({"displayed_request_id": "shown", "pending": [
             {"id": "other", "summary": "other"},
@@ -184,6 +220,23 @@ class OverlayActionsTests(unittest.TestCase):
             bg=COLORS["RUN"], fg=BACKGROUND, cursor="hand2")
         self.overlay.decision_buttons["deny"].configure.assert_called_once_with(
             bg=theme.RAISED, fg=COLORS["ERR"], cursor="hand2")
+
+    def test_existing_labels_render_passthrough_error_and_disconnected_hints(self):
+        self.overlay.rows = [(Mock(), Mock(), Mock(), Mock()) for _ in range(6)]
+        self.overlay.notice_label = Mock()
+        self.overlay.model = display_model({"deck_connected": False, "hold_active": False,
+                                           "sessions": [
+            {"slot": 1, "name": "app", "state": "wait", "native_wait": True},
+            {"slot": 2, "name": "api", "state": "error", "label": "出错：rate_limit"},
+        ]})
+        self.overlay._render()
+        self.overlay.rows[0][2].configure.assert_called_once_with(
+            text="app · 在应用里批准", bg=BACKGROUND, fg=COLORS["ASK"])
+        self.overlay.rows[1][2].configure.assert_called_once_with(
+            text="api · 出错：rate_limit", bg=BACKGROUND, fg=FOREGROUND)
+        self.overlay.notice_label.configure.assert_called_once_with(
+            text="宏键盘未连接 · 批准请在应用里点", fg=theme.MUTED, cursor="arrow")
+        self.overlay.notice_label.grid.assert_called_once_with()
 
     def test_slot_clicks_work_without_keyboard(self):
         self.overlay.model = display_model({"sessions": [{"slot": 4, "name": "app"}]})

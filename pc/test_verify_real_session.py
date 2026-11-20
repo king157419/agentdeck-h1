@@ -29,7 +29,7 @@ import verify_real_session as vrs
 
 
 @contextmanager
-def temporary_hub_server(require_nonce=False):
+def temporary_hub_server(require_nonce=False, *, approve_timeout=5.0):
     """Isolated loopback Hub HTTP server on an ephemeral port (no LCD/desktop)."""
     with tempfile.TemporaryDirectory(prefix="agentdeck-verify-test-") as temp:
         home = Path(temp) / "home"
@@ -37,7 +37,7 @@ def temporary_hub_server(require_nonce=False):
         token = hub.load_token(home)
         engine = hub.Hub(
             home=home,
-            approve_timeout=5.0,
+            approve_timeout=approve_timeout,
             lcd_enabled=False,
             desktop_enabled=False,
             sender=lambda lines, **kw: None,
@@ -553,7 +553,9 @@ class VerifyRealSessionTests(unittest.TestCase):
                 self.assertEqual(ev["status"], "通过", "scenario %s should have passed" % slug)
 
     def test_other_concurrent_session_on_hub_is_not_touched(self):
-        with temporary_hub_server() as (engine, port, home):
+        # This request must outlive the complete five-scenario verifier run;
+        # its approval timeout is independent of the isolation being tested.
+        with temporary_hub_server(approve_timeout=30.0) as (engine, port, home):
             foreign_done = threading.Event()
             foreign_result = []
 
@@ -564,7 +566,7 @@ class VerifyRealSessionTests(unittest.TestCase):
                     "hook_event_name": "PermissionRequest",
                     "tool_name": "Bash",
                     "tool_input": {"command": "pytest"},
-                }, "cc", port=port, home=home, approve_timeout=4.0)
+                }, "cc", port=port, home=home, approve_timeout=30.0, window_finder=lambda: None)
                 foreign_result.append(res)
                 foreign_done.set()
 
@@ -707,7 +709,7 @@ class VerifyRealSessionTests(unittest.TestCase):
 
     def test_foreign_session_on_same_cwd_is_strictly_ignored_and_untouched(self):
         """A concurrent session in the SAME cwd (agent='cc', foreign session_id) is NOT touched."""
-        with temporary_hub_server() as (engine, port, home):
+        with temporary_hub_server(approve_timeout=30.0) as (engine, port, home):
             foreign_done = threading.Event()
             foreign_res = []
 
@@ -718,7 +720,7 @@ class VerifyRealSessionTests(unittest.TestCase):
                     "hook_event_name": "PermissionRequest",
                     "tool_name": "Bash",
                     "tool_input": {"command": "rm -rf /dangerous/foreign/path"},
-                }, "cc", port=port, home=home, approve_timeout=4.0)
+                }, "cc", port=port, home=home, approve_timeout=30.0, window_finder=lambda: None)
                 foreign_res.append(res)
                 foreign_done.set()
 
@@ -752,7 +754,7 @@ class VerifyRealSessionTests(unittest.TestCase):
 
     def test_foreign_session_wrong_agent_same_cwd_is_strictly_ignored(self):
         """A foreign session on same cwd with agent='cx' is strictly ignored."""
-        with temporary_hub_server() as (engine, port, home):
+        with temporary_hub_server(approve_timeout=30.0) as (engine, port, home):
             foreign_done = threading.Event()
 
             def foreign_hook():
@@ -762,7 +764,7 @@ class VerifyRealSessionTests(unittest.TestCase):
                     "hook_event_name": "PermissionRequest",
                     "tool_name": "Bash",
                     "tool_input": {"command": "echo foreign_cx"},
-                }, "cx", port=port, home=home, approve_timeout=4.0)
+                }, "cx", port=port, home=home, approve_timeout=30.0, window_finder=lambda: None)
                 foreign_done.set()
 
             t = threading.Thread(target=foreign_hook, daemon=True)

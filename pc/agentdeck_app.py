@@ -1,5 +1,6 @@
 """Windows tray entry point. Importing it never starts Hub or native interfaces."""
 import argparse
+import codecs
 import errno
 import io
 import json
@@ -8,12 +9,15 @@ from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
 from queue import Empty, SimpleQueue
+import re
 import shutil
 import socket
 import subprocess
 import sys
 import tempfile
 import threading
+from xml.etree import ElementTree
+from xml.sax.saxutils import escape
 
 import agentdeck_theme as theme
 import hub
@@ -244,44 +248,330 @@ def launch_command(background=False):
     return subprocess.list2cmdline(parts + (["--background"] if background else []))
 
 
+def launch_target(background=False):
+    if getattr(sys, "frozen", False):
+        program = Path(sys.executable).resolve()
+        return program, "--background" if background else "", program.parent
+    script = Path(__file__).resolve()
+    program = Path(sys.executable).with_name("pythonw.exe")
+    arguments = subprocess.list2cmdline([str(script)] + (["--background"] if background else []))
+    return program, arguments, script.parent
+
+
+def oem_encoding():
+    """schtasks exports bytes in the console OEM code page, even for XML."""
+    if os.name == "nt":
+        import ctypes
+        return "cp%d" % ctypes.windll.kernel32.GetOEMCP()
+    return "cp437"
+
+
+class SchTasks:
+    def __init__(self):
+        self.last_error = None
+        self.last_returncode = None
+
+    def _run(self, arguments):
+        program = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "schtasks.exe")
+        result = subprocess.run([program] + arguments, creationflags=0x08000000,
+                                capture_output=True, timeout=15)
+        self.last_returncode = result.returncode
+        self.last_error = result.stderr.decode(oem_encoding(), errors="replace").strip() or None
+        return result
+
+    def query(self, name):
+        result = self._run(["/Query", "/TN", name, "/XML", "ONE"])
+        if result.returncode:
+            return None
+        return result.stdout.decode(oem_encoding(), errors="replace")
+
+    def create(self, name, xml_text):
+        path = None
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".xml") as output:
+                path = Path(output.name)
+                output.write(codecs.BOM_UTF16_LE + xml_text.encode("utf-16-le"))
+            result = self._run(["/Create", "/XML", str(path), "/TN", name, "/F"])
+            if result.returncode:
+                raise RuntimeError(self.last_error or "schtasks /Create：%s" % result.returncode)
+        finally:
+            if path is not None:
+                path.unlink(missing_ok=True)
+
+    def delete(self, name):
+        result = self._run(["/Delete", "/TN", name, "/F"])
+        if result.returncode:
+            error = self.last_error
+            if self.query(name) is not None:
+                raise RuntimeError(error or "schtasks /Delete：%s" % result.returncode)
+
+
+def current_user_sid():
+    """Read the process token; never shell out or request elevated access."""
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel.GetCurrentProcess.argtypes = []
+    kernel.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    kernel.LocalFree.argtypes = [wintypes.HLOCAL]
+    kernel.LocalFree.restype = wintypes.HLOCAL
+    advapi.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+    advapi.OpenProcessToken.restype = wintypes.BOOL
+    advapi.GetTokenInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID,
+                                          wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+    advapi.GetTokenInformation.restype = wintypes.BOOL
+    advapi.ConvertSidToStringSidW.argtypes = [wintypes.LPVOID, ctypes.POINTER(wintypes.LPWSTR)]
+    advapi.ConvertSidToStringSidW.restype = wintypes.BOOL
+    token = wintypes.HANDLE()
+    if not advapi.OpenProcessToken(kernel.GetCurrentProcess(), 0x0008, ctypes.byref(token)):  # TOKEN_QUERY
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        size = wintypes.DWORD()
+        advapi.GetTokenInformation(token, 1, None, 0, ctypes.byref(size))  # TokenUser
+        if not size.value:
+            raise ctypes.WinError(ctypes.get_last_error())
+        buffer = ctypes.create_string_buffer(size.value)
+        if not advapi.GetTokenInformation(token, 1, buffer, size, ctypes.byref(size)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        # TOKEN_USER begins with SID_AND_ATTRIBUTES, whose first field is PSID.
+        sid = ctypes.cast(buffer, ctypes.POINTER(wintypes.LPVOID))[0]
+        text = wintypes.LPWSTR()
+        if not advapi.ConvertSidToStringSidW(sid, ctypes.byref(text)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            return text.value
+        finally:
+            kernel.LocalFree(ctypes.cast(text, wintypes.HLOCAL))
+    finally:
+        kernel.CloseHandle(token)
+
+
+TASK_NS = {"t": "http://schemas.microsoft.com/windows/2004/02/mit/task"}
+
+
+def task_xml(target, sid):
+    program, arguments, directory = (escape(str(value)) for value in target)
+    sid = escape(str(sid))
+    return """<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Author>AgentDeck</Author><Description>AgentDeck：登录后在后台启动托盘和浮窗</Description></RegistrationInfo>
+  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>%s</UserId><Delay>PT10S</Delay></LogonTrigger></Triggers>
+  <Principals><Principal id="Author"><UserId>%s</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate><StartWhenAvailable>false</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <IdleSettings><StopOnIdleEnd>false</StopOnIdleEnd><RestartOnIdle>false</RestartOnIdle></IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand><Enabled>true</Enabled><Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle><WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit><Priority>4</Priority>
+  </Settings>
+  <Actions Context="Author"><Exec><Command>%s</Command><Arguments>%s</Arguments><WorkingDirectory>%s</WorkingDirectory></Exec></Actions>
+</Task>""" % (sid, sid, program, arguments, directory)
+
+
+def task_matches(xml_text, target):
+    try:
+        root = ElementTree.fromstring(re.sub(r"<\?xml\b.*?\?>", "", xml_text, count=1, flags=re.DOTALL))
+        if root.findtext("t:Settings/t:Enabled", default="true", namespaces=TASK_NS).strip().lower() == "false":
+            return False
+        triggers = root.findall("t:Triggers/t:LogonTrigger", TASK_NS)
+        if not any(trigger.findtext("t:Enabled", default="true", namespaces=TASK_NS).strip().lower() != "false"
+                   for trigger in triggers):
+            return False
+        expected = str(target[0]).encode(oem_encoding(), "replace").decode(oem_encoding())
+        for action in root.findall("t:Actions/t:Exec", TASK_NS):
+            command = action.findtext("t:Command", default="", namespaces=TASK_NS).strip().strip('"')
+            arguments = action.findtext("t:Arguments", default="", namespaces=TASK_NS).strip()
+            if os.path.normcase(command) == os.path.normcase(expected) and arguments == str(target[1]).strip():
+                return True
+    except (ElementTree.ParseError, TypeError, ValueError):
+        pass
+    return False
+
+
 class AutoStart:
-    def __init__(self, registry=None, command=None):
-        if registry is None:
-            import winreg
-            registry = winreg
+    def __init__(self, registry=None, command=None, *, target=None, scheduler=None, sid=None, home=None):
         self.registry = registry
         self.legacy = launch_command() if command is None else None
         self.command = launch_command(background=True) if command is None else command
+        self.target = launch_target(True) if target is None else target
+        self.quoted = ('"%s" %s' % (self.target[0], self.target[1])).strip()
+        self.quoted_legacy = ('"%s" %s' % (self.target[0], str(self.target[1]).removesuffix("--background").strip())).strip()
+        self.scheduler = scheduler
+        self.sid = sid
+        self.lock = threading.Lock()
+        self.mode = self.reason = self.error = self.blocked = None
+        self.checked = False
+        if home is not None:
+            try:
+                same_home = os.path.normcase(str(Path(home).resolve())) == os.path.normcase(str(Path.home().resolve()))
+            except Exception:
+                same_home = False
+            if not same_home:
+                self.blocked = "模拟环境（--home 不是本机用户目录），不改登录配置"
+        # Blocked instances must not even construct the OS adapters.
+        if not self.blocked and self.scheduler is None:
+            self.scheduler = SchTasks()
+
+    def _skip(self):
+        if self.blocked:
+            log.info(self.blocked)
+            return True
+        return False
+
+    def _registry(self):
+        if self.registry is None:
+            import winreg
+            self.registry = winreg
+        return self.registry
 
     def _value(self):
-        r = self.registry
+        r = self._registry()
         try:
             with r.OpenKey(r.HKEY_CURRENT_USER, RUN_KEY) as key:
                 return r.QueryValueEx(key, "AgentDeck")[0]
         except FileNotFoundError:
             return None
 
-    def enabled(self):
+    def _ours(self, value):
+        return value is not None and value in (self.command, self.legacy, self.quoted, self.quoted_legacy)
+
+    def _write_run(self):
+        r = self._registry()
+        with r.CreateKeyEx(r.HKEY_CURRENT_USER, RUN_KEY, 0, r.KEY_SET_VALUE) as key:
+            r.SetValueEx(key, "AgentDeck", 0, r.REG_SZ, self.quoted)
+
+    def _delete_run(self):
+        r = self._registry()
+        try:
+            with r.OpenKey(r.HKEY_CURRENT_USER, RUN_KEY, 0, r.KEY_SET_VALUE) as key:
+                r.DeleteValue(key, "AgentDeck")
+        except FileNotFoundError:
+            pass
+
+    @staticmethod
+    def _error_text(error):
+        return " ".join(str(error).split()) or type(error).__name__
+
+    def _refresh(self):
+        xml_text = None
+        query_failed = False
+        previous_reason, previous_error = self.reason, self.error
+        self.error = self.reason = None
+        try:
+            xml_text = self.scheduler.query("AgentDeck")
+            if xml_text is None:
+                self.reason = getattr(self.scheduler, "last_error", None)
+        except Exception as error:
+            query_failed = True
+            self.error = self.reason = self._error_text(error)
         value = self._value()
-        return value is not None and value in (self.command, self.legacy)
+        if task_matches(xml_text, self.target):
+            self.mode = "task"
+            self.reason = None
+        else:
+            self.mode = "registry" if self._ours(value) else None
+            self.reason = self.reason or ("计划任务未启用或目标不匹配" if xml_text is not None else "未注册计划任务")
+            if self.mode == "registry" and previous_error and self.error is None:
+                self.reason, self.error = previous_reason, previous_error
+        self.checked = True
+        return xml_text, value, query_failed
+
+    def refresh(self):
+        with self.lock:
+            if self._skip():
+                return False
+            self._refresh()
+            return self.mode is not None
+
+    def snapshot(self):
+        # Reading cached state never waits for the scheduler's operation lock on Tk.
+        return {"mode": self.mode, "reason": self.reason, "checked": self.checked,
+                "error": self.error, "blocked": self.blocked}
+
+    def enabled(self):
+        with self.lock:
+            if self.blocked:
+                return False
+            if not self.checked:
+                self._refresh()
+            return self.mode is not None
+
+    def _enable(self, value, *, write_run=False):
+        try:
+            if self.sid is None:
+                self.sid = current_user_sid()
+            self.scheduler.create("AgentDeck", task_xml(self.target, self.sid))
+            xml_text = self.scheduler.query("AgentDeck")
+            if not task_matches(xml_text, self.target):
+                raise RuntimeError(getattr(self.scheduler, "last_error", None) or "计划任务回读不匹配")
+        except Exception as error:
+            self.reason = self.error = self._error_text(error)
+            if write_run or value != self.quoted:
+                self._write_run()
+            self.mode, self.checked = "registry", True
+            log.warning("计划任务不可用，保留注册表自启：%s", self.reason)
+            return True
+        self._delete_run()
+        self.mode, self.checked = "task", True
+        self.reason = self.error = None
+        return True
 
     def upgrade(self):
-        """Older builds registered the launch without --background."""
-        if self.legacy is not None and self._value() == self.legacy:
-            self.set_enabled(True)
-            return True
-        return False
+        with self.lock:
+            if self._skip():
+                return False
+            xml_text, value, query_failed = self._refresh()
+            if self.mode == "task":
+                if self._ours(value):
+                    self._delete_run()
+                    return True
+            elif xml_text is None and not query_failed and self._ours(value):
+                return self._enable(value)
+            return False
 
     def set_enabled(self, enabled):
-        r = self.registry
-        with r.CreateKeyEx(r.HKEY_CURRENT_USER, RUN_KEY, 0, r.KEY_SET_VALUE) as key:
-            if enabled:
-                r.SetValueEx(key, "AgentDeck", 0, r.REG_SZ, self.command)
-            else:
+        with self.lock:
+            if self._skip():
+                return False
+            try:
+                if enabled:
+                    return self._enable(self._value(), write_run=True)
+                failure = None
                 try:
-                    r.DeleteValue(key, "AgentDeck")
+                    self.scheduler.delete("AgentDeck")
                 except FileNotFoundError:
                     pass
+                except Exception as error:
+                    failure = error
+                self._delete_run()
+                xml_text, _, query_failed = self._refresh()
+                if xml_text is not None or failure is not None or query_failed:
+                    raise RuntimeError("无法删除计划任务 AgentDeck：%s" %
+                                       (self._error_text(failure) if failure is not None else self.reason or "任务仍然存在"))
+                return True
+            except Exception as error:
+                self.error = self._error_text(error)
+                raise
+
+    def describe(self):
+        state = self.snapshot()
+        if state["blocked"]:
+            return state["blocked"]
+        if not state["checked"]:
+            return "检查中…"
+        if state["mode"] == "task":
+            return "✓ 已开启（计划任务）"
+        if state["mode"] == "registry":
+            return "✓ 已开启：用注册表方式（计划任务不可用：%s）" % state["reason"]
+        return "未开启"
 
 
 def tray_icon_entry(registry=None, executable=None):
@@ -353,14 +643,16 @@ def init_all(home, *, autostart=None):
     """Enable hooks and startup; persist success only after every step completes."""
     home = Path(home)
     prefs = Preferences(home)
-    startup = AutoStart() if autostart is None else autostart
+    startup = AutoStart(home=home) if autostart is None else autostart
     set_global_hooks(home, True)
-    if not startup.enabled():
+    if startup.blocked:
+        log.info(startup.blocked)
+    elif not startup.enabled():
         startup.set_enabled(True)
     if not prefs.values.get("initialized"):
         prefs.values["initialized"] = True
         prefs.save()
-    return {"hooks": "enabled", "autostart": True, "initialized": True}
+    return {"hooks": "enabled", "autostart": "skipped" if startup.blocked else True, "initialized": True}
 
 
 class SingleInstance:
@@ -451,7 +743,7 @@ class TrayApplication:
         self.prefs = prefs
         self.keys_path = keys_path
         self.profile = profile
-        self.autostart = AutoStart() if autostart is None else autostart
+        self.autostart = AutoStart(home=engine.home) if autostart is None else autostart
         self.overlay = Overlay(engine) if overlay is None else overlay
         self.background = background
         self.registry = registry
@@ -459,14 +751,11 @@ class TrayApplication:
         self.tray_thread = None
         self.state = {}
         self._background_enabled = False
+        self._autostart_lock = threading.Lock()
         self.last_status = None
         self.status_window = None
         self.guide_window = None
-        try:
-            self.autostart.upgrade()
-        except Exception as error:
-            log.warning("开机自启升级失败：%s", error)
-        self.autostart_enabled = self.autostart.enabled()
+        self.autostart_enabled = False
 
     def _registry(self):
         if self.registry is None:
@@ -516,10 +805,38 @@ class TrayApplication:
         self.tray_thread = threading.Thread(target=self._run_tray, name="AgentDeck tray", daemon=True)
         self.tray_thread.start()
         self._background_enabled = getattr(self.overlay, "_tasks", None) is not None
+        self._autostart_startup()
         self.overlay.menu_items = self.overlay_menu
         self.overlay.on_driver_help = lambda: self.dispatch("driver")
         self.overlay.root.after(100, self.pump)
         self.overlay.root.after(400, self.startup)
+
+    def _autostart_startup(self):
+        def check():
+            self.autostart.upgrade()
+            self.autostart.refresh()
+        self._autostart_work(check, "startup")
+
+    def _autostart_work(self, work, action):
+        """Keep scheduler calls off Tk; report background errors on its queue."""
+        live = self._background_enabled
+
+        def run():
+            with self._autostart_lock:
+                try:
+                    work()
+                except Exception as error:
+                    log.exception("开机自启操作失败：%s", action)
+                    if live:
+                        self.commands.put(("notice", ("开机自启操作失败", str(error))))
+                    else:
+                        raise
+                finally:
+                    self.autostart_enabled = self.autostart.snapshot()["mode"] is not None
+        if live:
+            threading.Thread(target=run, name="AgentDeck autostart", daemon=True).start()
+        else:
+            run()
 
     def startup(self):
         """Manual launches open the status window; login launches stay silent."""
@@ -645,8 +962,7 @@ class TrayApplication:
         elif action in ("install", "uninstall"):
             self.project_action(action)
         elif action == "autostart":
-            self.autostart.set_enabled(not self.autostart_enabled)
-            self.autostart_enabled = self.autostart.enabled()
+            self._autostart_work(lambda: self.autostart.set_enabled(not self.autostart_enabled), action)
         elif action == "logs":
             os.startfile(str(data_dir(self.hub.home) / "logs"))
         elif action == "quit":
@@ -656,6 +972,8 @@ class TrayApplication:
             self.stop()
         elif action == "report":
             self.show_report(payload)
+        elif action == "notice":
+            self.message(*payload, error=True)
 
     def global_action(self, enabled=None):
         if enabled is None:
@@ -921,7 +1239,9 @@ class TrayApplication:
         home = self.hub.home
         hooks = hub_install.global_status(home=home)
         hooks_ok = hooks["enabled"] and not hooks["needs_repair"] and not hooks["missing_paths"]
-        self.autostart_enabled = self.autostart.enabled()
+        startup = self.autostart.snapshot()
+        self.autostart_enabled = startup["mode"] is not None
+        startup_ok = None if startup["blocked"] or not startup["checked"] else self.autostart_enabled
         state = self.state or {}
         reader = state.get("input_reader")
         try:
@@ -931,35 +1251,40 @@ class TrayApplication:
         rows = [
             ("钩子", "✓ 已启用" if hooks_ok else "需修复" if hooks["enabled"] else "未启用",
              hooks_ok, None if hooks_ok else "修复", "hooks"),
-            ("开机自启", "✓ 已开启" if self.autostart_enabled else "未开启",
-             self.autostart_enabled, None if self.autostart_enabled else "开启", "autostart"),
+            ("开机自启", self.autostart.describe(), startup_ok,
+             "开启" if startup_ok is False else None, "autostart"),
         ]
         if (Path(home) / ".codex").exists():
             rows.append(("Codex", "钩子改过后，在 Codex 输入 /hooks 信任一次", None, None, None))
         rows.append(("会话", "%d 个；已开着的 Codex 会话要重开才生效，Claude 自动生效"
                      % len(state.get("sessions", ())), None, None, None))
-        rows.append(("读键方式", {"usb": "✓ USB 直读",
-                                "raw": "Raw Input：按键会同时打字，换 WinUSB 驱动可隔离",
-                                "absent": "没检测到宏键盘"}.get(reader, "启动中…"),
-                     reader == "usb", "装驱动说明" if reader == "raw" else None, "driver"))
+        reader_text, reader_ok = {
+            "usb": ("✓ 已连接（USB 直读）", True),
+            "raw": ("已连接（Raw Input：按键会同时打字）", False),
+            "absent": ("未连接：批准交给应用自己的弹窗", False),
+        }.get(reader, ("启动中…", None))
+        if reader == "absent" and state.get("hold_active"):  # hold always: requests still wait for the deck
+            reader_text = "未连接：当前设为一直等宏键盘，请求会等到超时"
+        rows.append(("宏键盘", reader_text, reader_ok,
+                     "装驱动说明" if reader == "raw" else None, "driver" if reader == "raw" else None))
         promoted = tray is not None and tray[1]
         rows.append(("托盘图标", "✓ 在任务栏右下角，右键它有菜单" if promoted else "在右下角 ^ 里，右键它有菜单",
                      promoted, "放到任务栏" if tray is not None and not promoted else None, "promote"))
-        complete = hooks_ok and self.autostart_enabled and bool(self.prefs.values.get("initialized"))
+        complete = hooks_ok and bool(self.prefs.values.get("initialized")) and (self.autostart_enabled or bool(startup["blocked"]))
         return {"rows": rows, "complete": complete}
 
     def status_action(self, action):
         if action in ("hooks", "start"):
-            init_all(self.hub.home, autostart=self.autostart)
-            self.prefs.values["initialized"] = True
+            def initialize():
+                init_all(self.hub.home, autostart=self.autostart)
+                self.prefs.values["initialized"] = True
+            self._autostart_work(initialize, action)
         elif action == "autostart":
-            self.autostart.set_enabled(True)
+            self._autostart_work(lambda: self.autostart.set_enabled(True), action)
         elif action == "driver":
             self.show_driver_guide()
-            return
         elif action == "promote":
             promote_tray_icon(self._registry())
-        self.autostart_enabled = self.autostart.enabled()
 
     @staticmethod
     def _status_shape(model):
@@ -1195,7 +1520,7 @@ def main(argv=None):
             else:
                 prefs = Preferences(home)
                 set_global_hooks(home, False)
-                AutoStart().set_enabled(False)
+                AutoStart(home=home).set_enabled(False)
                 if "initialized" in prefs.values:
                     del prefs.values["initialized"]
                     prefs.save()

@@ -208,10 +208,10 @@ class HubTests(unittest.TestCase):
         self.event("SessionStart", "valid")
         self.assertEqual(self.engine.state()["sessions"][0]["slot"], 1)
 
-    def test_high_risk_warning_survives_later_same_session_event(self):
+    def test_high_risk_warning_survives_same_session_notification(self):
         thread, result = self.permission(command="sudo echo test")
         self.engine.action({"action": "approve"})
-        self.event("PostToolUse")
+        self.event("Notification", notification_type="auth_success")
         self.assertIn("HOLD! press again", self.calls[-1])
         self.assertEqual(self.engine.action({"action": "approve"})["status"], "allowed")
         thread.join(1)
@@ -501,7 +501,6 @@ class HubTests(unittest.TestCase):
             self.assertEqual(self.event(event), {})
             self.assertEqual(self.engine.state()["sessions"][0]["state"], expected)
         thread, result = self.permission()
-        self.event("PostToolUse")
         self.event("Notification", notification_type="auth_success")
         session = self.engine.state()["sessions"][0]
         self.assertEqual(session["state"], "wait")
@@ -511,6 +510,73 @@ class HubTests(unittest.TestCase):
         thread.join(1)
         self.assertEqual(result, [{}])
         self.assertEqual(self.engine.state()["sessions"], [])
+
+    def ended_fields(self, entry):
+        return {key: entry[key] for key in ("agent", "session_id", "slot", "state", "last_event",
+                                            "last_text", "ended_by", "reason")}
+
+    def test_codex_exec_stop_then_session_end_keeps_reply_in_recent_ended(self):
+        # codex exec fires SessionEnd milliseconds after Stop; the reply must stay visible.
+        self.engine.wall_time = lambda: 500.0
+        self.event("SessionStart", "exec-one", agent="cx")
+        self.event("UserPromptSubmit", "exec-one", agent="cx", prompt="Reply only: ok")
+        self.assertEqual(self.engine.state()["sessions"][0]["last_event"], "UserPromptSubmit")
+        self.assertEqual(self.engine.state()["recent_ended"], [])
+        self.event("Stop", "exec-one", agent="cx", last_assistant_message="ok")
+        self.event("SessionEnd", "exec-one", agent="cx", reason="other")
+        state = self.engine.state()
+        self.assertEqual(state["sessions"], [])
+        self.assertIn("end cx-execon", self.calls)
+        self.assertEqual(len(state["recent_ended"]), 1)
+        ended = state["recent_ended"][0]
+        self.assertEqual(self.ended_fields(ended),
+                         {"agent": "cx", "session_id": "exec-one", "slot": 1, "state": "done",
+                          "last_event": "Stop", "last_text": "ok", "ended_by": "SessionEnd",
+                          "reason": "other"})
+        self.assertEqual(ended["ended_at"], 500.0)
+        self.assertEqual(ended["cwd"], "C:/work/project")
+        # A copy: mutating the snapshot does not change the hub.
+        ended["state"] = "x"
+        self.assertEqual(self.engine.state()["recent_ended"][0]["state"], "done")
+
+    def test_session_end_without_stop_records_last_real_state(self):
+        # The usage-limit run: prompt submitted, turn failed, no Stop, then SessionEnd.
+        self.event("SessionStart", "exec-two", agent="cx")
+        self.event("UserPromptSubmit", "exec-two", agent="cx", prompt="Reply only: ok")
+        self.event("SessionEnd", "exec-two", agent="cx")
+        ended = self.engine.state()["recent_ended"][-1]
+        self.assertEqual(self.ended_fields(ended),
+                         {"agent": "cx", "session_id": "exec-two", "slot": 1, "state": "think",
+                          "last_event": "UserPromptSubmit", "last_text": "Reply only: ok",
+                          "ended_by": "SessionEnd", "reason": ""})
+        # SessionEnd for a session the hub never saw adds nothing.
+        self.event("SessionEnd", "never-seen", agent="cx")
+        self.assertEqual(len(self.engine.state()["recent_ended"]), 1)
+
+    def test_recent_ended_is_bounded_and_records_idle_and_eviction(self):
+        wall = [1000.0]
+        self.engine.wall_time = lambda: wall[0]
+        for index in range(hub.RECENT_ENDED_LIMIT + 3):
+            self.event("SessionStart", "bulk-%d" % index)
+            self.event("SessionEnd", "bulk-%d" % index, reason="x" * 100)
+        ended = self.engine.state()["recent_ended"]
+        self.assertEqual(len(ended), hub.RECENT_ENDED_LIMIT)
+        self.assertEqual(ended[0]["session_id"], "bulk-3")
+        self.assertEqual(ended[-1]["session_id"], "bulk-%d" % (hub.RECENT_ENDED_LIMIT + 2))
+        self.assertEqual(ended[-1]["reason"], "x" * 64)
+        for index in range(6):
+            wall[0] += 1
+            self.event("SessionStart", "slot-%d" % index)
+        wall[0] += 1
+        self.event("SessionStart", "slot-new")
+        evicted = self.engine.state()["recent_ended"][-1]
+        self.assertEqual((evicted["session_id"], evicted["ended_by"], evicted["state"]),
+                         ("slot-0", "evicted", "idle"))
+        wall[0] += hub.SESSION_IDLE_SECONDS + 10
+        self.engine.state()
+        ended = self.engine.state()["recent_ended"]
+        self.assertEqual(self.engine.state()["sessions"], [])
+        self.assertEqual({entry["ended_by"] for entry in ended[-6:]}, {"idle"})
 
     def test_session_end_and_shutdown_release_waiters_without_deciding(self):
         first, first_result = self.permission("first")
@@ -1002,7 +1068,10 @@ class HubTests(unittest.TestCase):
         self.engine.close()
         first.join(1)
         second.join(1)
-        self.assertEqual([r["decision"] for r in self.engine.audit.recent()], ["timeout", "timeout"])
+        records = self.engine.audit.recent()
+        self.assertEqual([r["decision"] for r in records], ["abandoned", "timeout"])
+        self.assertEqual(records[0]["source"], "event")
+        self.assertTrue(records[0]["moved_on"])
 
     def test_audit_failure_blocks_device_decision_but_releases_native_fallback(self):
         thread, result = self.permission()

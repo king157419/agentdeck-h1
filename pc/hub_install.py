@@ -24,7 +24,7 @@ PYTHON = "D:/conda/miniconda3/python.exe"
 SCRIPT = Path(__file__).with_name("hub_relay.py").resolve().as_posix()
 COMMON_EVENTS = ("SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse",
                  "PermissionRequest", "Stop", "SessionEnd")
-EVENTS = {"cc": COMMON_EVENTS + ("Notification", "PostToolUseFailure"),
+EVENTS = {"cc": COMMON_EVENTS + ("Notification", "PostToolUseFailure", "StopFailure"),
           "cx": COMMON_EVENTS + ("Interrupt",)}
 TARGETS = {"cc": (".claude", "settings.json"), "cx": (".codex", "hooks.json")}
 PROJECT_TARGETS = {"cc": (".claude", "settings.local.json"), "cx": (".codex", "hooks.json")}
@@ -138,6 +138,7 @@ def global_status(*, home=None):
     """Read both global configs; presence and relay path health are separate."""
     root = Path.home() if home is None else Path(home)
     present, missing, errors = [], [], []
+    missing_events = {agent: [] for agent in TARGETS}
     moved = shell_form = False
     expected = (Path(sys.executable).resolve().with_name("AgentDeck-relay.exe")
                 if getattr(sys, "frozen", False) else None)
@@ -148,13 +149,17 @@ def global_status(*, home=None):
             if not isinstance(data, dict) or not isinstance(data.get("hooks", {}), dict):
                 raise ValueError("hook configuration must contain an object")
             entries = []
-            for groups in data.get("hooks", {}).values():
+            regular_events = set()
+            for event, groups in data.get("hooks", {}).items():
                 if not isinstance(groups, list):
                     raise ValueError("event hooks must be lists")
                 for group in groups:
                     if not isinstance(group, dict) or not isinstance(group.get("hooks"), list):
                         raise ValueError("each matcher group must contain a hooks list")
                     entries.extend(group["hooks"])
+                    if any((info := relay_info(entry)) is not None and info["agent"] == agent
+                           and not is_gate(entry) for entry in group["hooks"]):
+                        regular_events.add(event)
         except FileNotFoundError:
             present.append(False)
             continue
@@ -163,7 +168,10 @@ def global_status(*, home=None):
             present.append(False)
             continue
         infos = [info for entry in entries if (info := relay_info(entry)) is not None]
-        present.append(any(info["agent"] == agent for info in infos))
+        installed = any(info["agent"] == agent for info in infos)
+        present.append(installed)
+        if installed:
+            missing_events[agent] = [event for event in EVENTS[agent] if event not in regular_events]
         for info in infos:
             for target in info["paths"]:
                 candidate = Path(target)
@@ -178,7 +186,10 @@ def global_status(*, home=None):
             shell_form |= agent == "cc" and info["agent"] == "cc" and info["exe"] and info["form"] == "shell"
     enabled = all(present)
     return {"enabled": enabled, "missing_paths": missing,
-            "needs_repair": enabled and (moved or (expected is not None and shell_form)),
+            "missing_events": missing_events,
+            # Repair reinstalls both agents, so it never runs while one is uninstalled.
+            "needs_repair": enabled and (moved or (expected is not None and (
+                shell_form or bool(missing_events["cc"])))),
             "shell_form": shell_form, "errors": errors}
 
 

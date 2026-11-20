@@ -15,6 +15,22 @@ import hub
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_cli_defaults_to_auto_hold_and_enables_session_persistence(self):
+        class Constructed(Exception):
+            pass
+
+        with tempfile.TemporaryDirectory() as directory:
+            for mode in (None, "auto", "always", "never"):
+                argv = ["--backend", "none", "--no-lcd", "--no-desktop", "--home", directory]
+                if mode is not None:
+                    argv += ["--hold-mode", mode]
+                with self.subTest(mode=mode), patch("hub.logging.basicConfig"), patch(
+                        "hub.Hub", side_effect=Constructed) as factory, self.assertRaises(Constructed):
+                    hub.main(argv)
+                self.assertEqual(factory.call_args.kwargs["hold_mode"], mode or "auto")
+                self.assertEqual(factory.call_args.kwargs["sessions_path"],
+                                 Path(directory) / ".agentdeck" / "sessions.json")
+
     def test_windows_reads_voice_shortcut_from_default_or_explicit_config(self):
         shortcut = {"key_codes": [0xA5], "modifiers": [], "mode": "hold"}
         class Constructed(Exception):
