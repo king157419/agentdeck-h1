@@ -190,6 +190,62 @@ class CardTests(unittest.TestCase):
             show.assert_called_once_with(("cc", "waiting"))
         self.desktop.show_claude_session.assert_not_called()
 
+    def test_hidden_claude_hub_sessions_are_not_merged_into_cards(self):
+        self.source = ([catalog("visible", 95), catalog("duplicate", 96, cli="scheduled")],
+                       {"scheduled", "archived"})
+        self.refresh()
+        scheduled = self.known("scheduled", 1, 100, state="wait")
+        archived = self.known("archived", 2, 99, state="locked")
+        self.known("visible", 3, 94)
+        self.known("hook-only", 4, 93, state="wait")
+        self.known("scheduled", 5, 98, agent="cx", state="wait")
+        before = deepcopy(self.engine.sessions)
+        card = self.open_card()
+        self.assertEqual(card["order"], [5, 3, 4])
+        self.assertEqual(self.engine.sessions, before)
+        self.assertIs(self.engine.sessions[("cc", "scheduled")], scheduled)
+        self.assertIs(self.engine.sessions[("cc", "archived")], archived)
+
+    def test_closed_card_skips_hidden_sessions_and_cycles_visible_waits(self):
+        self.source = ([], {"scheduled", "archived"})
+        self.refresh()
+        self.known("scheduled", 1, 100, state="wait", native_wait=True)
+        self.known("archived", 2, 99, state="error")
+        self.known("visible", 3, 98, state="wait")
+        self.known("scheduled", 4, 97, agent="cx", state="locked")
+        self.engine.controls.wait_cursor = ("cc", "scheduled")
+        with patch.object(self.engine.controls, "_show_session", return_value={"status": "sent"}) as show:
+            for expected in (("cc", "visible"), ("cx", "scheduled"), ("cc", "visible")):
+                self.action("select")
+                self.assertEqual(show.call_args.args, (expected,))
+        self.assertFalse(self.engine.controls.session_card["open"])
+
+    def test_closed_card_with_only_hidden_waits_does_not_open_a_session(self):
+        self.source = ([], {"scheduled"})
+        self.refresh()
+        self.known("scheduled", 1, 100, state="wait")
+        with patch.object(self.engine.controls, "_show_session") as show:
+            self.assertEqual(self.action("select"), {"status": "noop", "noop": "没有等你的会话"})
+            show.assert_not_called()
+
+    def test_catalog_failure_or_empty_result_restores_hub_card_and_wait_candidates(self):
+        self.known("scheduled", 1, 100, state="wait")
+        for result in (RuntimeError("catalog unavailable"), [], ([], set())):
+            with self.subTest(result=result):
+                self.source = ([], {"scheduled"})
+                self.refresh()
+                self.assertEqual(self.engine.controls._card_sessions(), [])
+                if isinstance(result, Exception):
+                    self.reader.side_effect = result
+                else:
+                    self.source = result
+                self.refresh()
+                self.assertEqual([s["slot"] for s in self.engine.controls._card_sessions()], [1])
+                with patch.object(self.engine.controls, "_show_session", return_value={"status": "sent"}) as show:
+                    self.action("select")
+                    show.assert_called_once_with(("cc", "scheduled"))
+                self.reader.side_effect = lambda: deepcopy(self.source)
+
     def test_strip_keeps_hub_sessions_when_card_only_contains_catalog_entries(self):
         self.source = [catalog(str(i), 100 - i) for i in range(12)]
         self.refresh()

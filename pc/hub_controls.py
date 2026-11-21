@@ -3,7 +3,7 @@ import sys
 import threading
 
 from hub_layers import Layers
-from claude_sessions import recent_sessions
+from claude_sessions import read_catalog
 from session_titles import session_label
 
 
@@ -24,8 +24,9 @@ class Controls:
         self.card_generation = 0
         self.origin_reader = None
         self.wait_cursor = None
-        self.session_reader = recent_sessions if session_reader is None else session_reader
+        self.session_reader = read_catalog if session_reader is None else session_reader
         self.claude_sessions = []
+        self.hidden_claude_session_ids = set()
         self.catalog_reader = None
         self.catalog_refresh_at = float("-inf")
 
@@ -40,21 +41,32 @@ class Controls:
 
             def read():
                 try:
-                    sessions = self.session_reader()
+                    result = self.session_reader()
+                    # Keep list-only injected readers compatible with older callers.
+                    sessions, hidden_ids = result if isinstance(result, tuple) else (result, set())
+                    sessions = [dict(s) for s in sessions]
+                    hidden_ids = set(hidden_ids)
                 except Exception:
-                    sessions = []
+                    sessions, hidden_ids = [], set()
                 with hub.lock:
                     if not hub.closed:
-                        self.claude_sessions = [dict(s) for s in sessions]
+                        self.claude_sessions = sessions
+                        self.hidden_claude_session_ids = hidden_ids
 
             self.catalog_reader = threading.Thread(target=read, name="AgentDeck Claude sessions", daemon=True)
             self.catalog_reader.start()
+
+    def _hidden_claude_session(self, session):
+        return (session.get("agent") == "cc"
+                and session.get("session_id") in self.hidden_claude_session_ids)
 
     def _card_sessions(self):
         hub = self.hub
         entries, seen = [], set()
         for source in self.claude_sessions:
             cli_id = source.get("cli_session_id")
+            if cli_id in self.hidden_claude_session_ids:
+                continue
             identity = ("cc", cli_id)
             marker = identity if cli_id else ("claude", source["session_id"])
             if marker in seen:
@@ -69,7 +81,8 @@ class Controls:
                          last_updated=max(source["last_activity"] / 1000, entry.get("last_updated", 0)))
             entries.append(entry)
         for identity, session in hub.sessions.items():
-            if session.get("agent") in ("cc", "cx") and identity not in seen:
+            if (session.get("agent") in ("cc", "cx") and identity not in seen
+                    and not self._hidden_claude_session(session)):
                 entries.append(dict(session))
         return sorted(entries, key=lambda s: -s.get("last_updated", 0))[:12]
 
@@ -288,7 +301,9 @@ class Controls:
                                 if entry and not entry.get("_catalog_only") else None)
                 else:
                     entry = None
-                    waiting = [i for i in self._sessions() if hub.sessions[i].get("state") in ("wait", "locked", "error")]
+                    waiting = [i for i in self._sessions()
+                               if hub.sessions[i].get("state") in ("wait", "locked", "error")
+                               and not self._hidden_claude_session(hub.sessions[i])]
                     index = waiting.index(self.wait_cursor) + 1 if self.wait_cursor in waiting else 0
                     identity = waiting[index % len(waiting)] if waiting else None
                     self.wait_cursor = identity

@@ -173,6 +173,30 @@ class HubTests(unittest.TestCase):
             self.decision(result, "deny")
         self.assertEqual(self.desktop.calls, [])
 
+    def test_hidden_claude_sessions_can_still_be_approved_and_denied(self):
+        reader = self.engine.controls.catalog_reader
+        if reader is not None:
+            reader.join(timeout=1)
+            self.assertFalse(reader.is_alive())
+        self.engine.controls.hidden_claude_session_ids = {"scheduled", "archived"}
+        for action, behavior, sid in (("approve", "allow", "scheduled"),
+                                      ("deny", "deny", "archived")):
+            with self.subTest(action=action, session_id=sid):
+                thread, result = self.permission(sid)
+                state = self.engine.state()
+                request_id = state["displayed_request_id"]
+                self.assertIsNotNone(request_id)
+                self.assertEqual(state["pending"][0]["session_id"], sid)
+                response = self.engine.action({"action": action})
+                self.assertEqual(response["request_id"], request_id)
+                self.assertEqual(response["status"], "allowed" if action == "approve" else "denied")
+                thread.join(1)
+                self.assertFalse(thread.is_alive())
+                self.decision(result, behavior)
+                self.assertIn(("cc", sid), self.engine.sessions)
+                self.assertEqual(self.engine.state()["pending"], [])
+        self.assertEqual(self.desktop.calls, [])
+
     def test_timeout_falls_back_and_cannot_be_approved_later(self):
         self.engine.approve_timeout = 0.04
         thread, result = self.permission()

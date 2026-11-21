@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import claude_sessions
 from claude_sessions import recent_sessions
 
 
@@ -34,6 +35,68 @@ class ClaudeSessionsTests(unittest.TestCase):
         self.assertEqual(recent_sessions(root=self.root), [
             {"session_id": "local_keep", "cli_session_id": "keep", "title": "中文会话",
              "cwd": "D:/project/h1", "last_activity": 1000}])
+
+    def test_catalog_returns_hidden_cli_ids_from_the_active_account_without_a_second_scan(self):
+        self.write("old-hidden", directory="old/org", mtime=50, isArchived=True)
+        self.write("visible", lastActivityAt=2000)
+        self.write("older-visible", lastActivityAt=1000)
+        self.write("archived", isArchived=True, title="")
+        self.write("scheduled", scheduledTaskId="task-1")
+        self.write("both", isArchived=True, scheduledTaskId="task-2")
+        self.write("no-cli", isArchived=True, cliSessionId="")
+        self.write("untitled", title="")
+        real_glob = Path.glob
+        with patch.object(Path, "glob", autospec=True, side_effect=real_glob) as scan:
+            sessions, hidden = claude_sessions.read_catalog(1, root=self.root)
+        self.assertEqual(scan.call_count, 1)
+        self.assertEqual([s["cli_session_id"] for s in sessions], ["visible"])
+        self.assertEqual(hidden, {"archived", "scheduled", "both"})
+
+    def test_catalog_shares_json_cache_and_refreshes_hidden_ids(self):
+        visible = self.write("visible")
+        hidden = self.write("hidden", isArchived=True)
+        real_read = Path.read_text
+        reads = []
+
+        def read(path, *args, **kwargs):
+            reads.append(path)
+            return real_read(path, *args, **kwargs)
+
+        with patch.object(Path, "read_text", read):
+            recent_sessions(root=self.root)
+            self.assertCountEqual(reads, [visible, hidden])
+            reads.clear()
+            sessions, hidden_ids = claude_sessions.read_catalog(root=self.root)
+            self.assertEqual(reads, [])
+            sessions[0]["title"] = "caller mutation"
+            hidden_ids.clear()
+            sessions, hidden_ids = claude_sessions.read_catalog(root=self.root)
+            self.assertEqual(sessions[0]["title"], "Title visible")
+            self.assertEqual(hidden_ids, {"hidden"})
+            self.write("visible", scheduledTaskId="task-1")
+            self.write("hidden", isArchived=False)
+            sessions, hidden_ids = claude_sessions.read_catalog(root=self.root)
+            self.assertCountEqual(reads, [visible, hidden])
+            self.assertEqual([s["cli_session_id"] for s in sessions], ["hidden"])
+            self.assertEqual(hidden_ids, {"visible"})
+            visible.unlink()
+            self.assertEqual(claude_sessions.read_catalog(root=self.root)[1], set())
+
+    def test_catalog_failure_or_empty_directory_does_not_keep_stale_hidden_ids(self):
+        path = self.write("hidden", isArchived=True)
+        self.assertEqual(claude_sessions.read_catalog(root=self.root), ([], {"hidden"}))
+        path.write_text("{invalid", encoding="utf-8")
+        self.assertEqual(claude_sessions.read_catalog(root=self.root), ([], set()))
+        self.write("hidden", mtime=101, isArchived=True)
+        with patch.object(Path, "read_text", side_effect=PermissionError("read denied")):
+            self.assertEqual(claude_sessions.read_catalog(root=self.root), ([], set()))
+        with patch.object(Path, "stat", side_effect=OSError("stat denied")):
+            self.assertEqual(claude_sessions.read_catalog(root=self.root), ([], set()))
+        path.unlink()
+        self.assertEqual(claude_sessions.read_catalog(root=self.root), ([], set()))
+        self.assertEqual(claude_sessions.read_catalog(root=self.root / "missing"), ([], set()))
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(claude_sessions.read_catalog(), ([], set()))
 
     def test_selects_directory_with_newest_file_mtime_including_archived(self):
         self.write("old", directory="old/org", mtime=500, lastActivityAt=9000)
