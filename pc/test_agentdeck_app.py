@@ -1196,6 +1196,62 @@ class TrayMessageTests(unittest.TestCase):
         self.assertEqual(events, [(17, 0x0200), (17, 0x0202), (17, 0x0203)])
 
 
+class KeyboardPresenceNoticeTests(unittest.TestCase):
+    def test_absent_waits_ten_seconds_and_notifies_only_once(self):
+        notice = app.KeyboardPresenceNotice()
+        self.assertIsNone(notice.update("absent", 0))
+        self.assertIsNone(notice.update("absent", 9.999))
+        self.assertEqual(notice.update("absent", 10), "lost")
+        self.assertIsNone(notice.update("absent", 10.3))
+        self.assertIsNone(notice.update("absent", 60))
+
+    def test_recovery_notifies_once_and_rearms_for_each_reader(self):
+        for reader in ("usb", "raw"):
+            with self.subTest(reader=reader):
+                notice = app.KeyboardPresenceNotice()
+                self.assertIsNone(notice.update(reader, 0))
+                self.assertIsNone(notice.update("absent", 1))
+                self.assertEqual(notice.update("absent", 11), "lost")
+                self.assertEqual(notice.update(reader, 12), "back")
+                self.assertIsNone(notice.update(reader, 13))
+                self.assertIsNone(notice.update("absent", 14))
+                self.assertIsNone(notice.update("absent", 23.999))
+                self.assertEqual(notice.update("absent", 24), "lost")
+                self.assertEqual(notice.update(reader, 25), "back")
+                self.assertIsNone(notice.update(reader, 26))
+
+    def test_short_disconnect_is_silent_and_resets_timer(self):
+        for reader in ("usb", "raw"):
+            with self.subTest(reader=reader):
+                notice = app.KeyboardPresenceNotice()
+                self.assertIsNone(notice.update("absent", 0))
+                self.assertIsNone(notice.update(reader, 3))
+                self.assertIsNone(notice.update("absent", 4))
+                self.assertIsNone(notice.update("absent", 13.999))
+                self.assertEqual(notice.update("absent", 14), "lost")
+
+    def test_unknown_reader_neither_starts_timer_nor_triggers_notice(self):
+        notice = app.KeyboardPresenceNotice()
+        self.assertIsNone(notice.update(None, 0))
+        self.assertIsNone(notice.update(None, 100))
+        self.assertIsNone(notice.update("absent", 101))
+        self.assertIsNone(notice.update("absent", 110.999))
+        self.assertEqual(notice.update("absent", 111), "lost")
+
+    def test_unknown_reader_preserves_pending_timer_and_loss(self):
+        notice = app.KeyboardPresenceNotice()
+        self.assertIsNone(notice.update("absent", 0))
+        self.assertIsNone(notice.update(None, 5))
+        self.assertIsNone(notice.update(None, 10))
+        self.assertIsNone(notice.update(None, 20))
+        self.assertEqual(notice.update("absent", 21), "lost")
+        self.assertIsNone(notice.update(None, 22))
+        self.assertIsNone(notice.update("absent", 23))
+        self.assertEqual(notice.update("usb", 24), "back")
+        self.assertIsNone(notice.update(None, 25))
+        self.assertIsNone(notice.update("usb", 26))
+
+
 class ApplicationTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -1998,6 +2054,54 @@ class ApplicationTests(unittest.TestCase):
         self.application.icon.update_menu.assert_not_called()
         self.overlay.root.after.assert_called_with(300, self.application.pump)
 
+
+    def test_live_pump_notifies_keyboard_loss_and_recovery_once(self):
+        self.application._background_enabled = True
+        self.application.icon = Mock()
+        self.overlay.state = {"input_reader": "absent"}
+        with patch.object(app.time, "monotonic", side_effect=[0, 9.999, 10, 30, 31, 32]), patch.object(
+                self.application, "draw_icon"), self.assertLogs(app.log, level="INFO") as logs:
+            self.application.pump()
+            self.application.pump()
+            self.application.icon.notify.assert_not_called()
+            self.application.pump()
+            self.application.pump()
+            self.application.icon.notify.assert_called_once_with(
+                "电脑没认出宏键盘，按键不会有反应。插着的话，拔下来再插回去（最好直插电脑，不经过集线器）。",
+                "宏键盘没连上")
+            self.application.icon.notify.reset_mock()
+            self.overlay.state = {"input_reader": "usb"}
+            self.application.pump()
+            self.application.pump()
+            self.application.icon.notify.assert_called_once_with("按键恢复正常。", "宏键盘已连上")
+        self.assertEqual([(record.levelname, record.getMessage()) for record in logs.records],
+                         [("WARNING", "宏键盘没连上"), ("INFO", "宏键盘已连上")])
+        self.engine.state.assert_not_called()
+        self.overlay.root.after.assert_called_with(300, self.application.pump)
+
+    def test_pump_notification_failure_preserves_status_update_and_timer(self):
+        for event, reader in (("lost", "absent"), ("back", "raw")):
+            with self.subTest(event=event):
+                self.application.keyboard_presence = app.KeyboardPresenceNotice()
+                self.application.keyboard_presence.update("absent", 0)
+                if event == "back":
+                    self.application.keyboard_presence.update("absent", 10)
+                self.application.last_status = None
+                self.application.icon = Mock()
+                self.application.icon.notify.side_effect = RuntimeError("notifications disabled")
+                self.engine.state.return_value = {"input_reader": reader, "sessions": [{"state": "wait"}]}
+                with patch.object(app.time, "monotonic", return_value=10), patch.object(
+                        self.application, "draw_icon", return_value="amber") as draw, self.assertLogs(
+                        app.log, level="INFO") as logs:
+                    self.application.pump()
+                    self.application.pump()
+                self.application.icon.notify.assert_called_once()
+                self.assertIn("宏键盘通知不可用：notifications disabled", "\n".join(logs.output))
+                self.assertFalse(any(record.levelno >= app.logging.ERROR for record in logs.records))
+                draw.assert_called_once_with("waiting")
+                self.assertEqual(self.application.icon.icon, "amber")
+                self.assertEqual(self.application.icon.title, "AgentDeck · 1 个会话 · 1 个待批")
+                self.overlay.root.after.assert_called_with(300, self.application.pump)
 
     def test_live_menu_actions_defer_hub_locks_and_native_focus(self):
         self.application._background_enabled = True

@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from xml.etree import ElementTree
 from xml.sax.saxutils import escape
 
@@ -757,6 +758,28 @@ def tray_icon_type(base):
     return LiveMenuIcon
 
 
+class KeyboardPresenceNotice:
+    """Debounce keyboard loss using monotonic time; unknown readings preserve state."""
+    def __init__(self):
+        self.absent_since = None
+        self.lost = False
+
+    def update(self, reader, now):
+        if reader == "absent":
+            if self.absent_since is None:
+                self.absent_since = now
+            if not self.lost and now - self.absent_since >= 10:
+                self.lost = True
+                return "lost"
+        elif reader in ("usb", "raw"):
+            was_lost = self.lost
+            self.absent_since = None
+            self.lost = False
+            if was_lost:
+                return "back"
+        return None
+
+
 class TrayApplication:
     """Tk stays on the main thread. Tray callbacks only enqueue operations."""
     def __init__(self, engine, *, commands, prefs, keys_path, profile="default",
@@ -773,6 +796,7 @@ class TrayApplication:
         self.icon = None
         self.tray_thread = None
         self.state = {}
+        self.keyboard_presence = KeyboardPresenceNotice()
         self._background_enabled = False
         self._autostart_lock = threading.Lock()
         self.last_status = None
@@ -930,6 +954,19 @@ class TrayApplication:
                     self.message("AgentDeck 操作失败", str(error), error=True)
             # Live mode: the overlay refreshes state on its worker; Tk never takes the Hub lock.
             self.state = self.overlay.state if self._background_enabled else self.hub.state()
+            notice = self.keyboard_presence.update(self.state.get("input_reader"), time.monotonic())
+            if notice is not None:
+                if notice == "lost":
+                    title = "宏键盘没连上"
+                    text = "电脑没认出宏键盘，按键不会有反应。插着的话，拔下来再插回去（最好直插电脑，不经过集线器）。"
+                    log.warning(title)
+                else:
+                    title, text = "宏键盘已连上", "按键恢复正常。"
+                    log.info(title)
+                try:
+                    self.icon.notify(text, title)
+                except Exception as error:
+                    log.info("宏键盘通知不可用：%s", error)
             status = tray_status(self.state)
             if status != self.last_status:
                 self.icon.icon = self.draw_icon(status[0])
