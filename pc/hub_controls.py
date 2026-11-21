@@ -282,6 +282,7 @@ class Controls:
                         entries = self._card_sessions()
                         order = [s["slot"] for s in entries]
                         self.session_card.update(open=True, order=order, entries=entries,
+                                                 generation=self.session_card.get("generation", 0) + 1,
                                                  selected_slot=order[0] if order else None)
                         self.refresh_sessions(force=True)
                     else:
@@ -290,7 +291,7 @@ class Controls:
                         index = order.index(slot) if slot in order else 0
                         if order:
                             self.session_card["selected_slot"] = order[max(0, min(len(order) - 1, index + (1 if argument == "next" else -1)))]
-                    self.session_card["deadline"] = hub.monotonic() + 2.5
+                    self.session_card["deadline"] = hub.monotonic() + 8
                     if first:
                         self._origin(self.card_generation)
                     return {"status": "ignored"}
@@ -299,6 +300,8 @@ class Controls:
                     entry = next((s for s in self._card_entries() if s["slot"] == slot), None)
                     identity = ((entry["agent"], entry["session_id"])
                                 if entry and not entry.get("_catalog_only") else None)
+                    self.session_card["open"] = False
+                    self.card_generation += 1
                 else:
                     entry = None
                     waiting = [i for i in self._sessions()
@@ -327,7 +330,8 @@ class Controls:
                         first = not self.list_card["open"]
                         index = 0 if first else self.list_card["selected"] + (1 if argument == "next" else -1)
                         self.list_card.update(open=True, items=list(options), selected=max(0, min(len(options) - 1, index)),
-                                              title="回答选项" if asking else "提示模板", deadline=hub.monotonic() + 2.5)
+                                              generation=self.list_card.get("generation", 0) + int(first),
+                                              title="回答选项" if asking else "提示模板", deadline=hub.monotonic() + 8)
                         return {"status": "ignored"}
                     if not self.list_card["open"]:
                         return {"status": "noop", "noop": "先转旋钮选择项目"}
@@ -346,7 +350,8 @@ class Controls:
                         labels = [("向前 " if i < 3 else "向后 ") + str(abs(i - 3)) + " " + unit
                                   if i != 3 else "不移动" for i in range(7)]
                         self.list_card.update(open=True, items=labels, selected=index, title="列表",
-                                              deadline=hub.monotonic() + 2.5)
+                                              generation=self.list_card.get("generation", 0) + int(first),
+                                              deadline=hub.monotonic() + 8)
                     return {"status": "ignored"}
                 with hub.lock:
                     if not self.list_card["open"]:

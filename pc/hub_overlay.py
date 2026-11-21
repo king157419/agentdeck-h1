@@ -2,6 +2,7 @@
 import ctypes
 import json
 import logging
+import ntpath
 import os
 from pathlib import Path
 from queue import Empty, SimpleQueue
@@ -40,6 +41,9 @@ PREVIEW_ROWS = 8
 ACTIVITY_CHARS = 20
 STRIP_WIDTH, STRIP_ROW_HEIGHT = 28, 22
 CARD_WIDTH = 340
+CHOICE_CARD_MIN_WIDTH, CHOICE_CARD_MAX_WIDTH = 460, 720
+CHOICE_ROW_HEIGHT = 44
+CHOICE_SELECTED = "#344a68"
 FEEDBACK_WIDTH, FEEDBACK_HEIGHT = 220, 28
 FEEDBACK_SECONDS = .9
 LAYER_NAMES = {"agent": "Agent", "chat": "聊天", "browser": "浏览器",
@@ -71,7 +75,7 @@ def _v9_display(state, sessions, request, now):
     order = list(dict.fromkeys(number for number in order if number in sessions))
     selected = state.get("session_card", {}).get("selected_slot", state.get("selected_slot"))
     opening = state.get("session_card", {}).get("opening_slot")
-    def row(session, number, selection=selected):
+    def row(session, number, selection=selected, *, card=False):
         approval = ((session.get("agent"), session.get("session_id")) in approval_sessions
                     or session.get("state") == "locked" or session.get("native_wait")
                     or session.get("wait_kind") == "permission_prompt")
@@ -79,14 +83,16 @@ def _v9_display(state, sessions, request, now):
                 else {"error": "错", "done": "完", "think": "跑", "tool": "跑"}.get(session.get("state"), "闲"))
         color = COLORS["ASK"] if word in ("批", "问") else COLORS[STATES.get(session.get("state"), "IDLE")]
         title = session_label(session)
+        limit = 28 if card else 18
         return {"slot": number, "word": word, "color": color,
-                "title": title[:18] + ("…" if len(title) > 18 else ""),
+                "title": title[:limit] + ("…" if len(title) > limit else ""),
+                "project": ntpath.basename(str(session.get("cwd") or "").rstrip("/\\")) if card else "",
                 "selected": selection == number, "opening": opening == number}
     entries = [row(sessions[number], number, state.get("selected_slot")) for number in order]
     card_order = session_card.get("order", order)
-    card_entries = ([row(session, session["slot"]) for session in session_card["entries"]]
+    card_entries = ([row(session, session["slot"], card=True) for session in session_card["entries"]]
                     if "entries" in session_card else
-                    [row(sessions[number], number) for number in card_order if number in sessions])
+                    [row(sessions[number], number, card=True) for number in card_order if number in sessions])
     selected_index = next((i for i, entry in enumerate(card_entries) if entry["selected"]), 0)
     card_start = max(0, min(selected_index - 6, len(card_entries) - 7))
     help_open = state.get("overlay_help") is True
@@ -404,18 +410,83 @@ def paint_strip(canvas, model, *, dual=False):
     return width, height
 
 
+def _measure_card_text(canvas, text, font):
+    if hasattr(canvas, "tk"):
+        return int(canvas.tk.call("font", "measure", font, str(text)))
+    return _text_width(str(text)) * font[1]  # recording canvas, no Tcl interpreter
+
+
+def _fit_card_text(canvas, text, font, width):
+    text = str(text)
+    if _measure_card_text(canvas, text, font) <= width:
+        return text
+    while text and _measure_card_text(canvas, text + "…", font) > width:
+        text = text[:-1]
+    return text + "…" if text else ""
+
+
+def _paint_choice_card(canvas, model):
+    sessions = model["card_mode"] == "sessions"
+    heading_font, row_font, project_font = theme.font(12, True), theme.font(14), theme.font(12)
+    if sessions:
+        title, hint = "会话", "转动选择 · 按下打开"
+        rows = model["card_entries"]
+    else:
+        card = model["list_card"]
+        title, hint = card.get("title", "列表"), "转动选择 · 按下确认"
+        selected = card.get("selected", 0)
+        start = max(0, selected - 6)
+        rows = [{"title": str(item.get("label", item.get("title", "")) if isinstance(item, dict) else item),
+                 "selected": index == selected}
+                for index, item in enumerate(card.get("items", [])[start:start + 7], start)]
+    desired = [_measure_card_text(canvas, title, heading_font) + 40]
+    for row in rows:
+        desired.append(40 + _measure_card_text(canvas, row["title"], row_font)
+                       + (32 if sessions else 0)
+                       + (16 + _measure_card_text(canvas, row["project"], project_font)
+                          if row.get("project") else 0))
+    width = max(CHOICE_CARD_MIN_WIDTH, min(CHOICE_CARD_MAX_WIDTH, max(desired)))
+    height = 48 + max(1, len(rows)) * CHOICE_ROW_HEIGHT + 36
+    canvas.configure(width=width, height=height, bg=BACKGROUND)
+    canvas.delete("all")
+    canvas.create_rectangle(0, 0, width - 1, height - 1, outline=theme.BORDER)
+    canvas.create_text(20, 25, text=_fit_card_text(canvas, title, heading_font, width - 40),
+                       anchor="w", fill=theme.MUTED, font=heading_font)
+    for index, row in enumerate(rows):
+        y = 48 + index * CHOICE_ROW_HEIGHT
+        if row["selected"]:
+            canvas.create_rectangle(8, y, width - 9, y + CHOICE_ROW_HEIGHT - 2,
+                                    fill=CHOICE_SELECTED, outline="")
+        x = 20
+        if sessions:
+            canvas.create_text(x, y + 21, text=row["word"], anchor="w", fill=row["color"], font=row_font)
+            x += 32
+        project = row.get("project", "")
+        # Reserve a bounded project column so even a long title keeps its context.
+        project = _fit_card_text(canvas, project, project_font, min(180, width // 3))
+        project_width = 16 + _measure_card_text(canvas, project, project_font) if project else 0
+        text = "正在打开…" if row.get("opening") else row["title"]
+        text = _fit_card_text(canvas, text, row_font, width - x - 20 - project_width)
+        canvas.create_text(x, y + 21, text=text, anchor="w", fill=FOREGROUND, font=row_font)
+        if project:
+            canvas.create_text(x + _measure_card_text(canvas, text, row_font) + 16, y + 21,
+                               text=project, anchor="w", fill=theme.MUTED, font=project_font)
+    if not rows:
+        canvas.create_text(20, 69, text="暂无会话" if sessions else "暂无选项", anchor="w",
+                           fill=theme.MUTED, font=row_font)
+    canvas.create_text(20, height - 19, text=hint, anchor="w", fill=theme.MUTED, font=theme.font(11))
+    return width, height
+
+
 def paint_card(canvas, model):
     mode = model["card_mode"]
-    entries = model["card_entries"]
+    if mode in ("sessions", "list"):
+        return _paint_choice_card(canvas, model)
     title = {"help": model["layer_name"] + " · 键位", "sessions": "会话 · 按旋钮打开",
              "list": model["list_card"].get("title", "列表 · 按旋钮确认"),
              "approval": "等待批准", "question": "Agent 在提问"}.get(mode, "")
     if mode == "help":
         height = 218
-    elif mode == "sessions":
-        height = 36 + max(1, len(entries)) * 26
-    elif mode == "list":
-        height = 36 + max(1, min(7, len(model["list_card"].get("items", [])))) * 26
     else:
         height = 116
     canvas.configure(width=CARD_WIDTH, height=height, bg=BACKGROUND)
@@ -432,27 +503,6 @@ def paint_card(canvas, model):
                            fill=theme.MUTED, font=theme.font(9))
         canvas.create_text(12, 202, text="按住帮助转旋钮移动 · 松手保存", anchor="w",
                            fill=theme.MUTED, font=theme.font(9))
-    elif mode == "sessions":
-        for index, entry in enumerate(entries):
-            y = 36 + index * 26
-            if entry["selected"]:
-                canvas.create_rectangle(6, y - 1, CARD_WIDTH - 7, y + 23, fill=theme.RAISED, outline="")
-            canvas.create_oval(12, y + 8, 18, y + 14, fill=entry["color"], outline="")
-            text = "正在打开…" if entry["opening"] else entry["word"] + "  " + entry["title"]
-            canvas.create_text(26, y + 11, text=text, anchor="w", fill=FOREGROUND, font=theme.font(10))
-        if not entries:
-            canvas.create_text(12, 49, text="暂无会话", anchor="w", fill=theme.MUTED, font=theme.font(10))
-    elif mode == "list":
-        items = model["list_card"].get("items", [])
-        selected = model["list_card"].get("selected", 0)
-        start = max(0, selected - 6)
-        for index, item in enumerate(items[start:start + 7], start):
-            y = 36 + (index - start) * 26
-            if index == selected:
-                canvas.create_rectangle(6, y - 1, CARD_WIDTH - 7, y + 23, fill=theme.RAISED, outline="")
-            label = item.get("label", item.get("title", "")) if isinstance(item, dict) else item
-            canvas.create_text(12, y + 11, text=_clip_columns(label, 38), anchor="w",
-                               fill=FOREGROUND, font=theme.font(10))
     elif mode == "approval" and model["approval"]:
         approval = model["approval"]
         canvas.create_text(CARD_WIDTH - 12, 17, text=approval["position"], anchor="e",
@@ -488,6 +538,7 @@ class NoActivateWindow:
         signatures = {
             "GetAncestor": ([wintypes.HWND, wintypes.UINT], wintypes.HWND),
             "GetForegroundWindow": ([], wintypes.HWND),
+            "GetWindowRect": ([wintypes.HWND, ctypes.POINTER(wintypes.RECT)], wintypes.BOOL),
             "SetForegroundWindow": ([wintypes.HWND], wintypes.BOOL),
             "IsChild": ([wintypes.HWND, wintypes.HWND], wintypes.BOOL),
             "CallWindowProcW": ([ctypes.c_void_p, wintypes.HWND, wintypes.UINT,
@@ -507,6 +558,17 @@ class NoActivateWindow:
         self.proc = None
         self.previous = self.user.GetForegroundWindow()
         self._dpi_context = None
+        self.primary_area = None
+
+    def foreground_window(self):
+        return self.user.GetForegroundWindow()
+
+    def window_rect(self, hwnd):
+        rect = wintypes.RECT()
+        if hwnd and self.user.GetWindowRect(hwnd, ctypes.byref(rect)):
+            if rect.right > rect.left and rect.bottom > rect.top:
+                return rect.left, rect.top, rect.right, rect.bottom
+        return None
 
     def begin_dpi(self):
         """Use one physical-pixel coordinate space for Tk, cursor and monitors."""
@@ -533,13 +595,17 @@ class NoActivateWindow:
         monitor_info.argtypes = [wintypes.HANDLE, ctypes.POINTER(MonitorInfo)]
         monitor_info.restype = wintypes.BOOL
         areas = []
+        self.primary_area = None
 
         def collect(monitor, dc, rect, data):
             info = MonitorInfo()
             info.cbSize = ctypes.sizeof(info)
             if monitor_info(monitor, ctypes.byref(info)):
                 work = info.rcWork
-                areas.append((work.left, work.top, work.right, work.bottom))
+                area = (work.left, work.top, work.right, work.bottom)
+                areas.append(area)
+                if info.dwFlags & 1:  # MONITORINFOF_PRIMARY, even with a top/left taskbar
+                    self.primary_area = area
             return True
 
         if not enumerate_monitors(None, None, callback_type(collect), 0) or not areas:
@@ -726,6 +792,9 @@ class Overlay:
         self._approval_card_until = float("-inf")
         self._last_feedback = None
         self._feedback_seen = {}
+        self._choice_card_areas = {}
+        self._choice_card_area = None
+        self._session_card_anchor = None
 
     def _new_v9_window(self, *, outline=False):
         import tkinter as tk
@@ -790,6 +859,46 @@ class Overlay:
         if save:
             self._save_prefs()
 
+    def _choose_card_area(self, areas):
+        """Sample the foreground only on opening; all coordinates are work-area pixels."""
+        def area_for(hwnd):
+            rectangle = getattr(self.window, "window_rect", None)
+            rect = rectangle(hwnd) if callable(rectangle) and hwnd else None
+            if rect is not None:
+                cx, cy = (rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2
+                return next((area for area in areas
+                             if area[0] <= cx < area[2] and area[1] <= cy < area[3]), None)
+            return None
+
+        try:
+            foreground = getattr(self.window, "foreground_window", None)
+            hwnd = foreground() if callable(foreground) else None
+            natives = [self.window] + [popup[2] for popup in self._v9_windows.values()]
+            own_window = any(callable(getattr(type(native), "_is_overlay", None))
+                             and native._is_overlay(hwnd) for native in natives)
+            if own_window and self._choice_card_area in areas:
+                return self._choice_card_area
+            area = None if own_window else area_for(hwnd)
+            if area is not None:
+                return area
+        except (OSError, AttributeError, TypeError):
+            pass
+        # Reuse the desktop adapter's enumeration; this path never activates a window.
+        try:
+            desktop = getattr(self.hub, "desktop", None)
+            windows = desktop.windows.windows() if desktop is not None else []
+            if isinstance(windows, (list, tuple)):
+                for hwnd, exe, _ in windows:
+                    if ntpath.basename(exe or "").casefold() == "claude.exe":
+                        area = area_for(hwnd)
+                        if area is not None:
+                            return area
+        except (OSError, AttributeError, TypeError):
+            pass
+        primary = getattr(self.window, "primary_area", None)
+        return primary if primary in areas else next((area for area in areas
+                   if area[0] <= 0 < area[2] and area[1] <= 0 < area[3]), areas[0])
+
     def _render_v9(self):
         state, now = self._v9_state, self._v9_now
         areas = self._work_areas()
@@ -831,12 +940,33 @@ class Overlay:
             mode = None
         card = self._v9_windows["card"]
         card_visible = mode is not None
+        choice = mode in ("sessions", "list")
+        for kind, key in (("sessions", "session_card"), ("list", "list_card")):
+            if not state.get(key, {}).get("open"):
+                self._choice_card_areas.pop(kind, None)
+        if choice:
+            source = state.get("session_card" if mode == "sessions" else "list_card", {})
+            generation = source.get("generation")
+            cached = self._choice_card_areas.get(mode)
+            if cached is None or cached[0] != generation or cached[1] not in areas:
+                self._choice_card_area = self._choose_card_area(areas)
+                self._choice_card_areas[mode] = (generation, self._choice_card_area)
+            else:
+                self._choice_card_area = cached[1]
         if card_visible:
             card_width, card_height = paint_card(card[1], self.model)
-            px = x - card_width - 6 if x > (area[0] + area[2]) // 2 else x + width + 6
-            px = max(area[0], min(px, area[2] - card_width))
-            py = max(area[1], min(y, area[3] - card_height))
+            card_area = self._choice_card_area if choice else area
+            if choice:
+                px = (card_area[0] + card_area[2] - card_width) // 2
+                py = card_area[1] + int((card_area[3] - card_area[1]) * .22)
+            else:
+                px = x - card_width - 6 if x > (area[0] + area[2]) // 2 else x + width + 6
+                py = y
+            px = max(card_area[0], min(px, card_area[2] - card_width))
+            py = max(card_area[1], min(py, card_area[3] - card_height))
             self._popup_place(card, px, py, card_width, card_height)
+            if mode == "sessions":
+                self._session_card_anchor = (px, py, card_area)
             self._v9_card_bottom = py + card_height
         else:
             card[0].withdraw()
@@ -883,6 +1013,12 @@ class Overlay:
         px = max(area[0], min(px, area[2] - FEEDBACK_WIDTH))
         py = min(area[3] - FEEDBACK_HEIGHT,
                  max(y + (self._height or 22), getattr(self, "_v9_card_bottom", y)) + 4)
+        if (feedback and text.startswith(("已打开：", "打开会话失败："))
+                and self._session_card_anchor is not None):
+            anchor_x, anchor_y, anchor_area = self._session_card_anchor
+            if anchor_area in self._work_areas():
+                px = max(anchor_area[0], min(anchor_x, anchor_area[2] - FEEDBACK_WIDTH))
+                py = max(anchor_area[1], min(anchor_y, anchor_area[3] - FEEDBACK_HEIGHT))
         self._popup_place(popup, px, py, FEEDBACK_WIDTH, FEEDBACK_HEIGHT)
 
     def _render_v9_panes(self, now):

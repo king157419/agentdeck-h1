@@ -2055,6 +2055,19 @@ class ApplicationTests(unittest.TestCase):
         self.overlay.root.after.assert_called_with(300, self.application.pump)
 
 
+    def test_pump_persists_hold_mode_changes_only(self):
+        self.application.icon = Mock()
+        with patch.object(self.application, "draw_icon"):
+            self.engine.state.return_value = {"sessions": [], "hold_mode": "auto"}
+            self.application.pump()
+            self.assertNotIn("hold_mode", self.prefs.values)  # default needs no write
+            self.engine.state.return_value = {"sessions": [], "hold_mode": "never"}
+            self.application.pump()
+            self.assertEqual(app.Preferences(self.home).values["hold_mode"], "never")
+            self.engine.state.return_value = {"sessions": [], "hold_mode": "bogus"}
+            self.application.pump()
+            self.assertEqual(app.Preferences(self.home).values["hold_mode"], "never")
+
     def test_live_pump_notifies_keyboard_loss_and_recovery_once(self):
         self.application._background_enabled = True
         self.application.icon = Mock()

@@ -190,6 +190,19 @@ class CardTests(unittest.TestCase):
             show.assert_called_once_with(("cc", "waiting"))
         self.desktop.show_claude_session.assert_not_called()
 
+    def test_catalog_card_closes_before_opening_conversation(self):
+        self.source = [catalog("external", 100)]
+        self.refresh()
+        self.open_card()
+
+        def open_session(selected, sessions):
+            self.assertFalse(self.engine.state()["session_card"]["open"])
+            return {"switched": True}
+
+        self.desktop.show_claude_session.side_effect = open_session
+        self.assertEqual(self.action("select"), {"status": "sent", "message": "已打开：External"})
+        self.desktop.show_claude_session.assert_called_once()
+
     def test_hidden_claude_hub_sessions_are_not_merged_into_cards(self):
         self.source = ([catalog("visible", 95), catalog("duplicate", 96, cli="scheduled")],
                        {"scheduled", "archived"})
@@ -271,6 +284,8 @@ class CardTests(unittest.TestCase):
                                          session_override={"title": "External", "cwd": "D:/work/external"})
         self.desktop.show_claude_session.assert_not_called()
 
+        self.assertFalse(self.engine.controls.session_card["open"])
+        self.open_card()
         self.assertEqual(self.action("select")["status"], "sent")
         model = display_model(self.engine.state())
         self.assertTrue(model["strip_entries"][0]["selected"])

@@ -2,6 +2,7 @@
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import hub
 from hub_layers import Layers, classify_layer
@@ -100,7 +101,7 @@ class ControlTests(unittest.TestCase):
         self.clock += .5
         self.engine.maintain()
         self.assertEqual(self.engine.state()["layer"], "agent")
-        self.clock += 3
+        self.clock += 7.5
         self.engine.maintain()
         self.assertEqual(self.engine.state()["layer"], "chat")
 
@@ -135,10 +136,96 @@ class ControlTests(unittest.TestCase):
     def test_session_card_times_out_without_action(self):
         self.session("idle")
         self.action("session next")
-        self.clock += 2.5
+        opened_at = self.clock
+        self.clock = opened_at + 7.9
+        self.engine.maintain()
+        self.assertTrue(self.engine.state()["session_card"]["open"])
+        self.clock = opened_at + 8
         self.engine.maintain()
         self.assertFalse(self.engine.state()["session_card"]["open"])
         self.assertFalse(self.effects.calls)
+
+    def test_session_rotation_restarts_eight_second_timeout(self):
+        self.session("idle")
+        self.action("session next")
+        self.clock += 7.9
+        self.action("session prev")
+        rotated_at = self.clock
+        for delay in (.1, 7.9):
+            self.clock = rotated_at + delay
+            self.engine.maintain()
+            self.assertTrue(self.engine.state()["session_card"]["open"])
+        self.clock = rotated_at + 8
+        self.engine.maintain()
+        self.assertFalse(self.engine.state()["session_card"]["open"])
+        self.assertFalse(self.effects.calls)
+
+    def test_list_cards_timeout_eight_seconds_after_last_rotation(self):
+        self.session("agent")
+        for layer in ("agent", "browser", "video", "default"):
+            with self.subTest(layer=layer):
+                self.engine.controls.layers.current = layer
+                self.action("ctx next")
+                self.clock += 7.9
+                self.engine.maintain()
+                self.assertTrue(self.engine.state()["list_card"]["open"])
+                self.action("ctx prev")
+                rotated_at = self.clock
+                for delay in (.1, 7.9):
+                    self.clock = rotated_at + delay
+                    self.engine.maintain()
+                    self.assertTrue(self.engine.state()["list_card"]["open"])
+                self.clock = rotated_at + 8
+                self.engine.maintain()
+                self.assertFalse(self.engine.state()["list_card"]["open"])
+        self.assertFalse(self.effects.calls)
+
+    def test_select_closes_session_card_before_window_open(self):
+        self.session("idle")
+        self.action("session next")
+
+        def open_session(session, sessions):
+            self.assertFalse(self.engine.state()["session_card"]["open"])
+            return {"claude_sidebar": True, "switched": True}
+
+        with patch.object(self.effects, "show_session", side_effect=open_session) as show:
+            self.action("session select")
+            show.assert_called_once()
+
+    def test_select_closes_empty_session_card(self):
+        self.action("session next")
+        self.assertTrue(self.engine.state()["session_card"]["open"])
+        self.action("session select")
+        self.assertFalse(self.engine.state()["session_card"]["open"])
+
+    def test_card_generation_changes_only_on_new_open(self):
+        self.session("agent")
+        for command, field in (("session", "session_card"), ("ctx", "list_card")):
+            with self.subTest(command=command):
+                self.action(command + " next")
+                generation = self.engine.state()[field]["generation"]
+                self.action(command + " next")
+                self.assertEqual(self.engine.state()[field]["generation"], generation)
+                self.action(command + " select")
+                self.action(command + " prev")
+                self.assertGreater(self.engine.state()[field]["generation"], generation)
+                self.action(command + " select")
+
+    def test_select_closes_list_cards_before_desktop_operation(self):
+        self.session("agent")
+        for layer, method in (("agent", "context"), ("browser", "context_list"),
+                              ("video", "context_list"), ("default", "context_list")):
+            with self.subTest(layer=layer):
+                self.engine.controls.layers.current = layer
+                self.action("ctx next")
+
+                def run(*args):
+                    self.assertFalse(self.engine.state()["list_card"]["open"])
+                    return True
+
+                with patch.object(self.effects, method, side_effect=run) as execute:
+                    self.action("ctx select")
+                    execute.assert_called_once()
 
     def test_list_rotation_selects_only_then_press_executes(self):
         for layer in ("browser", "video", "default"):

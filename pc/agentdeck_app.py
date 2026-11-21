@@ -954,6 +954,10 @@ class TrayApplication:
                     self.message("AgentDeck 操作失败", str(error), error=True)
             # Live mode: the overlay refreshes state on its worker; Tk never takes the Hub lock.
             self.state = self.overlay.state if self._background_enabled else self.hub.state()
+            hold_mode = self.state.get("hold_mode")
+            if hold_mode in ("auto", "always", "never") and hold_mode != self.prefs.values.get("hold_mode", "auto"):
+                self.prefs.values["hold_mode"] = hold_mode  # survives restarts
+                self.prefs.save()
             notice = self.keyboard_presence.update(self.state.get("input_reader"), time.monotonic())
             if notice is not None:
                 if notice == "lost":
@@ -1634,9 +1638,11 @@ def main(argv=None):
         profile = args.profile or prefs.values.get("profile", "default")
         keymap_model(hub.load_json(keys), profile)  # Validate before listeners/native inputs.
         repair_global_hooks(home)
+        hold_mode = prefs.values.get("hold_mode")  # saved from the panel/tray; "never" = Claude's own approval only
         return hub.main(["--backend", "usb,hotkey", "--overlay", "--require-nonce",
                          "--home", str(home), "--keys", str(keys), "--prompts", str(prompts),
-                         "--profile", profile],
+                         "--profile", profile,
+                         "--hold-mode", hold_mode if hold_mode in ("auto", "always", "never") else "auto"],
                         ui_factory=lambda engine: TrayApplication(engine, commands=commands, prefs=prefs,
                                                                   keys_path=keys, profile=profile,
                                                                   background=args.background))

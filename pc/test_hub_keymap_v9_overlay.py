@@ -94,7 +94,7 @@ class V9ModelTests(unittest.TestCase):
         model = display_model(state, 100)
         self.assertEqual([item["slot"] for item in model["card_entries"]], [2, 5, 1, 6, 3, 4])
         canvas = Canvas()
-        self.assertEqual(paint_card(canvas, model), (340, 192))
+        self.assertEqual(paint_card(canvas, model), (460, 348))
         self.assertTrue(any(shape[2].get("text") == "正在打开…" for shape in canvas.shapes))
 
     def test_approval_text_includes_owner_tool_first_command_line_and_sixty_character_limit(self):
