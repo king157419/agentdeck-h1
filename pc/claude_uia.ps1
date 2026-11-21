@@ -11,6 +11,8 @@ using System;
 using System.Runtime.InteropServices;
 public static class AgentDeckForeground {
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool IsWindowVisible(IntPtr hwnd);
 }
 '@
 
@@ -34,25 +36,40 @@ function Get-Prompt($Root) {
 
 function Get-ScrollPanes($Root) {
     $window = $Root.Current.BoundingRectangle
+    $windowHandle = $Root.Current.NativeWindowHandle
     $minimum = $window.Width * $window.Height * 0.04
+    $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
     $condition = New-Object System.Windows.Automation.PropertyCondition(
         [System.Windows.Automation.AutomationElement]::IsScrollPatternAvailableProperty, $true)
     $elements = $Root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)
     $panes = @()
     foreach ($element in $elements) {
+        $current = $element.Current
+        if ($current.IsOffscreen) { continue }
         [object]$pattern = $null
         if (-not $element.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern, [ref]$pattern)) { continue }
-        if (-not ([System.Windows.Automation.ScrollPattern]$pattern).Current.VerticallyScrollable) { continue }
-        $rect = $element.Current.BoundingRectangle
+        $scroll = ([System.Windows.Automation.ScrollPattern]$pattern).Current
+        if (-not $scroll.VerticallyScrollable -or $scroll.VerticalViewSize -ge 99) { continue }
+        # Closed WebContents can keep stale UIA bounds under a hidden native host.
+        $hostElement = $element
+        while ($null -ne $hostElement -and $hostElement.Current.NativeWindowHandle -eq 0) {
+            $hostElement = $walker.GetParent($hostElement)
+        }
+        $rect = $current.BoundingRectangle
+        if ($null -ne $hostElement) {
+            $hostHandle = $hostElement.Current.NativeWindowHandle
+            if ($hostHandle -ne $windowHandle -and
+                    -not [AgentDeckForeground]::IsWindowVisible([IntPtr]$hostHandle)) { continue }
+            $rect.Intersect($hostElement.Current.BoundingRectangle)
+        }
+        $rect.Intersect($window)
         if ($rect.IsEmpty -or $rect.Width * $rect.Height -lt $minimum) { continue }
         $panes += @{ rect = @($rect.Left, $rect.Top, $rect.Right, $rect.Bottom);
-                     area = $rect.Width * $rect.Height }
+                     area = $rect.Width * $rect.Height;
+                     chat = [bool]($current.ClassName -match 'epitaxy') }
     }
     $panes = @($panes | Sort-Object -Property @{Expression={$_.area};Descending=$true} |
         Select-Object -First 4 | Sort-Object -Property @{Expression={$_.rect[0]}})
-    if ($panes.Count -eq 0) {
-        $panes = @(@{ rect = @($window.Left, $window.Top, $window.Right, $window.Bottom) })
-    }
     return $panes
 }
 

@@ -15,8 +15,8 @@ def valid_panes(items, fallback):
         if (isinstance(rect, (list, tuple)) and len(rect) == 4
                 and all(type(value) in (int, float) and math.isfinite(value) for value in rect)
                 and rect[2] > rect[0] and rect[3] > rect[1]):
-            panes.append({"rect": tuple(int(value) for value in rect)})
-    panes = sorted(panes[:4], key=lambda pane: pane["rect"][0]) or [{"rect": tuple(fallback)}]
+            panes.append({"rect": tuple(int(value) for value in rect), "chat": item.get("chat") is True})
+    panes = sorted(panes[:4], key=lambda pane: pane["rect"][0]) or [{"rect": tuple(fallback), "fallback": True}]
     for index, pane in enumerate(panes):
         position = "中" if len(panes) == 1 or index == len(panes) // 2 else "左" if index < len(panes) // 2 else "右"
         pane["name"] = "%s %s" % (position, index + 1)
@@ -38,11 +38,22 @@ class PaneSelection:
             panes = self.cache.get(hwnd)
             if panes is None:
                 panes = valid_panes([], self.rectangle(hwnd))
-            index = min(self.indices.get(process, len(panes) // 2 if process == "claude.exe" else 0), len(panes) - 1)
+            fallback = panes[0].get("fallback", False)
+            index = 0
+            if process == "claude.exe":
+                index = max(range(len(panes)), key=lambda i: (panes[i]["rect"][2] - panes[i]["rect"][0])
+                            * (panes[i]["rect"][3] - panes[i]["rect"][1]))
+                index = next((i for i, pane in enumerate(panes) if pane.get("chat") is True), index)
+            remembered = self.indices.get(process)
+            if remembered is not None and not fallback:
+                if remembered[1] == len(panes):
+                    index = remembered[0]
+                else:
+                    self.indices.pop(process, None)
             if advance:
                 index = (index + 1) % len(panes)
-                if hwnd in self.cache:
-                    self.indices[process] = index
+                if hwnd in self.cache and not fallback:
+                    self.indices[process] = (index, len(panes))
             now = self.monotonic()
             if (refresh and not self._closed and hwnd not in self._reading
                     and now >= self.requested.get(hwnd, float("-inf")) + .5):
@@ -59,6 +70,10 @@ class PaneSelection:
                                 self.rectangle(window[0]))
             with self._lock:
                 if not self._closed:
+                    process = ntpath.basename(window[1] or "").casefold()
+                    remembered = self.indices.get(process)
+                    if remembered is not None and remembered[1] != len(panes):
+                        self.indices.pop(process, None)
                     self.cache[window[0]] = panes
         except Exception:
             # UIA is optional; the synchronous fallback remains usable.

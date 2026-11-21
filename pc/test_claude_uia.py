@@ -112,6 +112,16 @@ class BridgeTests(unittest.TestCase):
                          {'ok': True, 'title': '同名 “会话”', 'index': 1, 'matches': 2, 'hwnd': 101})
         self.assertEqual(self.processes[0].requests[0]['title'], '同名 “会话”')
 
+    def test_panes_preserve_chat_and_unknown_fields_when_sorting_rectangles(self):
+        bridge = self.bridge(lambda request: {'ok': True, 'hwnd': 101,
+                             'panes': [{'rect': [600.5, 0, 1000, 800], 'chat': False, 'future': 'right'},
+                                       {'rect': [10.5, 45, 500, 800], 'chat': True, 'future': {'kept': 1}}]})
+        self.assertEqual(bridge.panes(hwnd=101),
+                         {'ok': True, 'hwnd': 101,
+                          'panes': [{'rect': [10, 45, 500, 800], 'chat': True, 'future': {'kept': 1}},
+                                    {'rect': [600, 0, 1000, 800], 'chat': False, 'future': 'right'}]})
+        self.assertEqual(self.processes[0].requests[0], {'command': 'panes', 'id': 1, 'hwnd': 101})
+
     def test_invoke_passes_optional_group_without_changing_legacy_request(self):
         bridge = self.bridge(lambda request: {'ok': True, 'expanded': True})
         self.assertEqual(bridge.invoke('同名标题', group='h1', hwnd=101),

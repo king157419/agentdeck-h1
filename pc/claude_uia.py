@@ -63,7 +63,7 @@ class ClaudeUIA:
         return self._command("invoke", hwnd=hwnd, timeout=self.invoke_timeout, **fields)
 
     def panes(self, hwnd):
-        """Validated physical-pixel rectangles, ordered from left to right."""
+        """Validate pixel rectangles and preserve pane metadata, including chat."""
         result = self._command("panes", hwnd=hwnd)
         if result is None or not isinstance(result.get("panes"), list):
             return None

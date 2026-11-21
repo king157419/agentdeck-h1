@@ -710,14 +710,15 @@ class DesktopEffects:
             if index < 4:
                 return self.prompt(session, sessions, ("继续", "跑测试", "总结")[index - 1])
             pane = self._panes().snapshot(expected, refresh=True)
-            rect = pane["panes"][pane["selected"]]["rect"]
+            selected = pane["panes"][pane["selected"]]
+            point = self._pane_point(selected["rect"], fallback=selected.get("fallback", False))
             move = getattr(self.windows, "move_pointer", None)
-            if move is not None and not move(expected, self._pane_point(rect)):
+            if move is not None and not move(expected, point):
                 raise RuntimeError("foreground changed before scrolling")
             if move is None:
                 # A zero wheel delta moves the pointer without scrolling.
                 wheel = getattr(self.windows, "wheel_delta", None)
-                if wheel is None or not wheel(expected, self._pane_point(rect), 0):
+                if wheel is None or not wheel(expected, point, 0):
                     raise RuntimeError("无法定位对话栏")
             self._combo((0x11, 0x23), expected)
             return True
@@ -770,8 +771,9 @@ class DesktopEffects:
         if not callable(getattr(self.windows, "wheel_delta", None)):
             raise RuntimeError("mouse wheel input unavailable")
         pane = self._panes().snapshot(window, refresh=True)
-        rect = pane["panes"][pane["selected"]]["rect"]
-        point = self._pane_point(rect)
+        selected = pane["panes"][pane["selected"]]
+        rect = selected["rect"]
+        point = self._pane_point(rect, fallback=selected.get("fallback", False))
         scroll_log.info("scroll notches=%+d exe=%s title=%r rect=%s point=%s",
                         notches, ntpath.basename(window[1] or ""), (window[2] or "")[:40], rect, point)
         if self._smooth_scroll is None:
@@ -781,9 +783,9 @@ class DesktopEffects:
         return self._smooth_scroll.pulse(notches, window, point)
 
     @staticmethod
-    def _pane_point(rect):
+    def _pane_point(rect, *, fallback=False):
         left, top, right, bottom = rect
-        return max(left + 1, right - 16), (top + bottom) // 2
+        return ((left + right) // 2 if fallback else max(left + 1, right - 16)), (top + bottom) // 2
 
     def _panes(self):
         if self._pane_selection is None:

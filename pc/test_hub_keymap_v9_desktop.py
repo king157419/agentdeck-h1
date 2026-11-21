@@ -233,15 +233,16 @@ class ScrollTests(unittest.TestCase):
         self.assertEqual([pane["rect"][0] for pane in panes], [0, 600])
         self.assertEqual(valid_panes([], (0, 0, 100, 100))[0]["rect"], (0, 0, 100, 100))
 
-    def test_per_process_selection_default_middle_and_wrap(self):
+    def test_per_process_selection_largest_default_and_wrap(self):
         selector = PaneSelection(Mock(), lambda hwnd: (0, 0, 900, 900))
         self.addCleanup(selector.close)
         selector.cache[11] = valid_panes([{"rect": [i * 300, 0, (i + 1) * 300, 900]} for i in range(3)], ())
         window = (11, "claude.exe", "Claude")
+        self.assertEqual(selector.snapshot(window)["selected"], 0)
+        self.assertEqual(selector.snapshot(window, advance=True)["selected"], 1)
+        self.assertEqual(selector.snapshot((11, "chrome.exe", "Chrome"))["selected"], 0)
         self.assertEqual(selector.snapshot(window)["selected"], 1)
         self.assertEqual(selector.snapshot(window, advance=True)["selected"], 2)
-        self.assertEqual(selector.snapshot((11, "chrome.exe", "Chrome"))["selected"], 0)
-        self.assertEqual(selector.snapshot(window)["selected"], 2)
         self.assertEqual(selector.snapshot(window, advance=True)["selected"], 0)
 
     def test_async_panes_read_is_cached_for_500ms(self):
