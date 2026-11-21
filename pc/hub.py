@@ -329,7 +329,8 @@ class Hub:
                  risk_rules=None, critical_rules=None, prompts=None, home=None, audit=None,
                  lcd_enabled=True, desktop_enabled=True, gate_mode="high", require_nonce=False,
                  lcd_async=None, hold_mode="always", sessions_path=None, window_alive=None,
-                 production_hosts=(), protected_branches=PROTECTED_BRANCHES, mcp_write_tools=()):
+                 production_hosts=(), protected_branches=PROTECTED_BRANCHES, mcp_write_tools=(),
+                 claude_sessions_reader=None):
         if not math.isfinite(approve_timeout) or approve_timeout <= 0:
             raise ValueError("approve timeout must be positive and finite")
         self.approve_timeout = approve_timeout
@@ -411,13 +412,15 @@ class Hub:
         self.sessions_write_at = float("-inf")
         self.sessions_warnings = set()
         self.unheld_since = None
-        self.controls = Controls(self)
+        self.controls = Controls(self, session_reader=claude_sessions_reader)
         self.noop_notices = {}
         self.panel = None             # set by Panel; served by HubServer under /panel
         self.usb_keys = None          # set by main(); the panel reloads it after key edits
         self.key_events = deque(maxlen=KEY_EVENT_LIMIT)
         self.key_seq = 0
         self._load_sessions()
+        if self.desktop_enabled:
+            self.controls.refresh_sessions()
 
     @staticmethod
     def _window_alive(hwnd):
@@ -1433,9 +1436,10 @@ class Hub:
             (p.id for p in self.locked.values() if p.session == selected), None))
         self._show()
 
-    def _focus_effect(self, command, selected, result):
+    def _focus_effect(self, command, selected, result, session_override=None):
         """Snapshot under the lock; the returned callable focuses without it."""
         session = dict(self.sessions[selected])
+        session.update(session_override or {})
         sessions = [dict(item) for item in self.sessions.values()]
         # Shared relay handles may still resolve to a distinct session window.
         hwnd = session.get("hwnd")
@@ -1730,6 +1734,9 @@ class Hub:
                 log.warning("Desktop shutdown failed: %s", error)
         if reader is not None and reader is not threading.current_thread():
             reader.join(timeout=3.5)
+        catalog_reader = self.controls.catalog_reader
+        if catalog_reader is not None and catalog_reader is not threading.current_thread():
+            catalog_reader.join(timeout=1)
         self._save_sessions(force=True)
 
 

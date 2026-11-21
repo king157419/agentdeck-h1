@@ -12,16 +12,21 @@ import subprocess
 import threading
 
 
-COMMAND_TIMEOUT = 3.0
+COMMAND_TIMEOUT = 5.0
+# Invoke also needs process startup, expansion polling and sidebar restoration.
+INVOKE_TIMEOUT = 10.0
 log = logging.getLogger("agentdeck.hub.uia")
 
 
 class ClaudeUIA:
-    def __init__(self, *, popen=None, timeout=COMMAND_TIMEOUT):
+    def __init__(self, *, popen=None, timeout=None):
+        invoke_timeout = INVOKE_TIMEOUT if timeout is None else timeout
+        timeout = COMMAND_TIMEOUT if timeout is None else timeout
         if not isinstance(timeout, (int, float)) or not 0 < timeout < float("inf"):
             raise ValueError("UIA timeout must be positive and finite")
         self._popen = subprocess.Popen if popen is None else popen
         self.timeout = timeout
+        self.invoke_timeout = invoke_timeout
         self._lock = threading.Lock()
         self._process = None
         self._worker = None
@@ -44,13 +49,18 @@ class ClaudeUIA:
             return None
         return result
 
-    def invoke(self, title, index=0, hwnd=None):
-        """Invoke the zero-based occurrence of an exact sidebar title, or None."""
+    def invoke(self, title, index=0, hwnd=None, group=None):
+        """Invoke an exact sidebar title, preferring its optional project group."""
         if not isinstance(title, str) or not title.strip() or len(title) > 4096:
             raise ValueError("UIA title must be a nonempty string of at most 4096 characters")
         if type(index) is not int or index < 0:
             raise ValueError("UIA index must be a nonnegative integer")
-        return self._command("invoke", hwnd=hwnd, title=title, index=index)
+        fields = dict(title=title, index=index)
+        if group is not None:
+            if not isinstance(group, str) or not group.strip() or len(group) > 4096:
+                raise ValueError("UIA group must be a nonempty string of at most 4096 characters")
+            fields["group"] = group
+        return self._command("invoke", hwnd=hwnd, timeout=self.invoke_timeout, **fields)
 
     def panes(self, hwnd):
         """Validated physical-pixel rectangles, ordered from left to right."""
@@ -83,7 +93,7 @@ class ClaudeUIA:
         result = self._command("focused_editable", hwnd=hwnd)
         return isinstance(result, dict) and result.get("editable") is True
 
-    def _command(self, command, *, hwnd=None, **fields):
+    def _command(self, command, *, hwnd=None, timeout=None, **fields):
         if hwnd is not None and (type(hwnd) is not int or not 0 < hwnd < 2**64):
             raise ValueError("UIA hwnd must be a positive window handle")
         with self._lock:
@@ -98,7 +108,7 @@ class ClaudeUIA:
                 if hwnd is not None:
                     request["hwnd"] = hwnd
                 self._requests.put(request)
-                result = self._responses.get(timeout=self.timeout)
+                result = self._responses.get(timeout=self.timeout if timeout is None else timeout)
                 if not isinstance(result, dict) or result.get("id") != request["id"]:
                     raise ValueError("invalid UIA response")
                 if result.get("ok") is not True:

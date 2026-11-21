@@ -183,7 +183,7 @@ class HubTests(unittest.TestCase):
         self.uia.list.return_value["current_title"] = "现状与前景讨论"
         result = self.engine.action({"action": "show"})
         self.assertEqual(self.windows.activated, [11])
-        self.uia.invoke.assert_called_once_with("现状与前景讨论", index=0, hwnd=11)
+        self.uia.invoke.assert_called_once_with("现状与前景讨论", index=0, hwnd=11, group="h1")
         self.assertTrue(result["switched"])
         self.assertEqual(hub.describe_input("show", result)[0], "已切到：现状与前景讨论")
 
@@ -208,7 +208,7 @@ class HubTests(unittest.TestCase):
         with self.assertLogs("agentdeck.hub", "WARNING") as logs:
             self.assertTrue(self.engine.action({"action": "show"})["switched"])
         self.assertIn("using first", " ".join(logs.output))
-        self.uia.invoke.assert_called_once_with("Alpha", index=0, hwnd=11)
+        self.uia.invoke.assert_called_once_with("Alpha", index=0, hwnd=11, group="h1")
 
     def test_codex_only_activates_window_and_uia_does_not_hold_state_lock(self):
         self.event("codex", "ignored", agent="cx")

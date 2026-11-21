@@ -3,11 +3,12 @@ import sys
 import threading
 
 from hub_layers import Layers
+from claude_sessions import recent_sessions
 from session_titles import session_label
 
 
 class Controls:
-    def __init__(self, hub):
+    def __init__(self, hub, session_reader=None):
         self.hub = hub
         self.layers = Layers()
         self.layer_changed_at = float("-inf")
@@ -23,10 +24,77 @@ class Controls:
         self.card_generation = 0
         self.origin_reader = None
         self.wait_cursor = None
+        self.session_reader = recent_sessions if session_reader is None else session_reader
+        self.claude_sessions = []
+        self.catalog_reader = None
+        self.catalog_refresh_at = float("-inf")
+
+    def refresh_sessions(self, force=False):
+        """Publish a background file snapshot; never read Claude files under the Hub lock."""
+        hub = self.hub
+        with hub.lock:
+            if (hub.closed or self.catalog_reader is not None and self.catalog_reader.is_alive()
+                    or not force and hub.monotonic() < self.catalog_refresh_at):
+                return
+            self.catalog_refresh_at = hub.monotonic() + 10
+
+            def read():
+                try:
+                    sessions = self.session_reader()
+                except Exception:
+                    sessions = []
+                with hub.lock:
+                    if not hub.closed:
+                        self.claude_sessions = [dict(s) for s in sessions]
+
+            self.catalog_reader = threading.Thread(target=read, name="AgentDeck Claude sessions", daemon=True)
+            self.catalog_reader.start()
+
+    def _card_sessions(self):
+        hub = self.hub
+        entries, seen = [], set()
+        for source in self.claude_sessions:
+            cli_id = source.get("cli_session_id")
+            identity = ("cc", cli_id)
+            marker = identity if cli_id else ("claude", source["session_id"])
+            if marker in seen:
+                continue
+            seen.add(marker)
+            known = hub.sessions.get(identity) if cli_id else None
+            entry = dict(known) if known is not None else {
+                "agent": "cc", "session_id": source["session_id"],
+                "slot": "claude:" + source["session_id"], "state": "idle", "_catalog_only": True}
+            entry.update(title=source["title"], cwd=source["cwd"], cli_session_id=cli_id,
+                         claude_session_id=source["session_id"],
+                         last_updated=max(source["last_activity"] / 1000, entry.get("last_updated", 0)))
+            entries.append(entry)
+        for identity, session in hub.sessions.items():
+            if session.get("agent") in ("cc", "cx") and identity not in seen:
+                entries.append(dict(session))
+        return sorted(entries, key=lambda s: -s.get("last_updated", 0))[:12]
+
+    def _card_entries(self):
+        entries = []
+        for source in self.session_card.get("entries", []):
+            entry = dict(source)
+            identity = (("cc", source["cli_session_id"]) if source.get("cli_session_id") else
+                        (source["agent"], source["session_id"]) if not source.get("_catalog_only") else None)
+            current = self.hub.sessions.get(identity)
+            if current is not None:
+                entry.update(current)
+                entry.update(slot=source["slot"], _catalog_only=False)
+                if source.get("claude_session_id"):
+                    entry.update(title=source.get("title"), cwd=source.get("cwd"))
+            elif source.get("claude_session_id"):
+                entry.update(state="idle", native_wait=False, needs_answer=False,
+                             wait_kind=None, _catalog_only=True)
+            entries.append(entry)
+        return entries
 
     def snapshot(self):
         return {"layer": self.layers.current, "layer_changed_at": self.layer_changed_at,
-                "session_card": dict(self.session_card), "list_card": dict(self.list_card),
+                "session_card": {**self.session_card, "entries": self._card_entries()},
+                "list_card": dict(self.list_card),
                 "overlay_visible": self.overlay_visible, "overlay_help": self.overlay_help,
                 "overlay_move_requests": self.move_requests,
                 "overlay_save_requests": self.save_requests, "panes": self.panes}
@@ -38,6 +106,8 @@ class Controls:
 
     def maintain(self):
         hub = self.hub
+        if hub.desktop_enabled:
+            self.refresh_sessions()
         now = hub.monotonic()
         desktop = hub.desktop
         foreground = getattr(desktop, "foreground", None) if desktop is not None else None
@@ -109,7 +179,7 @@ class Controls:
 
     def _origin(self, generation):
         hub = self.hub
-        candidates = [dict(s) for s in hub.sessions.values()]
+        candidates = self._card_entries()
         def read():
             try:
                 desktop = hub._desktop()
@@ -118,7 +188,10 @@ class Controls:
                 with hub.lock:
                     if hub.closed or generation != self.card_generation or not self.session_card["open"]:
                         return
-                    match = next((s for s in candidates if s.get("title") == title), None)
+                    matches = [s for s in candidates if s.get("title") == title]
+                    match = max(matches, key=lambda s: (
+                        (s["agent"], s.get("cli_session_id") or s["session_id"]) == hub.selected,
+                        s.get("last_updated", 0)), default=None)
                     if match and match["slot"] in self.session_card["order"]:
                         self.session_card["selected_slot"] = match["slot"]
             except Exception:
@@ -126,16 +199,19 @@ class Controls:
         self.origin_reader = threading.Thread(target=read, name="AgentDeck card origin", daemon=True)
         self.origin_reader.start()
 
-    def _show_session(self, identity):
+    def _show_session(self, identity, session_override=None):
         hub = self.hub
         with hub.lock:
             if identity not in hub.sessions:
                 return {"status": "noop", "noop": "这个会话已结束"}
             hub._select_session(identity)
             selected = dict(hub.sessions[identity])
-            self.session_card["opening_slot"] = selected["slot"]
+            selected.update(session_override or {})
+            self.session_card["opening_slot"] = (self.session_card["selected_slot"]
+                                                 if self.session_card["open"] else selected["slot"])
             self.session_card["deadline"] = hub.monotonic() + 5
-            effect = hub._focus_effect("show", identity, {"status": "selected"})
+            effect = hub._focus_effect("show", identity, {"status": "selected"},
+                                       session_override=session_override)
         result = effect()
         with hub.lock:
             self.session_card.pop("opening_slot", None)
@@ -146,6 +222,25 @@ class Controls:
         if result.get("switched") is False or result.get("window") != "focused":
             return {"status": "error", "message": "打开会话失败：" + session_label(selected, 18)}
         return {"status": "sent", "message": "已打开：" + session_label(selected, 18)}
+
+    def _show_claude_session(self, selected):
+        hub = self.hub
+        with hub.lock:
+            sessions = [dict(s) for s in hub.sessions.values()]
+            self.session_card["opening_slot"] = selected["slot"]
+            self.session_card["deadline"] = hub.monotonic() + 5
+        try:
+            result = hub._desktop().show_claude_session(selected, sessions)
+            opened = isinstance(result, dict) and result.get("switched") is True
+        except Exception:
+            opened = False
+        finally:
+            with hub.lock:
+                self.session_card.pop("opening_slot", None)
+                self.session_card["open"] = False
+                self.card_generation += 1
+        return {"status": "sent" if opened else "error",
+                "message": ("已打开：" if opened else "打开会话失败：") + session_label(selected, 18)}
 
     def action(self, command, argument, received_at):
         hub = self.hub
@@ -171,8 +266,11 @@ class Controls:
                     self.card_generation += 1
                     first = not self.session_card["open"]
                     if first:
-                        order = [hub.sessions[i]["slot"] for i in self._sessions()]
-                        self.session_card.update(open=True, order=order, selected_slot=order[0] if order else None)
+                        entries = self._card_sessions()
+                        order = [s["slot"] for s in entries]
+                        self.session_card.update(open=True, order=order, entries=entries,
+                                                 selected_slot=order[0] if order else None)
+                        self.refresh_sessions(force=True)
                     else:
                         order = self.session_card["order"]
                         slot = self.session_card["selected_slot"]
@@ -185,14 +283,21 @@ class Controls:
                     return {"status": "ignored"}
                 if self.session_card["open"]:
                     slot = self.session_card["selected_slot"]
-                    identity = next((i for i, s in hub.sessions.items() if s["slot"] == slot), None)
+                    entry = next((s for s in self._card_entries() if s["slot"] == slot), None)
+                    identity = ((entry["agent"], entry["session_id"])
+                                if entry and not entry.get("_catalog_only") else None)
                 else:
+                    entry = None
                     waiting = [i for i in self._sessions() if hub.sessions[i].get("state") in ("wait", "locked", "error")]
                     index = waiting.index(self.wait_cursor) + 1 if self.wait_cursor in waiting else 0
                     identity = waiting[index % len(waiting)] if waiting else None
                     self.wait_cursor = identity
+            if entry and entry.get("_catalog_only"):
+                return self._show_claude_session(entry)
             if identity is None:
                 return {"status": "noop", "noop": "没有等你的会话"}
+            if entry and entry.get("claude_session_id"):
+                return self._show_session(identity, session_override={"title": entry["title"], "cwd": entry["cwd"]})
             return self._show_session(identity)
         if command == "ctx":
             layer = self.layers.current

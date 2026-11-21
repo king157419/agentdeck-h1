@@ -454,7 +454,9 @@ class DesktopEffects:
             for retry in range(2):
                 if self.windows()[0] != window[0]:
                     return result
-                invoked = self.claude_uia.invoke(title, index=0, hwnd=window[0])
+                cwd = session.get("cwd") or ""
+                group = ntpath.basename(ntpath.normpath(cwd)) if cwd else None
+                invoked = self.claude_uia.invoke(title, index=0, hwnd=window[0], group=group or None)
                 if not isinstance(invoked, dict) or invoked.get("ok") is not True:
                     return result
                 if invoked.get("matches", 0) > 1:
@@ -474,6 +476,15 @@ class DesktopEffects:
         except Exception as error:
             logging.getLogger("agentdeck.hub").warning("Claude sidebar switch failed: %s", error)
         return result
+
+    def show_claude_session(self, session, sessions):
+        """Open a catalog conversation in Claude without toggling to another app."""
+        self._app_target("exe:claude.exe", toggle=False)
+        window = self.windows()
+        if ntpath.basename(window[1] or "").casefold() != "claude.exe":
+            raise RuntimeError("Claude window is no longer foreground")
+        target = dict(session, hwnd=window[0], window_exe=window[1])
+        return self.show_session(target, [target])
 
     def window(self, session, sessions, direction):
         with self._voice_commands:
@@ -520,7 +531,7 @@ class DesktopEffects:
             self._combo((0x11, 0x10, keys[direction]), window)
             return True
 
-    def _app_target(self, name):
+    def _app_target(self, name, *, toggle=True):
         if self.voice_active:
             raise RuntimeError("release voice before switching apps")
         current = self.foreground()
@@ -538,14 +549,15 @@ class DesktopEffects:
         if custom:
             exe = ntpath.basename(name[4:]).casefold()
             names[name] = {exe}
-        candidates = [window for window in items if kind(window) in names[name]]
-        if name == "claude" and kind(current) in names[name]:
+        candidates = [window for window in items
+                      if (ntpath.basename(window[1] or "").casefold() if custom else kind(window)) in names[name]]
+        if toggle and name == "claude" and kind(current) in names[name]:
             other = [window for window in candidates if kind(window) != kind(current)]
             if other:
                 candidates = other
             else:
                 return self.window(None, [], "back")
-        elif any(window[0] == current[0] for window in candidates):
+        elif toggle and any(window[0] == current[0] for window in candidates):
             return self.window(None, [], "back")
         if not candidates:
             raise RuntimeError("没找到%s窗口" % {"claude": "Claude / Codex", "wechat": "微信", "feishu": "飞书", "browser": "浏览器"}.get(name, ntpath.basename(name[4:])))

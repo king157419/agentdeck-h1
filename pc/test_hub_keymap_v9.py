@@ -76,7 +76,8 @@ class ControlTests(unittest.TestCase):
         self.clock = 100.
         self.effects = Desktop()
         self.engine = hub.Hub(home=Path(folder.name), desktop=self.effects, lcd_enabled=False,
-                              monotonic=lambda: self.clock, wall_time=lambda: self.clock)
+                              monotonic=lambda: self.clock, wall_time=lambda: self.clock,
+                              claude_sessions_reader=lambda: [])
         self.addCleanup(self.engine.close)
 
     def action(self, action):
@@ -103,7 +104,7 @@ class ControlTests(unittest.TestCase):
         self.engine.maintain()
         self.assertEqual(self.engine.state()["layer"], "chat")
 
-    def test_rotation_orders_by_need_freezes_and_never_focuses(self):
+    def test_rotation_orders_by_activity_freezes_and_never_focuses(self):
         for sid, state in (("idle", "idle"), ("running", "tool"), ("done", "done"),
                            ("error", "error"), ("question", "wait")):
             self.session(sid, state)

@@ -23,7 +23,7 @@ app = Analysis(
     datas=data,
     hiddenimports=["pystray._win32", "PIL.ImageTk", "tkinter", "tkinter.filedialog",
                    "tkinter.messagebox", "usb.backend.libusb1", "libusb_package",
-                   "deck_input", "hub_keyboard", "claude_uia", "hub_window_switch", "session_titles",
+                   "deck_input", "hub_keyboard", "claude_uia", "claude_sessions", "hub_window_switch", "session_titles",
                    "panel", "panel_launch"],
     hookspath=[], hooksconfig={}, runtime_hooks=[], excludes=excludes,
     noarchive=False, optimize=0,

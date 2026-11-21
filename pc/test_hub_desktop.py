@@ -6,7 +6,7 @@ import tempfile
 import threading
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from hub_desktop import DesktopEffects, HubWindowControl, capture_screen
 
@@ -155,6 +155,51 @@ class DesktopTests(unittest.TestCase):
         with patch("PIL.ImageGrab.grab", return_value="fake image") as grab:
             self.assertEqual(capture_screen(), "fake image")
             grab.assert_called_once_with(all_screens=True)
+
+    def test_catalog_conversation_targets_claude_without_app_toggle(self):
+        claude = (41, "C:/apps/Claude.exe", "Claude")
+        self.windows.items = [claude, (42, "codex.exe", "Codex")]
+        self.windows.foreground = claude
+        uia = self.effects._claude_uia = Mock()
+        uia.invoke.return_value = {"ok": True, "matches": 1, "expanded": True}
+        uia.list.return_value = {"current_title": "Catalog title"}
+        session = {"agent": "cc", "title": "Catalog title", "cwd": "D:/projects/h1/"}
+        result = self.effects.show_claude_session(session, [])
+        self.assertTrue(result["switched"])
+        self.assertTrue(result["claude_sidebar"])
+        self.assertEqual(self.windows.foreground, claude)
+        self.assertEqual(self.windows.activated, [41, 41])
+        uia.invoke.assert_called_once_with("Catalog title", index=0, hwnd=41, group="h1")
+        self.assertNotIn("hwnd", session)
+
+    def test_catalog_conversation_uses_most_recent_claude_window_only(self):
+        self.windows.items = [(41, "claude.exe", "Claude"), (42, "claude.exe", "Other"),
+                              (43, "codex.exe", "Codex")]
+        self.effects._app_recency = {41: 1, 42: 2, 43: 100}
+        uia = self.effects._claude_uia = Mock()
+        uia.invoke.return_value = {"ok": True, "matches": 1}
+        uia.list.return_value = {"current_title": "Catalog title"}
+        session = {"agent": "cc", "title": "Catalog title", "cwd": "D:\\projects\\group-name\\"}
+        self.assertTrue(self.effects.show_claude_session(session, [SESSION])["switched"])
+        self.assertEqual(self.windows.foreground[0], 42)
+        uia.invoke.assert_called_once_with("Catalog title", index=0, hwnd=42, group="group-name")
+
+    def test_catalog_conversation_rejects_missing_claude_or_failed_activation(self):
+        session = {"agent": "cc", "title": "Catalog title", "cwd": "D:/h1"}
+        uia = self.effects._claude_uia = Mock()
+        with self.assertRaisesRegex(RuntimeError, "claude.exe"):
+            self.effects.show_claude_session(session, [])
+        self.windows.items = [(41, "claude.exe", "Claude")]
+        self.windows.activate_ok = False
+        with self.assertRaisesRegex(RuntimeError, "窗口激活失败"):
+            self.effects.show_claude_session(session, [])
+        uia.invoke.assert_not_called()
+
+    def test_catalog_conversation_rejects_foreground_change_after_activation(self):
+        session = {"agent": "cc", "title": "Catalog title", "cwd": "D:/h1"}
+        with patch.object(self.effects, "_app_target", return_value=True):
+            with self.assertRaisesRegex(RuntimeError, "no longer foreground"):
+                self.effects.show_claude_session(session, [])
 
 
 class ComboTests(unittest.TestCase):

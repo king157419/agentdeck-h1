@@ -55,7 +55,8 @@ def _v9_display(state, sessions, request, now):
     """Pure v9 presentation data; selection and all application I/O stay in Hub."""
     pending = list(state.get("pending", ())) + list(state.get("locked", ()))
     approval_sessions = {(item.get("agent"), item.get("session_id")) for item in pending}
-    order = state.get("session_card", {}).get("order") or state.get("display_order")
+    session_card, list_card = state.get("session_card", {}), state.get("list_card", {})
+    order = state.get("display_order")
     if not isinstance(order, list):
         def priority(session):
             identity = (session.get("agent"), session.get("session_id"))
@@ -70,19 +71,24 @@ def _v9_display(state, sessions, request, now):
     order = list(dict.fromkeys(number for number in order if number in sessions))
     selected = state.get("session_card", {}).get("selected_slot", state.get("selected_slot"))
     opening = state.get("session_card", {}).get("opening_slot")
-    entries = []
-    for number in order:
-        session = sessions[number]
+    def row(session, number, selection=selected):
         approval = ((session.get("agent"), session.get("session_id")) in approval_sessions
-                    or session.get("state") == "locked")
+                    or session.get("state") == "locked" or session.get("native_wait")
+                    or session.get("wait_kind") == "permission_prompt")
         word = ("批" if approval else "问" if session.get("needs_answer") or session.get("state") == "wait"
                 else {"error": "错", "done": "完", "think": "跑", "tool": "跑"}.get(session.get("state"), "闲"))
         color = COLORS["ASK"] if word in ("批", "问") else COLORS[STATES.get(session.get("state"), "IDLE")]
         title = session_label(session)
-        entries.append({"slot": number, "word": word, "color": color,
-                        "title": title[:18] + ("…" if len(title) > 18 else ""),
-                        "selected": selected == number, "opening": opening == number})
-    session_card, list_card = state.get("session_card", {}), state.get("list_card", {})
+        return {"slot": number, "word": word, "color": color,
+                "title": title[:18] + ("…" if len(title) > 18 else ""),
+                "selected": selection == number, "opening": opening == number}
+    entries = [row(sessions[number], number, state.get("selected_slot")) for number in order]
+    card_order = session_card.get("order", order)
+    card_entries = ([row(session, session["slot"]) for session in session_card["entries"]]
+                    if "entries" in session_card else
+                    [row(sessions[number], number) for number in card_order if number in sessions])
+    selected_index = next((i for i, entry in enumerate(card_entries) if entry["selected"]), 0)
+    card_start = max(0, min(selected_index - 6, len(card_entries) - 7))
     help_open = state.get("overlay_help") is True
     question = next((session for session in sessions.values() if session.get("needs_answer")), None)
     mode = ("help" if help_open else "sessions" if session_card.get("open") else
@@ -106,7 +112,7 @@ def _v9_display(state, sessions, request, now):
     help_rows = [("Claude/Codex", "微信", "飞书", "浏览器"), row2,
                  ("上个窗口", "复制", "粘贴", "浮窗/帮助"),
                  ("打断/Esc", "截图", "发送", "清空"), ("批准", "拒绝", "语音", "空")]
-    return {"strip_entries": entries[:6], "card_entries": entries[:7], "card_mode": mode,
+    return {"strip_entries": entries[:6], "card_entries": card_entries[card_start:card_start + 7], "card_mode": mode,
             "approval": approval, "question": question, "help_rows": help_rows,
             "list_card": list_card, "layer": layer, "layer_name": LAYER_NAMES.get(layer, layer),
             "layer_notice": (now is not None and isinstance(state.get("layer_changed_at"), (int, float))
