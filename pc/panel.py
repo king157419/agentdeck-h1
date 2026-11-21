@@ -8,6 +8,7 @@ import copy
 from http.cookies import SimpleCookie
 import hmac
 import json
+import logging
 import ntpath
 import os
 from pathlib import Path
@@ -43,11 +44,11 @@ LAYER_ROW2 = {
     "default": ("后退", "Tab", "关闭", "到底"),
 }
 LAYER_KNOB4 = {  # clockwise, counterclockwise, press
-    "agent": ("下一个选项", "上一个选项", "确认"),
-    "chat": ("下一个聊天", "上一个聊天", "确认"),
-    "browser": ("下一个标签", "上一个标签", "回车"),
+    "agent": ("下一个选项", "上一个选项", "回车（列表开着时确认）"),
+    "chat": ("下一个聊天", "上一个聊天", "回车（列表开着时确认）"),
+    "browser": ("下一个标签", "上一个标签", "回车（列表开着时确认）"),
     "video": ("快进 5 秒", "快退 5 秒", "播放/暂停"),
-    "default": ("下方向键", "上方向键", "回车"),
+    "default": ("下方向键", "上方向键", "回车（列表开着时确认）"),
 }
 KNOB_NAMES = ("窗口", "会话", "滚动", "列表")
 ACTION_LABELS = {
@@ -56,7 +57,7 @@ ACTION_LABELS = {
     "send": "发送", "clear": "清空输入", "approve": "批准", "deny": "拒绝", "voice": "语音",
     "session next": "下个会话", "session prev": "上个会话", "session select": "选定会话",
     "scroll 1": "向下滚", "scroll -1": "向上滚", "scroll end": "滚到底", "pane next": "下一栏",
-    "next_wait": "下个待批", "ctx next": "列表下一个", "ctx prev": "列表上一个", "ctx select": "列表确认",
+    "next_wait": "下个待批", "ctx next": "列表下一个", "ctx prev": "列表上一个", "ctx select": "回车（列表开着时确认）",
     "app claude": "Claude / Codex", "app wechat": "微信", "app feishu": "飞书", "app browser": "浏览器",
     "none": "空",
 }
@@ -65,7 +66,7 @@ APP_OPTIONS = (("app claude", "Claude / Codex"), ("app wechat", "微信"), ("app
 ACTION_OPTIONS = (("copy", "复制"), ("paste", "粘贴"), ("send", "发送"), ("clear", "清空输入框"),
                   ("interrupt", "打断 / Esc"), ("screenshot", "截图"), ("window back", "上一个窗口"),
                   ("next_wait", "跳到下一个等你的会话"))
-KNOB_OPTIONS = (("ctx next", "列表：下一个"), ("ctx prev", "列表：上一个"), ("ctx select", "列表：确认"))
+KNOB_OPTIONS = (("ctx next", "列表：下一个"), ("ctx prev", "列表：上一个"), ("ctx select", "回车（列表开着时确认）"))
 PROMPT_LABELS = ("继续", "跑测试", "总结进度", "提交")
 
 
@@ -85,17 +86,26 @@ def ui_dir():
 class PanelAuth:
     """One-time login codes and the session tokens they are traded for."""
 
-    def __init__(self, monotonic=time.monotonic):
+    def __init__(self, monotonic=time.monotonic, *, home=None, wall_time=time.time):
         self.monotonic = monotonic
+        self.wall_time = wall_time
+        self.home = Path.home() if home is None else Path(home)
+        self.record_path = self.home / ".agentdeck" / "panel.json"
         self.lock = threading.Lock()
         self.codes = {}
-        self.sessions = {}
         self.failures = 0
 
     def _prune(self, now):
-        for table in (self.codes, self.sessions):
-            for key in [key for key, expires in table.items() if expires <= now]:
-                del table[key]
+        for key in [key for key, expires in self.codes.items() if expires <= now]:
+            del self.codes[key]
+
+    def _signature(self, issued):
+        from hub import load_token
+        key = hmac.new(load_token(self.home).encode("ascii"), b"agentdeck-panel-v1", "sha256").digest()
+        return hmac.new(key, ("panel|" + issued).encode("ascii"), "sha256").hexdigest()
+
+    def _live(self, issued):
+        return type(issued) is int and 0 <= self.wall_time() - issued < SESSION_SECONDS
 
     def new_code(self):
         with self.lock:
@@ -121,22 +131,43 @@ class PanelAuth:
                 return None
             del self.codes[match]
             self.failures = 0
-            token = secrets.token_urlsafe(32)
-            self.sessions[token] = now + SESSION_SECONDS
+            issued = int(self.wall_time())
+            token = "v1.%d.%s" % (issued, self._signature(str(issued)))
+            temporary = self.record_path.with_suffix(".json.tmp")
+            try:
+                temporary.write_text(json.dumps({"issued_at": issued}) + "\n", encoding="utf-8")
+                os.replace(temporary, self.record_path)
+            except OSError as error:  # only a launch hint: login still succeeds
+                logging.getLogger("agentdeck.panel").warning("panel.json not written: %s", error)
+            finally:
+                temporary.unlink(missing_ok=True)
             return token
 
     def check(self, token):
-        if not isinstance(token, str) or not token:
+        if not isinstance(token, str) or not token or len(token) > 200:
             return False
-        with self.lock:
-            self._prune(self.monotonic())
-            return any(hmac.compare_digest(known.encode(), token.encode("utf-8", "replace"))
-                       for known in self.sessions)
+        parts = token.split(".")
+        if (len(parts) != 3 or parts[0] != "v1" or not parts[1].isascii()
+                or not parts[1].isdecimal() or not self._live(int(parts[1]))):
+            return False
+        try:
+            return hmac.compare_digest(self._signature(parts[1]).encode("ascii"), parts[2].encode("utf-8"))
+        except (OSError, ValueError, UnicodeError):
+            return False
 
     def has_session(self):
         with self.lock:
-            self._prune(self.monotonic())
-            return bool(self.sessions)
+            try:
+                record = json.loads(self.record_path.read_text(encoding="utf-8"))
+                key_stat = self.record_path.with_name("token").stat()
+                # The key is read before the atomic record write on login. A newer
+                # key means rotation: the tray must open a fresh login window.
+                # This is a launch hint; cookie signatures remain authoritative if
+                # filesystem timestamps are preserved or have coarse resolution.
+                return (isinstance(record, dict) and self._live(record.get("issued_at"))
+                        and key_stat.st_mtime_ns <= self.record_path.stat().st_mtime_ns)
+            except (OSError, ValueError):
+                return False
 
 
 def first_line(text, limit=200):
@@ -148,7 +179,7 @@ class Panel:
     def __init__(self, hub, *, keys_path=None, shipped_path=None, ui_path=None, monotonic=None,
                  claude_interval=CLAUDE_INTERVAL, idle_seconds=POLL_IDLE_SECONDS):
         self.hub = hub
-        self.auth = PanelAuth(monotonic or time.monotonic)
+        self.auth = PanelAuth(monotonic or time.monotonic, home=hub.home, wall_time=hub.wall_time)
         self.monotonic = monotonic or time.monotonic
         self.keys_path = Path(keys_path) if keys_path is not None else None
         self.shipped_path = Path(shipped_path) if shipped_path is not None else Path(__file__).with_name("hub_keys.json")

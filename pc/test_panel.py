@@ -6,6 +6,7 @@ and the browser are fakes, so nothing here types keys or opens a window.
 from contextlib import nullcontext
 import http.client
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -146,9 +147,18 @@ class PanelBase(unittest.TestCase):
 
 
 class AuthTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.home = Path(temporary.name)
+        self.clock = Clock()
+
+    def auth(self):
+        return panel.PanelAuth(self.clock, home=self.home, wall_time=self.clock)
+
     def test_code_is_one_time_expires_and_wrong_codes_die(self):
-        clock = Clock()
-        auth = panel.PanelAuth(clock)
+        clock = self.clock
+        auth = self.auth()
         code = auth.new_code()
         token = auth.redeem(code)
         self.assertTrue(token and auth.check(token))
@@ -164,8 +174,84 @@ class AuthTests(unittest.TestCase):
             auth.redeem("guess")
         self.assertIsNone(auth.redeem(fresh))           # guessing burned every live code
 
+    def test_signed_session_survives_restart_without_persisting_token(self):
+        auth = self.auth()
+        self.assertFalse(auth.has_session())
+        token = auth.redeem(auth.new_code())
+        fresh = self.auth()
+        self.assertTrue(fresh.check(token))
+        self.assertTrue(fresh.has_session())
+        saved = json.loads((self.home / ".agentdeck" / "panel.json").read_text(encoding="utf-8"))
+        self.assertEqual(saved, {"issued_at": int(self.clock.value)})
+        self.assertNotIn(token, json.dumps(saved))
+        self.assertIsNone(fresh.redeem(auth.new_code()))   # login codes remain process-local
+
+    def test_tampered_expired_future_and_wrong_key_sessions_are_rejected(self):
+        auth = self.auth()
+        token = auth.redeem(auth.new_code())
+        version, issued, signature = token.split(".")
+        for forged in ("v2." + issued + "." + signature,
+                       version + ".101." + signature,
+                       version + "." + issued + "." + ("0" if signature[0] != "0" else "1") + signature[1:],
+                       "v1.nan." + signature, "v1.inf." + signature,
+                       "v1." + "9" * 300 + "." + signature,
+                       "v1.100.", "", None):
+            with self.subTest(forged=forged):
+                self.assertFalse(self.auth().check(forged))
+        self.clock.value -= 1
+        self.assertFalse(self.auth().check(token))
+        self.assertFalse(self.auth().has_session())
+        self.clock.value = int(issued) + panel.SESSION_SECONDS
+        self.assertFalse(self.auth().check(token))
+        self.assertFalse(self.auth().has_session())
+        self.clock.value = int(issued)
+        (self.home / ".agentdeck" / "token").write_text("replacement-secret\n", encoding="ascii")
+        self.assertFalse(auth.check(token))           # check the current token file even in a live instance
+        self.assertFalse(self.auth().check(token))
+
+    def test_has_session_rejects_invalid_timestamp_records(self):
+        hub.load_token(self.home)
+        record = self.home / ".agentdeck" / "panel.json"
+        record.write_text('{"issued_at": 100}', encoding="utf-8")
+        self.assertTrue(self.auth().has_session())
+        for contents in ('not json', '[]', '{}', '{"issued_at": true}', '{"issued_at": "100"}',
+                         '{"issued_at": null}', '{"issued_at": 101}'):
+            with self.subTest(contents=contents):
+                record.write_text(contents, encoding="utf-8")
+                self.assertFalse(self.auth().has_session())
+
+    def test_rotated_or_missing_key_invalidates_session_hint_until_next_login(self):
+        auth = self.auth()
+        original = auth.redeem(auth.new_code())
+        key = self.home / ".agentdeck" / "token"
+        record = self.home / ".agentdeck" / "panel.json"
+        # Set deterministic file ordering without depending on wall-clock resolution.
+        old_ns = 1_000_000_000_000_000_000
+        os.utime(key, ns=(old_ns, old_ns))
+        os.utime(record, ns=(old_ns + 10_000_000, old_ns + 10_000_000))
+        self.assertTrue(auth.has_session())
+        key.write_text("replacement-secret\n", encoding="ascii")
+        os.utime(key, ns=(old_ns + 20_000_000, old_ns + 20_000_000))
+        self.assertFalse(auth.check(original))
+        self.assertFalse(auth.has_session())
+        self.assertFalse(self.auth().has_session())
+        replacement = auth.redeem(auth.new_code())
+        self.assertTrue(self.auth().check(replacement))
+        self.assertTrue(self.auth().has_session())
+        key.unlink()
+        self.assertFalse(self.auth().has_session())
+
 
 class HTTPTests(PanelBase):
+    def test_cookie_remains_valid_in_new_panel_instance(self):
+        cookie = self.login()
+        restarted = panel.Panel(self.engine)
+        self.addCleanup(restarted.close)
+        self.assertTrue(restarted.auth.check(cookie.split("=", 1)[1]))
+        self.assertTrue(restarted.auth.has_session())
+        self.server.panel = restarted
+        self.assertEqual(self.request("GET", "/panel/api/state", headers={"Cookie": cookie})[0], 200)
+
     def test_login_sets_strict_httponly_cookie_and_code_cannot_repeat(self):
         code = self.panel.new_login_code()
         status, response, _ = self.request("POST", "/panel/login", {"code": code})
@@ -260,6 +346,10 @@ class HTTPTests(PanelBase):
         self.assertEqual(browser_labels, ["后退", "地址栏", "关标签", "刷新"])
         self.assertEqual(state["bindings"]["default"][state["layout"]["rows"][0][0]["code"]]["label"], "Claude / Codex")
         self.assertEqual(state["bindings"]["default"][state["layout"]["rows"][4][0]["code"]]["label"], "批准")
+        press_code = state["layout"]["knobs"][3]["controls"][2]["code"]
+        for layer in ("agent", "chat", "browser", "default"):
+            self.assertEqual(state["bindings"][layer][press_code]["label"], "回车（列表开着时确认）")
+        self.assertEqual(state["bindings"]["video"][press_code]["label"], "播放/暂停")
 
     def test_claude_reader_runs_only_while_page_polls(self):
         self.session("s1", "现状讨论")

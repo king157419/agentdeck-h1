@@ -3,6 +3,7 @@
   const $ = (id) => document.getElementById(id);
   const LAYER_ORDER = ["agent", "chat", "browser", "video", "default"];
   const FLASH_MS = 600;
+  const LOGIN_RETRY_MS = 3000;
   const LIVE_HINT = "按下实体键时，图上对应的键会亮";
   let S = null;                 // latest state from the hub
   let selLayer = null;          // layer shown in the picture (never changes the real layer)
@@ -11,6 +12,7 @@
   let lastSeq = null;
   let timer = null;
   let polling = false;
+  let loginExpired = false;
   let liveTimer = null;
   let savedNote = null;
   const sig = {};
@@ -41,16 +43,20 @@
     const response = await fetch(path, options);
     let data = {};
     try { data = await response.json(); } catch (e) { /* empty body */ }
-    if (response.status === 401) { showGate(data.error); throw new Error("login"); }
+    if (response.status === 401) { showGate("登录状态过期"); throw new Error("login"); }
     if (!response.ok) throw new Error(data.error || ("请求失败 " + response.status));
+    loginExpired = false;
+    $("gate").hidden = true;
     return data;
   }
 
   function showGate(text) {
+    loginExpired = true;
     $("gate-text").textContent = text && text !== "login required"
       ? text + "。请从托盘菜单点“管理面板”重新打开。"
       : "请从托盘菜单点“管理面板”重新打开。";
     $("gate").hidden = false;
+    schedulePoll(LOGIN_RETRY_MS);
   }
 
   // ---- helpers -------------------------------------------------------------
@@ -326,7 +332,7 @@
   function render() {
     if (!S) return;
     if (!layerPicked || !S.layer_names[selLayer]) selLayer = S.layer;
-    $("gate").hidden = true;
+    $("gate").hidden = !loginExpired;
     renderBar();
     renderSessions();
     renderLayers();
@@ -335,9 +341,14 @@
   }
 
   // ---- polling -------------------------------------------------------------
+  function schedulePoll(delay) {
+    clearTimeout(timer);
+    timer = setTimeout(poll, delay);
+  }
+
   async function poll() {
     clearTimeout(timer);
-    if (document.hidden || polling) { timer = setTimeout(poll, 600); return; }
+    if (document.hidden || polling) { schedulePoll(loginExpired ? LOGIN_RETRY_MS : 600); return; }
     polling = true;
     try {
       S = await api("/panel/api/state");
@@ -350,7 +361,7 @@
       }
     }
     polling = false;
-    if (!document.hidden) timer = setTimeout(poll, 600);
+    if (!document.hidden) schedulePoll(loginExpired ? LOGIN_RETRY_MS : 600);
   }
 
   async function start() {

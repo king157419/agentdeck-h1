@@ -2,7 +2,7 @@
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import hub
 from hub_layers import Layers, classify_layer
@@ -250,6 +250,56 @@ class ControlTests(unittest.TestCase):
         self.engine.controls.layers.current = "chat"
         self.assertEqual(self.action("ctx next")["noop"], "这一步还没做")
         self.assertFalse(self.effects.calls)
+
+    def test_select_without_list_card_sends_enter_in_every_nonvideo_layer(self):
+        # Even a question without usable option metadata needs a plain Enter.
+        self.session("agent")
+        self.engine.sessions[("cc", "agent")].update(needs_answer=True, question_options=[])
+        for layer in ("agent", "chat", "browser", "default", "video"):
+            with self.subTest(layer=layer):
+                self.effects.calls.clear()
+                self.engine.controls.layers.current = layer
+                self.assertFalse(self.engine.controls.list_card["open"])
+                self.assertEqual(self.action("ctx select")["status"], "sent")
+                self.assertEqual(self.effects.calls, [("list", layer, "enter")])
+
+    def test_select_open_agent_question_card_confirms_without_plain_enter(self):
+        self.session("agent")
+        self.engine.sessions[("cc", "agent")].update(needs_answer=True, question_options=["A", "B"])
+        self.engine.controls.layers.current = "agent"
+        self.action("ctx next")
+        self.action("ctx next")
+        self.assertEqual(self.action("ctx select")["status"], "sent")
+        self.assertFalse(self.engine.controls.list_card["open"])
+        self.assertEqual(self.effects.calls, [("ctx", "agent", 2)])
+
+    def test_context_press_reaches_foreground_key_input_only_without_card(self):
+        from hub_desktop import DesktopEffects
+        from test_hub_keymap_v9_desktop import Windows
+        windows, uia = Windows(), Mock()
+        desktop = DesktopEffects(windows, claude_uia=uia, monotonic=lambda: self.clock)
+        self.addCleanup(desktop.close)
+        self.engine.desktop = desktop
+        for layer, exe in (("agent", "claude.exe"), ("agent", "Codex.exe"),
+                           ("chat", "WeChat.exe"), ("chat", "Feishu.exe")):
+            with self.subTest(layer=layer, exe=exe):
+                windows.current = (11, exe, "Foreground")
+                windows.actions.clear()
+                self.engine.controls.layers.current = layer
+                with patch.object(windows, "send_key", wraps=windows.send_key) as send:
+                    self.assertEqual(self.action("ctx select")["status"], "sent")
+                    send.assert_called_once_with(0x0D, windows.current)
+                self.assertEqual(windows.actions, [("key", 0x0D)])
+        self.session("agent")
+        self.engine.sessions[("cc", "agent")].update(needs_answer=True, question_options=["A", "B"])
+        windows.current = windows.items[0]
+        windows.actions.clear()
+        self.engine.controls.layers.current = "agent"
+        self.action("ctx next")
+        self.action("ctx next")
+        self.assertEqual(self.action("ctx select")["status"], "sent")
+        uia.click.assert_called_once_with("B", hwnd=11)
+        self.assertEqual(windows.actions, [])
 
     def test_help_tap_hold_and_move(self):
         self.action("overlay_down")

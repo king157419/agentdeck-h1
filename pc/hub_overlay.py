@@ -486,7 +486,7 @@ def paint_card(canvas, model):
              "list": model["list_card"].get("title", "列表 · 按旋钮确认"),
              "approval": "等待批准", "question": "Agent 在提问"}.get(mode, "")
     if mode == "help":
-        height = 218
+        height = 238
     else:
         height = 116
     canvas.configure(width=CARD_WIDTH, height=height, bg=BACKGROUND)
@@ -501,7 +501,11 @@ def paint_card(canvas, model):
                 canvas.create_text(x + 38, y + 11, text=label, fill=FOREGROUND, font=theme.font(8))
         canvas.create_text(12, 182, text="旋钮  1 窗口  2 会话  3 滚动  4 列表", anchor="w",
                            fill=theme.MUTED, font=theme.font(9))
-        canvas.create_text(12, 202, text="按住帮助转旋钮移动 · 松手保存", anchor="w",
+        press_hint = ("4 按下：播放/暂停（列表开着时确认）" if model["layer"] == "video"
+                      else "4 按下：回车（列表开着时确认）")
+        canvas.create_text(12, 202, text=press_hint, anchor="w",
+                           fill=theme.MUTED, font=theme.font(9))
+        canvas.create_text(12, 222, text="按住帮助转旋钮移动 · 松手保存", anchor="w",
                            fill=theme.MUTED, font=theme.font(9))
     elif mode == "approval" and model["approval"]:
         approval = model["approval"]

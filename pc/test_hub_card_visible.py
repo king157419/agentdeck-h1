@@ -157,6 +157,17 @@ class CardPlacementTests(unittest.TestCase):
 
 
 class CardContentTests(unittest.TestCase):
+    def test_help_explains_plain_enter_and_list_confirmation_with_video_exception(self):
+        for layer in ("agent", "chat", "browser", "default", "video"):
+            with self.subTest(layer=layer):
+                canvas = Canvas()
+                _, height = paint_card(canvas, display_model({"layer": layer, "overlay_help": True}))
+                texts = [options["text"] for kind, _, options in canvas.shapes if kind == "text"]
+                key = "播放/暂停" if layer == "video" else "回车"
+                self.assertIn("4 按下：" + key + "（列表开着时确认）", texts)
+                self.assertIn("按住帮助转旋钮移动 · 松手保存", texts)
+                self.assertGreater(height, 222)
+
     def model(self, entries, **extra):
         return display_model({"layer": "agent", "sessions": entries,
                               "session_card": {"open": True, "selected_slot": entries[-1]["slot"]}, **extra})

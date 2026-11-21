@@ -319,6 +319,11 @@ class Controls:
             return self._show_session(identity)
         if command == "ctx":
             layer = self.layers.current
+            if argument == "select":
+                with hub.lock:
+                    card_open = self.list_card["open"]
+                if not card_open:
+                    return self._desktop("context_list", layer, "enter")
             if argument in ("next", "prev", "select") and layer == "agent":
                 with hub.lock:
                     session = self._session()

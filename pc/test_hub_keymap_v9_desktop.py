@@ -2,7 +2,7 @@
 import ctypes
 import threading
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from claude_uia import ClaudeUIA
 from hub_desktop import DesktopEffects, smooth_wheel_events
@@ -149,6 +149,27 @@ class DesktopTests(unittest.TestCase):
         self.effects.context_list(None, [], "browser", "prev")
         self.assertEqual(self.windows.actions, [("combo", (0x12, 0x25)), ("key", 0x46), ("combo", (0x11, 0x21))])
 
+    def test_context_press_uses_guarded_enter_and_video_space(self):
+        for layer, exe, key in (("agent", "claude.exe", 0x0D), ("agent", "Codex.exe", 0x0D),
+                                ("chat", "WeChat.exe", 0x0D), ("chat", "Feishu.exe", 0x0D),
+                                ("browser", "chrome.exe", 0x0D), ("default", "notepad.exe", 0x0D),
+                                ("video", "msedge.exe", 0x20)):
+            with self.subTest(layer=layer, exe=exe):
+                self.windows.actions.clear()
+                self.windows.current = (11, exe, "Foreground")
+                self.assertTrue(self.effects.context_list(None, [], layer, "enter"))
+                self.assertEqual(self.windows.actions, [("key", key)])
+        self.uia.prompt_text.assert_not_called()
+        self.uia.click.assert_not_called()
+
+    def test_context_enter_blocks_when_foreground_changes_before_input(self):
+        for layer in ("agent", "chat"):
+            with self.subTest(layer=layer):
+                with patch.object(self.effects, "foreground", return_value=(999, "claude.exe", "Old")):
+                    with self.assertRaisesRegex(RuntimeError, "foreground changed"):
+                        self.effects.context_list(None, [], layer, "enter")
+                self.assertEqual(self.windows.actions, [])
+
     def test_chat_received_never_sends_enter(self):
         self.uia.focused_editable.return_value = True
         self.effects.context(None, [], "chat", 3)
@@ -184,6 +205,25 @@ class DesktopTests(unittest.TestCase):
         self.effects.scroll({"hwnd": 999}, [], 1)
         smooth.pulse.assert_called_once_with(1, self.windows.current, (984, 440))
         self.assertEqual(self.windows.actions, [])
+
+    def test_scroll_logs_direction_pane_point_and_only_first_40_title_characters(self):
+        panes, smooth = Mock(), Mock()
+        panes.snapshot.return_value = {"panes": [{"rect": [100, 40, 1000, 840]}], "selected": 0}
+        self.effects._pane_selection, self.effects._smooth_scroll = panes, smooth
+        self.windows.current = (11, r"C:\Apps\claude.exe", "T" * 40 + "PRIVATE_TITLE_SUFFIX")
+        for notches in (1, -1):
+            with self.subTest(notches=notches):
+                with self.assertLogs("agentdeck.hub.scroll", level="INFO") as captured:
+                    self.effects.scroll({"draft": "PRIVATE_INPUT_CONTENT"}, [], notches)
+                self.assertEqual(len(captured.output), 1)
+                line = captured.output[0]
+                self.assertIn("notches=%+d" % notches, line)
+                self.assertIn("exe=claude.exe", line)
+                self.assertIn("title=" + repr("T" * 40), line)
+                self.assertIn("rect=[100, 40, 1000, 840]", line)
+                self.assertIn("point=(984, 440)", line)
+                self.assertNotIn("PRIVATE", line)
+                self.assertNotIn(r"C:\Apps", line)
 
 
 class ScrollTests(unittest.TestCase):

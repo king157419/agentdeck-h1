@@ -1,8 +1,11 @@
 """Pane selection and wheel momentum; pure state can be tested with a fake clock."""
+import logging
 import math
 import ntpath
 import threading
 import time
+
+log = logging.getLogger("agentdeck.hub.scroll")
 
 
 def valid_panes(items, fallback):
@@ -82,6 +85,16 @@ class SmoothScroll:
         self._lock = threading.RLock()
         self._stop = threading.Event()
         self._thread = None
+        self._round_active = False
+        self._delta_total = self._emit_count = 0
+
+    def _finish_round(self, reason):
+        if self._round_active:
+            # Native smooth_wheel_events negates logical deltas for Windows mouseData.
+            log.info("scroll finished reason=%s logical_delta_total=%+d wheel_total=%+d count=%d",
+                     reason, self._delta_total, -self._delta_total, self._emit_count)
+            self._round_active = False
+            self._delta_total = self._emit_count = 0
 
     def pulse(self, notches, window, point):
         now = self.monotonic()
@@ -89,16 +102,20 @@ class SmoothScroll:
             if self._stop.is_set():
                 return False
             if self.window is not None and self.window[0] != window[0]:
+                self._finish_round("window_changed")
                 self.velocity = self.remainder = 0.0
                 self.last_pulse = self.last_tick = None
             if self.last_pulse is not None and now - self.last_pulse >= .5:
+                self._finish_round("idle_reset")
                 self.velocity = self.remainder = 0.0
                 self.last_tick = now
             self.window, self.point = window, point
             gap = None if self.last_pulse is None else now - self.last_pulse
             multiplier = 1 if gap is None or gap >= .2 else min(6, max(1, .12 / max(gap, .020)))
             if self.velocity * notches < 0:
+                self._finish_round("reversed")
                 self.velocity = self.remainder = 0.0
+            self._round_active = True
             self.velocity += notches * 120 / self.DECAY * multiplier
             self.velocity = max(-3600, min(3600, self.velocity))
             self.last_pulse = now
@@ -115,6 +132,7 @@ class SmoothScroll:
             if self.window is None or self.last_tick is None:
                 return None
             if self.foreground()[0] != self.window[0] or self._stop.is_set():
+                self._finish_round("stopped" if self._stop.is_set() else "foreground_changed")
                 self.velocity = self.remainder = 0.0
                 return None
             dt = max(0, now - self.last_tick)
@@ -127,8 +145,11 @@ class SmoothScroll:
             delta = int(math.copysign(min(30, int(abs(self.remainder))), self.remainder))
             self.remainder -= delta
             if not self.emit(self.window, self.point, delta):
+                self._finish_round("emit_failed")
                 self.velocity = self.remainder = 0.0
                 return None
+            self._delta_total += delta
+            self._emit_count += 1
             return delta
 
     def _run(self):
@@ -137,13 +158,19 @@ class SmoothScroll:
                 self.tick()
             except Exception:
                 with self._lock:
+                    self._finish_round("error")
                     self.velocity = self.remainder = 0.0
             with self._lock:
                 if abs(self.velocity) < 1:
+                    self._finish_round("decayed")
                     self.velocity = self.remainder = 0.0
                     return
+        with self._lock:
+            self._finish_round("stopped")
 
     def close(self):
         self._stop.set()
         if self._thread is not None and self._thread is not threading.current_thread():
             self._thread.join(timeout=.25)
+        with self._lock:
+            self._finish_round("closed")

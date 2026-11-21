@@ -20,6 +20,7 @@ VOICE_POLL_SECONDS = 0.1
 VOICE_MAX_SECONDS = 60.0
 DICTATION_MODIFIERS = {"control": 0x11, "option": 0x12, "shift": 0x10, "command": 0x5B}
 log = logging.getLogger("agentdeck.hub.voice")
+scroll_log = logging.getLogger("agentdeck.hub.scroll")
 
 
 @dataclass
@@ -745,7 +746,7 @@ class DesktopEffects:
     def context_list(self, session, sessions, layer, direction):
         if direction not in ("prev", "next", "enter"):
             raise ValueError("context list needs prev, next or enter")
-        if layer == "chat":
+        if layer == "chat" and direction != "enter":
             return {"noop": "这一步还没做"}
         expected = self.foreground()
         if layer == "browser" and direction != "enter":
@@ -769,7 +770,10 @@ class DesktopEffects:
         if not callable(getattr(self.windows, "wheel_delta", None)):
             raise RuntimeError("mouse wheel input unavailable")
         pane = self._panes().snapshot(window, refresh=True)
-        point = self._pane_point(pane["panes"][pane["selected"]]["rect"])
+        rect = pane["panes"][pane["selected"]]["rect"]
+        point = self._pane_point(rect)
+        scroll_log.info("scroll notches=%+d exe=%s title=%r rect=%s point=%s",
+                        notches, ntpath.basename(window[1] or ""), (window[2] or "")[:40], rect, point)
         if self._smooth_scroll is None:
             from hub_scroll import SmoothScroll
             self._smooth_scroll = SmoothScroll(lambda expected, point, delta: self.windows.wheel_delta(expected, point, delta),

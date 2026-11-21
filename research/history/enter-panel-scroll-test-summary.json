@@ -1,0 +1,804 @@
+{
+  "python": "D:\\conda\\miniconda3\\python.exe",
+  "files": 57,
+  "completed": 57,
+  "passed": 57,
+  "skipped_tests": 6,
+  "elapsed_seconds": 165.68,
+  "results": [
+    {
+      "file": "pc\\test_agentdeck_app.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 2.197,
+          "tests": 150,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_capture_etl.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 2.381,
+          "tests": 18,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_claude_sessions.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 0.677,
+          "tests": 10,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_claude_uia.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 1.49,
+          "tests": 16,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_daemon.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 0.518,
+          "tests": null,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_deck.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 1.893,
+          "tests": null,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_deck_exclusive.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 0.406,
+          "tests": null,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_deck_input.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 0.405,
+          "tests": null,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_deck_keymap.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 0.637,
+          "tests": null,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_deck_probe.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 0.419,
+          "tests": null,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_deck_usb.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 0.596,
+          "tests": null,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_focus_lock.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 0.896,
+          "tests": null,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 11.418,
+          "tests": 169,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_app_support.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 0.987,
+          "tests": 24,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_app_switch.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 1.599,
+          "tests": 15,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_card_visible.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 0.47,
+          "tests": 16,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_claude_sessions.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 0.706,
+          "tests": 16,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_daily_fixes.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 1.669,
+          "tests": 12,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_demo.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 0.508,
+          "tests": 10,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_desktop.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 0.954,
+          "tests": 74,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_desktop_mac.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 0.739,
+          "tests": 35,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_doctor.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 1.696,
+          "tests": 17,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_fixes.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 5.891,
+          "tests": 24,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_gate.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 3.003,
+          "tests": 20,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_hold.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 1.761,
+          "tests": 30,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_hotkey.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 0.425,
+          "tests": 36,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_input_capture.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 0.708,
+          "tests": 7,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_install.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 2.488,
+          "tests": 40,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_keyboard.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 0.589,
+          "tests": 40,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_keymap_v9.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 0.636,
+          "tests": 23,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_keymap_v9_desktop.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 0.468,
+          "tests": 30,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_keymap_v9_overlay.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 0.438,
+          "tests": 14,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_keypad.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 4.058,
+          "tests": 44,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_macos_fix.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 1.434,
+          "tests": 3,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_nonce.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 1.875,
+          "tests": 33,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_nonce_integration.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 1.436,
+          "tests": 17,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_overlay.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 0.638,
+          "tests": 38,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_overlay_daily.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 0.444,
+          "tests": 13,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_overlay_position.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 0.389,
+          "tests": 10,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_relay.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 6.1,
+          "tests": 45,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_risk.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 0.218,
+          "tests": 4,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_runtime.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 1.112,
+          "tests": 8,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_screenshot.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 0.966,
+          "tests": 14,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_scroll_diagnostics.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 0.321,
+          "tests": 6,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_tk_wake.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 11.487,
+          "tests": 18,
+          "skipped": 2,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_ui_live.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 16.376,
+          "tests": 15,
+          "skipped": 4,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_virtual_device.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 0.433,
+          "tests": 15,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_virtual_nonce_integration.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 5.717,
+          "tests": 7,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_voice_tap.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 0.919,
+          "tests": 9,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_watchdog.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 4.292,
+          "tests": 6,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_hub_window_switch.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 0.262,
+          "tests": 24,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_panel.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 5.407,
+          "tests": 32,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_panel_recovery.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 0.478,
+          "tests": 6,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_pc.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 0.365,
+          "tests": null,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_session_titles_uia.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 1.569,
+          "tests": 15,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_ui.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 0.132,
+          "tests": null,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    },
+    {
+      "file": "pc\\test_verify_real_session.py",
+      "attempts": [
+        {
+          "returncode": 0,
+          "seconds": 48.493,
+          "tests": 20,
+          "skipped": 0,
+          "attempt": 1
+        }
+      ],
+      "passed": true
+    }
+  ],
+  "checks": [
+    {
+      "returncode": 0,
+      "seconds": 0.52,
+      "tests": null,
+      "skipped": 0,
+      "command": [
+        "D:\\conda\\miniconda3\\python.exe",
+        "-X",
+        "utf8",
+        "pc/sim.py"
+      ]
+    },
+    {
+      "returncode": 0,
+      "seconds": 0.299,
+      "tests": null,
+      "skipped": 0,
+      "command": [
+        "D:\\conda\\miniconda3\\python.exe",
+        "-X",
+        "utf8",
+        "-m",
+        "compileall",
+        "-q",
+        "pc"
+      ]
+    },
+    {
+      "returncode": 0,
+      "seconds": 0.088,
+      "tests": null,
+      "skipped": 0,
+      "command": [
+        "node",
+        "--check",
+        "pc/ui/panel.js"
+      ]
+    },
+    {
+      "returncode": 0,
+      "seconds": 0.109,
+      "tests": null,
+      "skipped": 0,
+      "command": [
+        "git",
+        "-c",
+        "core.whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol",
+        "diff",
+        "--check"
+      ]
+    }
+  ]
+}
