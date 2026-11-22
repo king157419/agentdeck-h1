@@ -1,7 +1,9 @@
 """Windows tray entry point. Importing it never starts Hub or native interfaces."""
 import argparse
 import codecs
+from contextlib import contextmanager
 import errno
+import faulthandler
 import io
 import json
 import logging
@@ -42,6 +44,7 @@ NOTIFY_KEY = r"Control Panel\NotifyIconSettings"
 ZADIG_URL = "https://zadig.akeo.ie"
 TRAY_HINT = "AgentDeck 在右下角 ^ 里，可拖到任务栏常驻"
 STATUS_REFRESH_MS = 1000  # the status window re-reads hooks/sessions/reader while open
+HEARTBEAT_SECONDS = 30 * 60
 STATUS_CAPTION = "AgentDeck 正在运行。浮窗显示会话，右键浮窗有菜单。"
 GUIDE_NAME = "装驱动.md"
 GUIDE_FALLBACK = """让宏键盘不再打字：装 WinUSB 驱动
@@ -796,6 +799,8 @@ class TrayApplication:
         self.icon = None
         self.tray_thread = None
         self.state = {}
+        self.next_heartbeat = time.monotonic() + HEARTBEAT_SECONDS
+        self.running = False
         self.keyboard_presence = KeyboardPresenceNotice()
         self._background_enabled = False
         self._autostart_lock = threading.Lock()
@@ -857,6 +862,7 @@ class TrayApplication:
         self.overlay.on_driver_help = lambda: self.dispatch("driver")
         self.overlay.root.after(100, self.pump)
         self.overlay.root.after(400, self.startup)
+        self.running = True
 
     def _autostart_startup(self):
         def check():
@@ -958,7 +964,12 @@ class TrayApplication:
             if hold_mode in ("auto", "always", "never") and hold_mode != self.prefs.values.get("hold_mode", "auto"):
                 self.prefs.values["hold_mode"] = hold_mode  # survives restarts
                 self.prefs.save()
-            notice = self.keyboard_presence.update(self.state.get("input_reader"), time.monotonic())
+            now = time.monotonic()
+            reader = self.state.get("input_reader")
+            if now >= self.next_heartbeat:
+                log.info("运行中：读键方式=%s，会话=%d", reader or "未知", len(self.state.get("sessions", ())))
+                self.next_heartbeat = now + HEARTBEAT_SECONDS
+            notice = self.keyboard_presence.update(reader, now)
             if notice is not None:
                 if notice == "lost":
                     title = "宏键盘没连上"
@@ -1032,6 +1043,9 @@ class TrayApplication:
         elif action == "logs":
             os.startfile(str(data_dir(self.hub.home) / "logs"))
         elif action == "quit":
+            self.prefs.values["quit_by_user"] = True
+            self.prefs.save()
+            log.info("AgentDeck 退出：菜单退出")
             self.stop()
         elif action == "fatal":
             self.message("AgentDeck 无法启动", payload, error=True)
@@ -1597,6 +1611,67 @@ def restore_cli_output():
             setattr(sys, name, os.fdopen(descriptor, "w", encoding="utf-8", buffering=1))
 
 
+def log_startup():
+    parent_name, in_job = "未知", None
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+
+        try:
+            kernel = ctypes.WinDLL("kernel32")
+            kernel.IsProcessInJob.argtypes = [wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)]
+            kernel.IsProcessInJob.restype = wintypes.BOOL
+            kernel.GetCurrentProcess.restype = wintypes.HANDLE
+            job = wintypes.BOOL()
+            if kernel.IsProcessInJob(kernel.GetCurrentProcess(), None, ctypes.byref(job)):
+                in_job = bool(job.value)
+            kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            kernel.OpenProcess.restype = wintypes.HANDLE
+            kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+            parent_pid = os.getppid()
+            handle = kernel.OpenProcess(0x1000, False, parent_pid) if parent_pid else None
+            if handle:
+                try:
+                    query = kernel.QueryFullProcessImageNameW
+                    query.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                                      ctypes.POINTER(wintypes.DWORD)]
+                    query.restype = wintypes.BOOL
+                    name = ctypes.create_unicode_buffer(32768)
+                    size = wintypes.DWORD(len(name))
+                    if query(handle, 0, name, ctypes.byref(size)):
+                        parent_name = Path(name.value).name
+                finally:
+                    kernel.CloseHandle(handle)
+        except Exception:
+            log.debug("读取启动进程信息失败", exc_info=True)
+    log.info("AgentDeck 启动：pid=%d，父进程=%s，作业对象=%s", os.getpid(), parent_name, in_job)
+    # Task Scheduler's svchost can't be opened from here, so "未知" usually means a scheduled start.
+    if in_job and parent_name.casefold() not in ("svchost.exe", "explorer.exe", "未知"):
+        log.warning("AgentDeck 在别的程序的进程组里启动，那个程序退出时会把它一起关掉，"
+                    "请用计划任务或 restart_agentdeck.bat 启动")
+
+
+@contextmanager
+def crash_diagnostics(home):
+    previous_sys, previous_thread = sys.excepthook, threading.excepthook
+
+    def main_exception(kind, error, traceback):
+        log.error("AgentDeck 退出：未捕获异常", exc_info=(kind, error, traceback))
+
+    def thread_exception(args):
+        log.error("AgentDeck 线程退出：未捕获异常（%s）", getattr(args.thread, "name", "未知"),
+                  exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
+
+    with (data_dir(home) / "logs" / "crash.log").open("ab") as crash:
+        faulthandler.enable(file=crash)
+        sys.excepthook, threading.excepthook = main_exception, thread_exception
+        try:
+            yield
+        finally:
+            sys.excepthook, threading.excepthook = previous_sys, previous_thread
+            faulthandler.disable()
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--home", type=Path)
@@ -1629,25 +1704,41 @@ def main(argv=None):
     commands = SimpleQueue()
     instance = SingleInstance(commands)
     handler = None
+    application = None
     try:
         if not instance.acquire():
             return 0
         handler = configure_logging(home)
-        keys, prompts = prepare_configs(home)
-        prefs = Preferences(home)
-        profile = args.profile or prefs.values.get("profile", "default")
-        keymap_model(hub.load_json(keys), profile)  # Validate before listeners/native inputs.
-        repair_global_hooks(home)
-        hold_mode = prefs.values.get("hold_mode")  # saved from the panel/tray; "never" = Claude's own approval only
-        return hub.main(["--backend", "usb,hotkey", "--overlay", "--require-nonce",
-                         "--home", str(home), "--keys", str(keys), "--prompts", str(prompts),
-                         "--profile", profile,
-                         "--hold-mode", hold_mode if hold_mode in ("auto", "always", "never") else "auto"],
-                        ui_factory=lambda engine: TrayApplication(engine, commands=commands, prefs=prefs,
-                                                                  keys_path=keys, profile=profile,
-                                                                  background=args.background))
+        with crash_diagnostics(home):
+            log_startup()
+            prefs = Preferences(home)
+            prefs.values["quit_by_user"] = False
+            prefs.save()
+            keys, prompts = prepare_configs(home)
+            profile = args.profile or prefs.values.get("profile", "default")
+            keymap_model(hub.load_json(keys), profile)  # Validate before listeners/native inputs.
+            repair_global_hooks(home)
+            hold_mode = prefs.values.get("hold_mode")
+
+            def make_tray(engine):
+                nonlocal application
+                application = TrayApplication(engine, commands=commands, prefs=prefs, keys_path=keys,
+                                              profile=profile, background=args.background)
+                return application
+
+            result = hub.main(["--backend", "usb,hotkey", "--overlay", "--require-nonce",
+                               "--home", str(home), "--keys", str(keys), "--prompts", str(prompts),
+                               "--profile", profile,
+                               "--hold-mode", hold_mode if hold_mode in ("auto", "always", "never") else "auto"],
+                              ui_factory=make_tray, keep_marker=True)
+            if not prefs.values["quit_by_user"]:
+                log.info("AgentDeck 退出：主循环结束")
+            return result
     except Exception as error:
-        log.exception("AgentDeck 启动失败")
+        if application is not None and application.running is True:
+            log.exception("AgentDeck 退出：未捕获异常")
+            return 1
+        log.exception("AgentDeck 退出：启动失败")
         from tkinter import messagebox
         messagebox.showerror("AgentDeck 无法启动", "%s\n\n请查看 %s。若命令行 Hub 已在运行，请先将其退出。" %
                              (error, data_dir(home) / "logs" / "app.log"))

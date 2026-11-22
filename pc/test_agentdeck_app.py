@@ -2226,7 +2226,8 @@ class EntryPointTests(unittest.TestCase):
             engine = Mock()
             controller = Mock()
 
-            def run_hub(argv, *, ui_factory):
+            def run_hub(argv, *, ui_factory, keep_marker):
+                self.assertTrue(keep_marker)
                 self.assertEqual(argv[:4], ["--backend", "usb,hotkey", "--overlay", "--require-nonce"])
                 self.assertEqual(argv[argv.index("--home") + 1], str(Path(directory).resolve()))
                 self.assertEqual(argv[argv.index("--profile") + 1], "v2_emulation")

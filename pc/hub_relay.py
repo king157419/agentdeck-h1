@@ -119,8 +119,35 @@ def _pid_alive(pid):
     return True
 
 
+def process_created(pid, kernel=None):
+    """Return the Windows creation FILETIME as an integer, if available."""
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    if kernel is None:
+        kernel = ctypes.WinDLL("kernel32")
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    kernel.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+    kernel.GetProcessTimes.restype = wintypes.BOOL
+    handle = kernel.OpenProcess(0x1000, False, pid)
+    if not handle:
+        return None
+    try:
+        times = [wintypes.FILETIME() for _ in range(4)]
+        if kernel.GetProcessTimes(handle, *(ctypes.byref(value) for value in times)):
+            return (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+        return None
+    finally:
+        kernel.CloseHandle(handle)
+
+
 def hub_status(home, port):
-    """'down' when hub.json names a dead process, 'up' when alive, else 'unknown'."""
+    """Check the PID and, when available, its creation time."""
     try:
         data = json.loads((_home(home) / ".agentdeck" / "hub.json").read_text(encoding="utf-8"))
         pid = data["pid"]
@@ -129,9 +156,97 @@ def hub_status(home, port):
     except Exception:
         return "unknown"
     try:
-        return "up" if _pid_alive(pid) else "down"
+        if not _pid_alive(pid):
+            return "down"
+        created = data.get("created")
+        if type(created) is int:
+            actual = process_created(pid)
+            if actual is not None and actual != created:
+                return "down"
+        return "up"
     except Exception:
         return "unknown"
+
+
+def _restart_allowed(directory, now):
+    try:
+        prefs = json.loads((directory / "app.json").read_text(encoding="utf-8-sig"))
+        if isinstance(prefs, dict) and prefs.get("quit_by_user") is True:
+            return False
+    except (FileNotFoundError, ValueError):
+        pass
+    try:
+        if now - (directory / "maintenance").stat().st_mtime < 15 * 60:
+            return False
+    except FileNotFoundError:
+        pass
+    return True
+
+
+def _claim_restart(directory, agent, event):
+    import msvcrt
+
+    path = directory / "relay_restart.json"
+    # The OS releases the lock even if a relay process is terminated mid-update.
+    with (directory / "relay_restart.lock").open("a+b") as lock:
+        lock.seek(0)
+        try:
+            msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return False
+        now = time.time()
+        if not _restart_allowed(directory, now):
+            return False
+        try:
+            state = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(state, dict):
+                state = {}
+            attempts = sorted(
+                stamp for stamp in map(float, state.get("attempts", [state.get("attempted_at")]))
+                if 0 <= now - stamp < 15 * 60
+            )[-3:]
+        except (FileNotFoundError, ValueError, TypeError, OverflowError):
+            state, attempts = {}, []
+        paused = len(attempts) == 3
+        if paused and state.get("pause_logged") is True:
+            return False
+        if not paused and attempts and now - attempts[-1] < 60:
+            return False
+        updated = {"attempts": attempts}
+        if paused:
+            updated["pause_logged"] = True
+        else:
+            attempts.append(now)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(updated) + "\n", encoding="utf-8")
+        os.replace(temporary, path)
+        if paused:
+            _log(directory.parent, agent, event, "15 分钟内已尝试 3 次仍未起来，暂停自动启动")
+            return False
+        return True
+
+
+def _request_restart(home, agent, event):
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        import subprocess
+
+        directory = _home(home) / ".agentdeck"
+        if not _claim_restart(directory, agent, event):
+            return
+        program = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "schtasks.exe"
+        result = subprocess.run([str(program), "/Run", "/TN", "AgentDeck"],
+                                creationflags=subprocess.CREATE_NO_WINDOW, timeout=3, capture_output=True)
+        if result.returncode:
+            encoding = "cp%d" % ctypes.windll.kernel32.GetOEMCP()
+            error = (result.stderr or result.stdout).decode(encoding, errors="replace").strip()
+            _log(home, agent, event, error or "schtasks exit code %d" % result.returncode)
+        else:
+            _log(home, agent, event, "已请计划任务启动 AgentDeck")
+    except Exception as error:
+        _log(home, agent, event, error)
 
 
 # Ancestors past these never own the agent's window (shell and system hosts).
@@ -148,7 +263,8 @@ def find_agent_window(pid=None, *, processes=None, windows=None, started=None, m
         if processes is None or windows is None or started is None:
             import ctypes
             from ctypes import wintypes
-        if processes is None or started is None:
+        kernel = None
+        if processes is None:
             kernel = ctypes.WinDLL("kernel32")
             kernel.CloseHandle.argtypes = [wintypes.HANDLE]
             kernel.CloseHandle.restype = wintypes.BOOL
@@ -186,23 +302,10 @@ def find_agent_window(pid=None, *, processes=None, windows=None, started=None, m
             finally:
                 kernel.CloseHandle(snapshot)
         if started is None:
-            kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-            kernel.OpenProcess.restype = wintypes.HANDLE
-            kernel.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
-            kernel.GetProcessTimes.restype = wintypes.BOOL
+            process_kernel = kernel if kernel is not None else ctypes.WinDLL("kernel32")
 
             def started(process_id):
-                handle = kernel.OpenProcess(0x1000, False, process_id)  # QUERY_LIMITED_INFORMATION
-                if not handle:
-                    return None
-                try:
-                    creation, exit_time, kernel_time, user_time = (wintypes.FILETIME() for _ in range(4))
-                    if not kernel.GetProcessTimes(handle, ctypes.byref(creation), ctypes.byref(exit_time),
-                                                  ctypes.byref(kernel_time), ctypes.byref(user_time)):
-                        return None
-                    return (creation.dwHighDateTime << 32) | creation.dwLowDateTime
-                finally:
-                    kernel.CloseHandle(handle)
+                return process_created(process_id, process_kernel)
 
         if windows is None:
             user = ctypes.WinDLL("user32")
@@ -364,6 +467,7 @@ def relay(event, agent, *, port=47800, approve_timeout=110, home=None,
     ``started`` is the monotonic time the hook process began (read budget).
     """
     connection = None
+    check_local_hub = connection_factory is None
     try:
         if agent not in ("cc", "cx") or not isinstance(event, dict):
             return gate_failure(event, agent, home, "invalid gate event") if gate else None
@@ -372,10 +476,12 @@ def relay(event, agent, *, port=47800, approve_timeout=110, home=None,
         approve_timeout = float(approve_timeout)
         if not math.isfinite(approve_timeout) or approve_timeout <= 0:
             return gate_failure(event, agent, home, "invalid approval timeout") if gate else None
+        status = hub_status(home, port) if check_local_hub else "unknown"
+        if status == "down":
+            _request_restart(home, agent, event)
         token = (_home(home) / ".agentdeck" / "token").read_text(encoding="utf-8").strip()
         if not token:
             return gate_failure(event, agent, home, "missing authentication token") if gate else None
-        status = hub_status(home, port) if connection_factory is None else "unknown"
         if status == "down":
             return gate_failure(event, agent, home, "hub not running") if gate else None
         decision = gate or event.get("hook_event_name") == "PermissionRequest"
@@ -415,7 +521,12 @@ def relay(event, agent, *, port=47800, approve_timeout=110, home=None,
         if deadline is not None:
             connect_timeout = min(connect_timeout, remaining())
         connection = connection_factory("127.0.0.1", port, timeout=connect_timeout)
-        connection.connect()
+        try:
+            connection.connect()
+        except (ConnectionRefusedError, TimeoutError):
+            if check_local_hub and hub_status(home, port) == "down":
+                _request_restart(home, agent, event)
+            raise
         if window_thread is not None:
             window_thread.join(0.25 if decision else min(0.05, remaining()))
             if not window_thread.is_alive():

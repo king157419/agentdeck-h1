@@ -106,7 +106,7 @@ from hub_risk import (  # noqa: F401  (re-exported: hub.classify stays public)
     WRITE_TOOL, _production_ssh, classify)
 
 
-from hub_relay import escape_log_text, scrub_surrogates, tool_input_hash  # noqa: E402,F401
+from hub_relay import escape_log_text, process_created, scrub_surrogates, tool_input_hash  # noqa: E402,F401
 
 
 def hub_marker(home=None):
@@ -121,7 +121,9 @@ def write_hub_marker(home, port):
         path = hub_marker(home)
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_name("hub.json.%d.tmp" % os.getpid())
-        temporary.write_text(json.dumps({"pid": os.getpid(), "port": port}) + "\n", encoding="utf-8")
+        pid = os.getpid()
+        temporary.write_text(json.dumps({"pid": pid, "port": port, "created": process_created(pid)})
+                             + "\n", encoding="utf-8")
         os.replace(temporary, path)
         return path
     except Exception as error:
@@ -2107,7 +2109,7 @@ def parse_backends(value):
     return names
 
 
-def main(argv=None, *, ui_factory=None):
+def main(argv=None, *, ui_factory=None, keep_marker=False):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", nargs="?", choices=("doctor",))
     parser.add_argument("--port", type=int, default=PORT)
@@ -2245,7 +2247,9 @@ def main(argv=None, *, ui_factory=None):
             if isinstance(thread, threading.Thread) and thread.ident is not None:
                 thread.join(timeout=3)
         hub.close()
-        remove_hub_marker(marker)
+        # The tray's last PID lets the relay recover after an unexpected loop exit.
+        if not keep_marker:
+            remove_hub_marker(marker)
         if server is not None:
             server.server_close()
         if maintenance is not None:

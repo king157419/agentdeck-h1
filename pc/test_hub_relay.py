@@ -297,6 +297,7 @@ class RelayWindowTests(unittest.TestCase):
     def test_dead_hub_skips_window_lookup_and_transport(self):
         finder = Mock(side_effect=AssertionError("dead hub must return first"))
         with patch.object(hub_relay, "hub_status", return_value="down"), \
+                patch.object(hub_relay, "_request_restart"), \
                 patch("http.client.HTTPConnection") as transport:
             self.assertIsNone(hub_relay.relay(TURN, "cc", home=self.home, window_finder=finder))
         finder.assert_not_called()

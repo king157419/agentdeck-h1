@@ -356,7 +356,8 @@ class RelayStartTests(unittest.TestCase):
         self.assertEqual(hub_relay.hub_status(self.home, 47999), "down")
         event = {"hook_event_name": "PreToolUse", "session_id": "x", "tool_name": "Bash",
                  "tool_input": {"command": "git push --force origin main"}}
-        with patch("http.client.HTTPConnection", side_effect=AssertionError("must not connect")):
+        with patch.object(hub_relay, "_request_restart"), \
+                patch("http.client.HTTPConnection", side_effect=AssertionError("must not connect")):
             started = time.perf_counter()
             self.assertIsNone(hub_relay.relay(dict(event, hook_event_name="Stop"), "cc",
                                               port=47999, home=self.home))
@@ -371,7 +372,8 @@ class RelayStartTests(unittest.TestCase):
         self.assertEqual(hub_relay.hub_status(self.home, 5), "up")
         self.assertEqual(hub_relay.hub_status(self.home, 6), "unknown")
         path = hub.write_hub_marker(self.home, 4321)
-        self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {"pid": os.getpid(), "port": 4321})
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8")),
+                         {"pid": os.getpid(), "port": 4321, "created": hub.process_created(os.getpid())})
         hub.remove_hub_marker(path)
         self.assertFalse(path.exists())
 
