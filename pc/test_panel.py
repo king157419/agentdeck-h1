@@ -302,6 +302,41 @@ class HTTPTests(PanelBase):
         self.cookie = self.login()
         self.assertEqual(self.request("GET", "/state", headers={"Cookie": self.cookie})[0], 401)  # cookie is no token
 
+    def test_hold_response_updates_approval_key_effects(self):
+        def effects(state):
+            return {entry["action"]: entry["effect"] for entry in state["bindings"]["agent"].values()
+                    if entry["action"] in ("approve", "deny", "interrupt")}
+
+        reader = None
+        self.engine.input_reader = lambda: reader
+        self.cookie = self.login()
+        status, state = self.api("GET", "/panel/api/state")
+        self.assertEqual(status, 200)
+        held = effects(state)
+        self.assertEqual(set(held), {"approve", "deny", "interrupt"})
+        self.assertIn("危险操作第一次只提示", held["approve"])
+        self.assertIn("拒绝 AgentDeck 拦下", held["deny"])
+        self.assertIn("有 AgentDeck 拦下的批准请求时，等于拒绝它。", held["interrupt"])
+
+        status, state = self.api("POST", "/panel/api/hold", {"mode": "never"})
+        self.assertEqual(status, 200)
+        self.assertEqual(state["hold"], {"mode": "never", "active": False})
+        unheld = effects(state)
+        self.assertIn("这颗键不会替你点“允许”", unheld["approve"])
+        self.assertIn("批准框里的“拒绝”", unheld["deny"])
+        self.assertEqual(unheld["interrupt"], held["interrupt"].replace(
+            "有 AgentDeck 拦下的批准请求时，等于拒绝它。", ""))
+
+        status, state = self.api("POST", "/panel/api/hold", {"mode": "auto"})
+        self.assertEqual(status, 200)
+        self.assertEqual(state["hold"], {"mode": "auto", "active": False})
+        self.assertEqual(effects(state), unheld)
+        reader = "usb"
+        status, state = self.api("GET", "/panel/api/state")
+        self.assertEqual(status, 200)
+        self.assertEqual(state["hold"], {"mode": "auto", "active": True})
+        self.assertEqual(effects(state), held)
+
     def test_page_files_are_served_without_login_and_list_is_closed(self):
         for path, kind in (("/panel", "text/html"), ("/panel/", "text/html"), ("/panel/panel.css", "text/css"),
                            ("/panel/panel.js", "javascript")):
@@ -439,6 +474,48 @@ class EditTests(PanelBase):
 
     def edit(self, control, action, layer="agent"):
         return self.api("POST", "/panel/api/key", {"id": control, "layer": layer, "action": action})
+
+    def test_state_has_effect_for_every_control_in_every_layer(self):
+        status, state = self.api("GET", "/panel/api/state")
+        self.assertEqual(status, 200)
+        controls = [cell for row in self.layout["rows"] for cell in row]
+        controls += [cell for knob in self.layout["knobs"] for cell in knob["controls"]]
+        self.assertEqual(len(controls), 32)
+        self.assertEqual(set(state["bindings"]), {"agent", "chat", "browser", "video", "default"})
+        for layer, bindings in state["bindings"].items():
+            for control in controls:
+                with self.subTest(layer=layer, control=control["id"]):
+                    effect = bindings[control["code"]]["effect"]
+                    self.assertTrue(effect.strip())
+                    for word in ("Hub", "校验", "锁定", "槽位", "脉冲", "聚焦"):
+                        self.assertNotIn(word, effect)
+        self.assertIn("下一个未读还没实现", state["bindings"]["chat"][controls[4]["code"]]["effect"])
+        self.assertIn("同一个信号", state["layout"]["rows"][4][3]["effect_intro"])
+        self.assertNotIn("effect_intro", state["layout"]["knobs"][1]["controls"][1])
+
+    def test_knob_effect_prefixes_distinguish_turning_from_pressing(self):
+        status, state = self.api("GET", "/panel/api/state")
+        self.assertEqual(status, 200)
+        for knob in state["layout"]["knobs"]:
+            with self.subTest(knob=knob["number"]):
+                self.assertEqual([c["effect_prefix"] for c in knob["controls"]],
+                                 ["转一格会：", "转一格会：", "按下会："])
+
+    def test_effects_follow_edits_and_restoring_defaults(self):
+        _, initial = self.api("GET", "/panel/api/state")
+        code = self.layout["rows"][1][0]["code"]
+        before = initial["bindings"]["browser"][code]["effect"]
+        _, updated = self.edit("r2c1", "prompt 提交", "browser")
+        self.assertIn(self.engine.prompts["提交"], updated["bindings"]["browser"][code]["effect"])
+        self.assertEqual(updated["bindings"]["agent"][code]["effect"], initial["bindings"]["agent"][code]["effect"])
+        _, updated = self.edit("r2c1", "none", "browser")
+        self.assertEqual(updated["bindings"]["browser"][code]["effect"], "不做事。")
+        _, updated = self.edit("r2c1", "default", "browser")
+        self.assertEqual(updated["bindings"]["browser"][code]["effect"], before)
+        _, updated = self.edit("r1c1", r"app exe:C:\Tools\notes.exe")
+        app = self.layout["rows"][0][0]["code"]
+        self.assertIn("notes.exe", updated["bindings"]["video"][app]["effect"])
+        self.assertIn("没有这项动作", self.panel.action_effect("unexpected action", "agent", code))
 
     def test_fixed_keys_and_knobs_refuse_changes(self):
         for control in ("r3c1", "r3c4", "r4c2", "r5c1", "r5c4", "k1cw", "k2press", "k3ccw"):

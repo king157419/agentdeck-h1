@@ -75,6 +75,10 @@
     return out;
   }
   function info(control) { return (S.bindings[selLayer] || {})[control.code] || { label: "空", action: null }; }
+  function effectText(control, prefix = "") {
+    return (control.effect_prefix || prefix) + (control.effect_intro || "") + info(control).effect;
+  }
+  function controlLabel(control) { return control.id === "r5c4" ? "空" : info(control).label; }
   function positionOf(action) {
     for (const row of S.layout.rows) for (const c of row) {
       const b = S.bindings.default[c.code];
@@ -186,7 +190,8 @@
     for (const knob of S.layout.knobs) {
       const labels = knob.controls.map((c) => info(c).label);
       const el = h("button", { type: "button", class: "knob" + (selId === knob.id ? " on" : ""), "data-codes":
-        knob.controls.map((c) => c.code).join(" "), title: "旋钮 " + knob.number + "：" + knob.name,
+        knob.controls.map((c) => c.code).join(" "), title: ["旋钮 " + knob.number + "：" + knob.name,
+          ...knob.controls.map((c) => c.direction + "：" + effectText(c))].join("\n"),
         onclick: () => { selId = knob.id; savedNote = null; render(); } },
         h("span", {}, h("span", { class: "kn", text: knob.name }), knob.number === 4 ? labels[2] : "旋钮 " + knob.number));
       knobs.append(el);
@@ -195,12 +200,29 @@
       const i = info(c);
       const blank = c.id === "r5c4" || i.action == null || i.action === "none";
       const el = h("button", { type: "button", "data-codes": c.code, title: c.position + "（物理键 " + c.name + "）" +
-          (c.id === "r5c4" ? "，和旋钮 2 逆时针是同一个信号" : ""),
+          "\n" + effectText(c, "按下会："),
         class: "cap" + (blank ? " empty" : "") + (c.kind === "fixed" ? " fixed" : "") +
           (i.user && c.kind !== "fixed" ? " edited" : "") + (selId === c.id ? " on" : ""),
         onclick: () => { selId = c.id; savedNote = null; render(); } }, blank ? "空" : i.label);
       grid.append(el);
     }
+  }
+
+  function renderEffects() {
+    const shape = JSON.stringify([selLayer, S.bindings[selLayer], S.layout, S.layer_names[selLayer]]);
+    if (sig.effects === shape) return;
+    sig.effects = shape;
+    $("effects").hidden = false;
+    $("effects-heading").textContent = "这一层每颗键按下会怎样 · " + S.layer_names[selLayer];
+    const group = (title, entries, label) => h("div", { class: "effects-group" },
+      h("h4", { text: title }),
+      h("dl", {}, entries.map((c) => h("div", {},
+        h("dt", { text: label(c) + " · " + controlLabel(c) }),
+        h("dd", { text: effectText(c) })))));
+    $("effects-groups").replaceChildren(
+      ...S.layout.rows.map((row) => group("第 " + row[0].row + " 排", row, (c) => "第 " + c.col + " 颗")),
+      ...S.layout.knobs.map((knob) => group("旋钮 " + knob.number + " · " + knob.name,
+        knob.controls, (c) => c.direction)));
   }
 
   // ---- detail ------------------------------------------------------------
@@ -248,12 +270,14 @@
 
   function controlBlock(c) {
     const i = info(c);
+    const currentInfo = h("div", { class: "current-info" },
+      h("div", { class: "cur", text: "当前功能：" + controlLabel(c) }),
+      h("div", { class: "effect", text: effectText(c, "按下会：") }));
     if (c.kind === "fixed") {
-      const label = c.id === "r5c4" ? "空" : i.label;
       return h("div", { class: "lock" }, LOCK(), h("div", {}, "固定键，任何应用里都不变",
-        h("div", { class: "cur", text: "当前功能：" + label })));
+        currentInfo));
     }
-    const wrap = h("div", {});
+    const wrap = h("div", {}, currentInfo);
     if (!S.can_edit) {
       wrap.append(h("div", { class: "hint", text: "当前键位方案只读，不能在面板里改。" }));
     }
@@ -279,7 +303,7 @@
         "aria-label": "程序的完整路径", value: exe ? current.slice(8) : "" });
       field.append(h("div", { class: "custom" }, input,
         h("button", { class: "btn", type: "button", text: "使用", disabled: !S.can_edit && "disabled",
-          onclick: () => save(c, "app exe:" + input.value.trim()) })));
+          onclick: () => { input.blur(); save(c, "app exe:" + input.value.trim()); } })));
     }
     wrap.append(field);
     if (i.user && S.can_edit) {
@@ -337,6 +361,7 @@
     renderSessions();
     renderLayers();
     renderKeyboard();
+    renderEffects();
     renderDetail();
   }
 

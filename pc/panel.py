@@ -69,6 +69,71 @@ ACTION_OPTIONS = (("copy", "复制"), ("paste", "粘贴"), ("send", "发送"), (
 KNOB_OPTIONS = (("ctx next", "列表：下一个"), ("ctx prev", "列表：上一个"), ("ctx select", "回车（列表开着时确认）"))
 PROMPT_LABELS = ("继续", "跑测试", "总结进度", "提交")
 
+APP_EFFECT = "把已打开的%s窗口切到前面；已经在前面时，回到上一个窗口。没开时只提示，不会帮你打开。"
+CONTEXT_EFFECTS = {
+    "agent": (
+        "发送“继续”。", "发送“跑测试”。", "发送“总结”。",
+        "把指针移到选中的栏，再按 Ctrl+End 滚到最新位置。"),
+    "chat": (
+        "下一个未读还没实现，按下不做事。",
+        "飞书按 Ctrl+K，微信按 Ctrl+F，打开搜索。",
+        "光标在可编辑输入框里时填入“收到”，留给你发送。焦点不在输入框时不做事。",
+        "按 Ctrl+End，跳到聊天末尾。"),
+    "browser": (
+        "按 Alt+左方向键，回到上一页；没有上一页就留在原处。",
+        "按 Ctrl+L，把焦点移到地址栏。",
+        "按 Ctrl+W，关闭当前标签页。",
+        "按 F5，刷新当前页。"),
+    "video": (
+        "按空格，交给当前页面播放或暂停。",
+        "按上方向键，由当前页面决定是否切到上一条。",
+        "按下方向键，由当前页面决定是否切到下一条。",
+        "按 F，由当前页面决定是否切换全屏。"),
+    "default": (
+        "按 Alt+左方向键，应用支持后退时才会返回。",
+        "按 Tab，通常移到下一个可选项。",
+        "按 Ctrl+W，应用支持时关闭当前标签或窗口。",
+        "按 Ctrl+End，由当前应用处理到底部的快捷键。"),
+}
+LIST_UNITS = {"browser": "标签页", "video": "秒", "default": "行"}
+LIST_KEYS = {"browser": "Ctrl+Page Down / Page Up", "video": "右 / 左方向键", "default": "下 / 上方向键"}
+ACTION_EFFECTS = {
+    "app claude": "切到已打开的 Claude 或 Codex；已经在其中一个里时，切到另一个，另一个没开就回到上一个窗口。两个都没开时只提示，不会帮你打开。",
+    "app wechat": APP_EFFECT % "微信",
+    "app feishu": APP_EFFECT % "飞书",
+    "app browser": APP_EFFECT % "浏览器（Chrome、Edge 或 Firefox）",
+    "window back": "正在用旋钮 1 切窗口时，确认切过去；没在切时，回到上一个窗口。",
+    "window next": "在切窗口列表里往后移一格，第一格总是上一个窗口；到头就停。",
+    "window prev": "在切窗口列表里往前移一格，第一格总是上一个窗口；到头就停。",
+    "copy": "按 Ctrl+C，复制当前窗口里选中的内容。",
+    "paste": "按 Ctrl+V，把剪贴板里的内容贴进当前窗口。",
+    "clear": "光标在输入框里时，清空输入框；不在输入框里就不做事。",
+    "overlay": "轻点：显示或隐藏浮窗。按住约 0.4 秒：显示这一层的键位图，松手收起。按住时转旋钮：挪动浮窗。",
+    "overlay_down": "记下帮助键按住的时间，按住约 0.4 秒显示当前层的键位图。",
+    "overlay_up": "松开时收起帮助；短按且没转过旋钮时切换浮窗显示。",
+    "interrupt": "正在用旋钮 1 切窗口时，取消这次切换。有 AgentDeck 拦下的批准请求时，等于拒绝它。其他时候：Claude/Codex 里点“停止”（没在跑就不做事），别的应用里按 Esc。",
+    "screenshot": "截全屏存成图片，再切到选中的会话：Claude/Codex 里直接贴图，别的窗口贴图片路径。找不到会话窗口时只保存图片。",
+    "approve": "批准 AgentDeck 拦下的那条请求；危险操作第一次只提示，要再按一次。没有请求时，有会话在等你回答就切过去，否则不做事。",
+    "deny": "拒绝 AgentDeck 拦下的那条请求。没有请求时不做事。",
+    "voice_up": "按住说话的模式：松开就结束听写。点按模式：松开不做事，再按一次才结束。",
+    "session next": "打开会话卡片，往下选一个，不切窗口；到头就停。",
+    "session prev": "打开会话卡片，往上选一个，不切窗口；到头就停。",
+    "session select": "跳到会话卡片里选中的会话；卡片没开时，跳到下一个在等你或出错的会话。没有就不做事。",
+    "scroll 1": "往下顺滑滚动选中的那一栏（Claude 里默认是对话区）。",
+    "scroll -1": "往上顺滑滚动选中的那一栏（Claude 里默认是对话区）。",
+    "scroll end": "把选中的那一栏往下滚一大段。",
+    "pane next": "换到这个窗口的下一栏，并把各栏框出来、标上名字；只有一栏时还是这一栏。",
+    "next_wait": "跳到下一个在等你的会话（等批准、等回答或被拦住的）。没有就不做事。",
+}
+
+VOICE_EFFECT = "切到选中的会话，按一下听写快捷键（%s）。不会先把光标放进输入框，光标要已经在输入框里，说的话才进得去。找不到会话窗口时不做事。"
+UNHELD_EFFECTS = {
+    "approve": ("现在 AgentDeck 不拦截批准请求，请求留在 Claude/Codex 自己的批准框里，这颗键不会替你点“允许”。"
+                "有会话在等你回答时，按下会切过去；否则不做事。想用这颗键批准，把右上角“拦截批准”改成“总是”或“自动”。"),
+    "deny": "现在 AgentDeck 不拦截批准请求，这颗键不会替你点 Claude/Codex 批准框里的“拒绝”，按下不做事。",
+    "interrupt": ACTION_EFFECTS["interrupt"].replace("有 AgentDeck 拦下的批准请求时，等于拒绝它。", ""),
+}
+
 
 class PanelError(ValueError):
     def __init__(self, message, status=400):
@@ -378,12 +443,15 @@ class Panel:
                 cells.append({"id": "r%dc%d" % (row, column), "row": row, "col": column, "name": name,
                               "code": normalize_binding(code), "kind": kind,
                               "position": "第 %d 排第 %d 颗" % (row, column)})
+                if row == 5 and column == 4:
+                    cells[-1]["effect_intro"] = "这颗键和旋钮 2 逆时针是同一个信号，按它等于把旋钮 2 往回转一格："
             rows.append(cells)
         knobs = []
         for number, codes in enumerate(KNOBS, 1):
             controls = []
             for tag, direction, code in zip(("cw", "ccw", "press"), ("顺时针", "逆时针", "按下"), codes):
                 controls.append({"id": "k%d%s" % (number, tag), "knob": number, "direction": direction,
+                                 "effect_prefix": "按下会：" if tag == "press" else "转一格会：",
                                  "code": normalize_binding(code), "kind": "knob_layer" if number == 4 else "fixed",
                                  "position": "旋钮 %d %s" % (number, direction), "shared": CONTROL_NAMES.get(normalize_binding(code), "")})
             knobs.append({"id": "k%d" % number, "number": number, "name": KNOB_NAMES[number - 1], "controls": controls})
@@ -413,8 +481,66 @@ class Panel:
             return "会话 " + action[5:]
         return ACTION_LABELS.get(action, action)
 
-    def _bindings(self, config):
-        """layer -> code -> {action, label, user}; layered keys carry their own override."""
+    def action_effect(self, action, layer, code, hold_active=None):
+        if hold_active is None:
+            hold_active = bool(self.hub.state().get("hold_active"))
+        if isinstance(action, dict):
+            return " ".join("%s：%s" % (label, self.action_effect(action[edge], layer, code, hold_active))
+                            for edge, label in (("down", "按下"), ("up", "松开")) if edge in action)
+        action = " ".join(action.strip().split(maxsplit=1)) if isinstance(action, str) else action
+        if action in (None, "none", ""):
+            effect = "不做事。"
+        elif action in ("voice", "voice_down"):
+            shortcut = getattr(getattr(self.hub, "desktop", None), "dictation_shortcut_label", None)
+            effect = VOICE_EFFECT % (shortcut or "按当前设置")
+        elif action == "send":
+            effect = ("输入框里有字：把光标放进输入框，点“发送”（找不到按钮就按回车）。输入框是空的或读不到时不做事。"
+                      if layer == "agent" else "按回车，结果由当前应用决定（发送、换行等）。")
+        elif action.startswith("app exe:"):
+            effect = APP_EFFECT % ntpath.basename(action[8:])
+        elif action.startswith("prompt "):
+            text = (getattr(self.hub, "prompts", None) or {}).get(action[7:])
+            effect = ("把模板“%s”贴进输入框并按回车发出去。在 Claude/Codex 里，输入框已经有字或读不到时不发；"
+                      "在别的窗口里，先切到选中的会话再发，找不到会话就不发。" % text
+                      if isinstance(text, str) and text else "模板不存在或没有内容，按下不会发送。")
+        elif action in ("ctx 1", "ctx 2", "ctx 3", "ctx 4"):
+            index = int(action[-1])
+            effect = CONTEXT_EFFECTS.get(layer, CONTEXT_EFFECTS["default"])[index - 1]
+            if layer == "agent":
+                guard = "输入框有字或读不到时不发；" if index < 4 else ""
+                effect += "%s在等批准时不做事；agent 在问你问题时，这颗键变成选项 %d，没有这个选项就不做事。" % (guard, index)
+        elif action in ("ctx next", "ctx prev", "ctx select"):
+            effect = self._list_effect(action, layer)
+        elif not hold_active and action in UNHELD_EFFECTS:
+            effect = UNHELD_EFFECTS[action]
+        else:
+            effect = ACTION_EFFECTS.get(action, "没有这项动作的说明，按下可能无法执行。")
+        if action not in (None, "none", "") and code in ("alt", "ctrl", "shift"):
+            effect = "单独按一下再松开才算，和别的键一起按不算。" + effect
+        return effect
+
+    @staticmethod
+    def _list_effect(action, layer):
+        select = action == "ctx select"
+        direction = "向下" if action == "ctx next" else "向上"
+        if layer == "agent":
+            if select:
+                return ("确认列表中选中的回答或模板；等批准、找不到选项，或模板遇到非空或读不到的输入框时不执行。"
+                        "列表没打开时向前台按回车。")
+            return "打开回答选项或提示模板列表并选第一项，已打开时%s移动高亮；没有选项或到头时不移动。" % direction
+        if layer == "chat":
+            return ("向前台按回车，效果由聊天应用决定。" if select
+                    else "切换聊天还没实现，转动不做事。")
+        if select:
+            fallback = "按空格，由页面播放或暂停" if layer == "video" else "向前台按回车"
+            return ("确认列表里的偏移量，按次数发送 %s；选“不移动”时不发按键。列表没开时%s。"
+                    % (LIST_KEYS.get(layer, LIST_KEYS["default"]), fallback))
+        amount = "5 秒" if layer == "video" else "1 " + LIST_UNITS.get(layer, LIST_UNITS["default"])
+        direction = {"ctx next": "向后", "ctx prev": "向前"}[action]
+        return "打开列表并把待确认的移动量%s调 %s，最多三格；转动时只改高亮，按下才执行。" % (direction, amount)
+
+    def _bindings(self, config, hold_active):
+        """Describe the effective binding for each physical signal in each layer."""
         from hub import USBKeys
         mapping, layers, _ = USBKeys.parse(config)
         controls = self._controls()
@@ -428,6 +554,7 @@ class Panel:
                 action = override if override is not None else base
                 shipped = self._shipped_action(code)
                 entry = {"action": action, "label": "空" if action in (None, "none") else self.action_label(action, layer, code),
+                         "effect": self.action_effect(action, layer, code, hold_active),
                          "user": override is not None or action != shipped, "layered": override is not None,
                          "default_action": shipped if isinstance(shipped, str) else None,
                          "default_label": "空" if base in (None, "none") else self.action_label(shipped if control["kind"] == "app" else base, layer, code)}
@@ -470,6 +597,7 @@ class Panel:
         if touch:
             self._touch()
         snapshot = hub.state()
+        hold_active = bool(snapshot.get("hold_active"))
         now = hub.wall_time()
         config = self._current_config()
         rows, knobs = self._layout()
@@ -499,12 +627,12 @@ class Panel:
         return {
             "now": now,
             "device": {"connected": bool(snapshot.get("deck_connected")), "reader": reader},
-            "hold": {"mode": snapshot.get("hold_mode"), "active": bool(snapshot.get("hold_active"))},
+            "hold": {"mode": snapshot.get("hold_mode"), "active": hold_active},
             "layer": snapshot.get("layer", "default"),
             "layer_names": LAYER_NAMES,
             "sessions": sessions,
             "layout": {"rows": rows, "knobs": knobs},
-            "bindings": self._bindings(config),
+            "bindings": self._bindings(config, hold_active),
             "editor": self.editor(),
             "can_edit": not self.read_only,
             "keys": {"last_seq": hub.key_seq, "events": events},

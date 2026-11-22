@@ -443,8 +443,9 @@ class Hub:
     def deck_connected(self):
         return self._input_reader() in ("usb", "raw")
 
-    def hold_active(self):
-        return self.hold_mode == "always" or (self.hold_mode == "auto" and self.deck_connected())
+    def hold_active(self, connected=None):
+        return self.hold_mode == "always" or (
+            self.hold_mode == "auto" and (self.deck_connected() if connected is None else connected))
 
     def _load_sessions(self):
         if self.sessions_path is None:
@@ -1219,7 +1220,7 @@ class Hub:
                     "last_input": dict(self.last_input) if self.last_input else None,
                     "input_reader": reader if reader in ("usb", "raw", "absent") else None,
                     "deck_connected": connected, "hold_mode": self.hold_mode,
-                    "hold_active": self.hold_mode == "always" or (self.hold_mode == "auto" and connected),
+                    "hold_active": self.hold_active(connected),
                     "show_requests": self.show_requests,
                     "overlay_pinned": self.overlay_pinned,
                     "overlay_corner_requests": self.overlay_corner_requests,

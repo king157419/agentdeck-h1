@@ -98,6 +98,9 @@ button{font:inherit;color:inherit;cursor:pointer}
 .lock{display:flex;align-items:flex-start;gap:10px;border:1px solid var(--line);border-radius:10px;padding:12px;background:var(--side);font-size:13.5px}
 .lock svg{flex:none;margin-top:2px;color:var(--sub)}
 .lock .cur{color:var(--sub);font-size:12.5px;margin-top:2px}
+.current-info{margin-bottom:8px;overflow-wrap:anywhere}
+.lock .current-info{margin-bottom:0}
+.effect{margin-top:2px;color:var(--sub);font-size:13px;white-space:pre-wrap}
 .sub-h{font-size:12px;color:var(--faint);margin:14px 0 6px}
 .sub-h:first-of-type{margin-top:0}
 .field{border:1px solid var(--line);border-radius:10px;overflow:hidden}
@@ -118,6 +121,15 @@ button{font:inherit;color:inherit;cursor:pointer}
 .live{margin-top:18px;font-size:12.5px;color:var(--sub);display:flex;align-items:center;gap:8px}
 .live.success #live-text{color:var(--done)}
 .live.error #live-text{color:var(--err)}
+.effects{margin-top:20px;border-top:1px solid var(--line);padding-top:16px}
+.effects h3{margin:0 0 10px;font-size:16px}
+.effects-groups{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:12px}
+.effects-group{border:1px solid var(--line);border-radius:10px;padding:10px 12px;overflow-wrap:anywhere}
+.effects-group h4{margin:0 0 6px;font-size:13px}
+.effects-group dl,.effects-group dd{margin:0}
+.effects-group dl div+div{margin-top:7px;padding-top:7px;border-top:1px solid var(--line2)}
+.effects-group dt{font-size:12px;font-weight:600}
+.effects-group dd{color:var(--sub);font-size:13px;white-space:pre-wrap}
 
 .gate{position:absolute;inset:0;background:color-mix(in srgb,var(--win) 88%,transparent);display:grid;place-items:center;z-index:5}
 .gate[hidden]{display:none}
