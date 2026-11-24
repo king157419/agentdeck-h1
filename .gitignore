@@ -28,3 +28,14 @@ research/cxt-web-driver/
 
 # 验收证据（截图，体积大，按需保留在本地）
 research/acceptance/out/
+
+# 本机环境与密钥
+.env
+.env.*
+!.env.example
+.venv/
+*.pem
+*.key
+# 生成的媒体
+*.mp4
+*.mov
